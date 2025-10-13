@@ -40,3 +40,6 @@ GloriousMouseBattery.sln
 
 # Icon build files
 icon.syso
+
+# User data
+charge_data.json
