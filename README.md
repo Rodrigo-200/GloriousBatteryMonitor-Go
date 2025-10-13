@@ -172,7 +172,6 @@ Response: inputReport[6] == 0x83 (valid response)
 ## 🙏 Acknowledgments
 
 - **Reference Project**: [GloriousBatteryMonitor (C#)](https://github.com/Cruxial0/GloriousBatteryMonitor) - Used as reference for HID protocol implementation in `main.go`
-- **UI Inspiration**: [DnDTools](https://github.com/Beelzebub2/DnDTools) - Design inspiration for clean, modern interface
 
 ## 📝 License
 
