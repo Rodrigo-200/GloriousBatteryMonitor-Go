@@ -39,19 +39,25 @@ jobs:
         files: glorious-battery.exe
         generate_release_notes: true
         body: |
-          ## Glorious Mouse Battery Monitor
+          ## What's Changed
+          - **Feature**: Persistent storage for last charge data - charge history now survives app restarts
+          - **Feature**: Mouse model detection - shows which Glorious mouse is connected
+          - **Feature**: Last charged tracking - displays when mouse was last charged and to what level
+          - **Improvement**: SVG icons instead of emojis for cleaner UI
+          - **Fix**: Window now properly hides to system tray instead of closing
+          - **Fix**: Quit button now properly terminates the application
           
-          ### Installation
+          ## Installation
           1. Download `glorious-battery.exe`
           2. Run the executable
           3. The app will appear in your system tray
           
-          ### Requirements
+          ## Requirements
           - Windows 10/11 (64-bit)
           - WebView2 Runtime (pre-installed on Windows 11)
           - Glorious wireless gaming mouse
           
-          ### Supported Devices
+          ## Supported Devices
           All Glorious wireless mice (O, O-, O Pro, O2, D, D-, D2, I, I2)
         draft: false
         prerelease: false
