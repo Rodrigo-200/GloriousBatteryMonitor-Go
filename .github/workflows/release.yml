@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   build:
@@ -35,6 +36,7 @@ jobs:
       uses: mikepenz/release-changelog-builder-action@v4
       with:
         configuration: .github/release-changelog-config.json
+        failOnError: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
