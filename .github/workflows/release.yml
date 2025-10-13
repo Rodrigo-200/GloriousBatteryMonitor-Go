@@ -16,6 +16,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -37,6 +39,8 @@ jobs:
       with:
         configuration: .github/release-changelog-config.json
         failOnError: false
+        fromTag: v1.0.0
+        toTag: v1.1.0
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
