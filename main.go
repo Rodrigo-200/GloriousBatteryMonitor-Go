@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 	"unsafe"
@@ -62,6 +63,11 @@ var deviceNames = map[uint16]string{
 	0x2014: "Model I2", 0x2016: "Model I2",
 }
 
+type ChargeData struct {
+	LastChargeTime  string `json:"lastChargeTime"`
+	LastChargeLevel int    `json:"lastChargeLevel"`
+}
+
 var (
 	device          *hid.Device
 	deviceModel     string = "Unknown"
@@ -81,9 +87,21 @@ var (
 	clients         = make(map[chan string]bool)
 	w               webview2.WebView
 	serverPort      string = "8765"
+	dataFile        string
 )
 
 func main() {
+	// Set up data file path
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		appData = "."
+	}
+	dataFile = filepath.Join(appData, "GloriousBatteryMonitor", "charge_data.json")
+	os.MkdirAll(filepath.Dir(dataFile), 0755)
+	
+	// Load saved charge data
+	loadChargeData()
+	
 	// Allow overriding the embedded web server port via PORT env var (useful for debugging or port conflicts)
 	if p := os.Getenv("PORT"); p != "" {
 		serverPort = p
@@ -287,6 +305,7 @@ func updateBattery() {
 				if wasCharging && !charging && battery >= 95 {
 					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
 					lastChargeLevel = battery
+					saveChargeData()
 				}
 				
 				batteryLvl = battery
@@ -568,4 +587,28 @@ func updateTrayIcon(level int, charging bool) {
 	if oldIcon != 0 {
 		win.DestroyIcon(oldIcon)
 	}
+}
+
+func loadChargeData() {
+	data, err := os.ReadFile(dataFile)
+	if err != nil {
+		return
+	}
+	var cd ChargeData
+	if err := json.Unmarshal(data, &cd); err == nil {
+		lastChargeTime = cd.LastChargeTime
+		lastChargeLevel = cd.LastChargeLevel
+	}
+}
+
+func saveChargeData() {
+	cd := ChargeData{
+		LastChargeTime:  lastChargeTime,
+		LastChargeLevel: lastChargeLevel,
+	}
+	data, err := json.MarshalIndent(cd, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(dataFile, data, 0644)
 }
