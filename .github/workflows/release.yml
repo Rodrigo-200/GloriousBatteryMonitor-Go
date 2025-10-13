@@ -33,21 +33,11 @@ jobs:
     - name: Build executable
       run: go build -ldflags "-H=windowsgui" -o glorious-battery.exe
 
-    - name: Generate changelog
-      id: changelog
-      uses: mikepenz/release-changelog-builder-action@v4
-      with:
-        configuration: .github/release-changelog-config.json
-        failOnError: false
-        fromTag: v1.0.0
-        toTag: v1.1.0
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: glorious-battery.exe
+        generate_release_notes: true
         body: |
           ## Glorious Mouse Battery Monitor
           
@@ -63,8 +53,6 @@ jobs:
           
           ### Supported Devices
           All Glorious wireless mice (O, O-, O Pro, O2, D, D-, D2, I, I2)
-          
-          ${{ steps.changelog.outputs.changelog }}
         draft: false
         prerelease: false
       env:
