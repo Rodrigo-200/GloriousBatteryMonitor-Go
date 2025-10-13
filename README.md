@@ -187,6 +187,17 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
+## 🚀 Releasing
+
+Releases are automated via GitHub Actions. To create a new release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow will automatically build and publish the release with the executable.
+
 ## 📧 Support
 
 If you encounter any issues or have questions:

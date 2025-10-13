@@ -102,7 +102,7 @@ func main() {
 			Title:  "Glorious Mouse Battery Monitor",
 			Width:  500,
 			Height: 650,
-			IconId: 2,
+			IconId: 0,
 		},
 	})
 	if w == nil {
@@ -111,6 +111,15 @@ func main() {
 	defer w.Destroy()
 
 	webviewHwnd = win.HWND(w.Window())
+	
+	// Load and set window icon
+	hInst := win.GetModuleHandle(nil)
+	hIcon := win.LoadIcon(hInst, win.MAKEINTRESOURCE(1))
+	if hIcon != 0 {
+		win.SendMessage(webviewHwnd, win.WM_SETICON, 0, uintptr(hIcon)) // Small icon
+		win.SendMessage(webviewHwnd, win.WM_SETICON, 1, uintptr(hIcon)) // Large icon
+	}
+	
 	oldProc := win.SetWindowLongPtr(webviewHwnd, win.GWLP_WNDPROC, syscall.NewCallback(webviewWndProc))
 	win.SetWindowLongPtr(webviewHwnd, win.GWLP_USERDATA, oldProc)
 
