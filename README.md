@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🖱️ Glorious Mouse Battery Tracker
+# 🖱️ Glorious Mouse Battery Monitor
 
-**A lightweight system tray application for tracking battery levels of Glorious wireless gaming mice**
+**A lightweight system tray application for monitoring battery levels of Glorious wireless gaming mice**
 
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

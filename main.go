@@ -99,7 +99,7 @@ func main() {
 		Debug:     false,
 		AutoFocus: true,
 		WindowOptions: webview2.WindowOptions{
-			Title:  "Glorious Mouse Battery Tracker",
+			Title:  "Glorious Mouse Battery Monitor",
 			Width:  500,
 			Height: 650,
 			IconId: 2,
