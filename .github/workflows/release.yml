@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Install dependencies
+      run: go mod download
+
+    - name: Build icon resource
+      run: windres -o icon.syso icon.rc
+
+    - name: Build executable
+      run: go build -ldflags "-H=windowsgui" -o glorious-battery.exe
+
+    - name: Generate changelog
+      id: changelog
+      uses: mikepenz/release-changelog-builder-action@v4
+      with:
+        configuration: .github/release-changelog-config.json
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: glorious-battery.exe
+        body: |
+          ## Glorious Mouse Battery Monitor
+          
+          ### Installation
+          1. Download `glorious-battery.exe`
+          2. Run the executable
+          3. The app will appear in your system tray
+          
+          ### Requirements
+          - Windows 10/11 (64-bit)
+          - WebView2 Runtime (pre-installed on Windows 11)
+          - Glorious wireless gaming mouse
+          
+          ### Supported Devices
+          All Glorious wireless mice (O, O-, O Pro, O2, D, D-, D2, I, I2)
+          
+          ${{ steps.changelog.outputs.changelog }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

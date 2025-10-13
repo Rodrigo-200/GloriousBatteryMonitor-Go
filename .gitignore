@@ -37,3 +37,6 @@ reference/
 # Old files
 battery.log
 GloriousMouseBattery.sln
+
+# Icon build files
+icon.syso
