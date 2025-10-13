@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glorious Battery Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 24px;
+            text-align: center;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #f0f6fc;
+            margin-bottom: 4px;
+        }
+
+        .subtitle {
+            font-size: 13px;
+            color: #8b949e;
+        }
+
+        .content {
+            padding: 32px 24px;
+        }
+
+        .battery-circle {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            margin: 0 auto 24px;
+        }
+
+        .circle-svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .circle-bg {
+            fill: none;
+            stroke: #21262d;
+            stroke-width: 12;
+        }
+
+        .circle-progress {
+            fill: none;
+            stroke: #3fb950;
+            stroke-width: 12;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 1s ease, stroke 0.3s ease;
+        }
+
+        .battery-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .battery-icon {
+            width: 48px;
+            height: 48px;
+            display: block;
+            margin: 0 auto 8px;
+        }
+
+        .battery-percentage {
+            font-size: 36px;
+            font-weight: 700;
+            color: #f0f6fc;
+        }
+
+        .status {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            background: rgba(63, 185, 80, 0.1);
+            color: #3fb950;
+            border: 1px solid #238636;
+        }
+
+        .status-charging {
+            background: rgba(88, 166, 255, 0.1);
+            color: #58a6ff;
+            border-color: #1f6feb;
+        }
+
+        .status-low {
+            background: rgba(248, 81, 73, 0.1);
+            color: #f85149;
+            border-color: #da3633;
+        }
+
+        .status-disconnected {
+            background: rgba(139, 148, 158, 0.1);
+            color: #8b949e;
+            border-color: #484f58;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .info-card {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            padding: 16px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .info-label {
+            font-size: 11px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .info-value {
+            font-size: 16px;
+            font-weight: 600;
+            color: #f0f6fc;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="title" id="deviceTitle">Glorious Mouse</div>
+            <div class="subtitle">Battery Tracker</div>
+        </div>
+
+        <div class="content">
+            <div class="battery-circle">
+                <svg class="circle-svg" viewBox="0 0 200 200">
+                    <circle class="circle-bg" cx="100" cy="100" r="85"></circle>
+                    <circle id="progress" class="circle-progress" cx="100" cy="100" r="85" 
+                            stroke-dasharray="534.07" stroke-dashoffset="534.07"></circle>
+                </svg>
+                <div class="battery-center">
+                    <svg class="battery-icon" id="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="7" width="18" height="11" rx="2"/>
+                        <path d="M22 10v4"/>
+                    </svg>
+                    <div class="battery-percentage" id="percentage">--</div>
+                </div>
+            </div>
+
+            <div class="status">
+                <div class="status-badge" id="status">
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="info-label">Last Charged</div>
+                    <div class="info-value" id="lastCharge">Never</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Charged To</div>
+                    <div class="info-value" id="chargeLevel">--</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const eventSource = new EventSource('/events');
+        
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            updateBattery(data);
+        };
+
+        function updateBattery(data) {
+            const percentage = document.getElementById('percentage');
+            const icon = document.getElementById('icon');
+            const status = document.getElementById('status');
+            const statusText = document.getElementById('status-text');
+            const progress = document.getElementById('progress');
+
+            const lastCharge = document.getElementById('lastCharge');
+            const chargeLevel = document.getElementById('chargeLevel');
+            const deviceTitle = document.getElementById('deviceTitle');
+
+            // Update device model
+            if (data.deviceModel && data.deviceModel !== 'Unknown') {
+                deviceTitle.textContent = 'Glorious ' + data.deviceModel;
+            }
+
+            if (data.status === 'disconnected') {
+                percentage.textContent = '--';
+                icon.innerHTML = '<circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>';
+                status.className = 'status-badge status-disconnected';
+                statusText.textContent = 'Not Connected';
+                progress.style.strokeDashoffset = '534.07';
+                return;
+            }
+
+            // Update last charge info
+            if (data.lastChargeTime && data.lastChargeTime !== 'Never') {
+                lastCharge.textContent = data.lastChargeTime;
+                chargeLevel.textContent = data.lastChargeLevel + '%';
+            }
+
+            percentage.textContent = data.level + '%';
+
+            const circumference = 534.07;
+            const offset = circumference - (data.level / 100) * circumference;
+            progress.style.strokeDashoffset = offset;
+
+            if (data.charging) {
+                icon.innerHTML = '<path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"/>';
+                progress.style.stroke = '#58a6ff';
+                status.className = 'status-badge status-charging';
+                statusText.textContent = 'Charging';
+            } else if (data.level >= 50) {
+                icon.innerHTML = '<rect x="2" y="7" width="18" height="11" rx="2"/><path d="M22 10v4"/>';
+                progress.style.stroke = '#3fb950';
+                status.className = 'status-badge';
+                statusText.textContent = 'Good';
+            } else if (data.level >= 20) {
+                icon.innerHTML = '<rect x="2" y="7" width="18" height="11" rx="2"/><path d="M22 10v4"/>';
+                progress.style.stroke = '#d29922';
+                status.className = 'status-badge';
+                statusText.textContent = 'Fair';
+            } else {
+                icon.innerHTML = '<rect x="2" y="7" width="18" height="11" rx="2"/><path d="M22 10v4"/><line x1="6" y1="12" x2="10" y2="12" stroke-width="3"/>';
+                progress.style.stroke = '#f85149';
+                status.className = 'status-badge status-low';
+                statusText.textContent = 'Low';
+            }
+        }
+    </script>
+</body>
+</html>
