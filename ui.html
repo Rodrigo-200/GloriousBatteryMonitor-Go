@@ -347,12 +347,14 @@
                     timeLabel.childNodes[0].textContent = 'Time Remaining ';
                 }
                 timeRemainingCard.style.display = 'block';
+            } else if (data.charging) {
+                timeRemaining.textContent = 'Calculating...';
+                timeLabel.childNodes[0].textContent = 'Time to Full ';
+                timeRemainingCard.style.display = 'block';
             } else if (!data.charging) {
                 timeRemaining.textContent = 'Calculating...';
                 timeLabel.childNodes[0].textContent = 'Time Remaining ';
                 timeRemainingCard.style.display = 'block';
-            } else {
-                timeRemainingCard.style.display = 'none';
             }
 
             const level = Math.max(0, Math.min(100, parseInt(data.level,10) || 0));
