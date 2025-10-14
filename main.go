@@ -101,6 +101,10 @@ var (
 	settings        Settings
 	notifiedLow      bool
 	notifiedCritical bool
+	notifiedFull     bool
+	lastBatteryLevel int       = -1
+	lastBatteryTime  time.Time
+	dischargeRate    float64   = 0
 )
 
 func main() {
@@ -352,6 +356,20 @@ func updateBattery() {
 				if charging {
 					notifiedLow = false
 					notifiedCritical = false
+					if battery == 100 && !notifiedFull {
+						sendNotification("Battery Fully Charged", "Your mouse is now at 100% battery", false)
+						notifiedFull = true
+					}
+				} else {
+					notifiedFull = false
+					if lastBatteryLevel > 0 && lastBatteryLevel != battery {
+						elapsed := time.Since(lastBatteryTime).Hours()
+						if elapsed > 0 {
+							dischargeRate = float64(lastBatteryLevel-battery) / elapsed
+						}
+					}
+					lastBatteryLevel = battery
+					lastBatteryTime = time.Now()
 				}
 				
 				// Send notifications only once per threshold
@@ -378,6 +396,19 @@ func updateBattery() {
 				updateTrayTooltip(fmt.Sprintf("Battery: %d%%", battery))
 				updateTrayIcon(battery, charging)
 
+				timeRemaining := ""
+				if !charging && dischargeRate > 0 && battery > 0 {
+					hoursLeft := float64(battery) / dischargeRate
+					if hoursLeft < 100 {
+						hours := int(hoursLeft)
+						minutes := int((hoursLeft - float64(hours)) * 60)
+						if hours > 0 {
+							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
+						} else {
+							timeRemaining = fmt.Sprintf("%dm", minutes)
+						}
+					}
+				}
 				broadcast(map[string]interface{}{
 					"level":           battery,
 					"charging":        charging,
@@ -385,6 +416,7 @@ func updateBattery() {
 					"lastChargeTime":  lastChargeTime,
 					"lastChargeLevel": lastChargeLevel,
 					"deviceModel":     deviceModel,
+					"timeRemaining":   timeRemaining,
 				})
 			}
 		} else {
