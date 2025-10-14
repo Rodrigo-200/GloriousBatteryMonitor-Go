@@ -363,24 +363,38 @@ func updateBattery() {
 						sendNotification("Battery Fully Charged", "Your mouse is now at 100% battery", false)
 						notifiedFull = true
 					}
-					if lastChargeLevel2 > 0 && lastChargeLevel2 != battery && battery > lastChargeLevel2 {
-						elapsed := time.Since(lastChargeTime2).Hours()
-						if elapsed > 0 {
-							chargeRate = float64(battery-lastChargeLevel2) / elapsed
+					// Initialize tracking on first charge reading
+					if lastChargeLevel2 < 0 {
+						lastChargeLevel2 = battery
+						lastChargeTime2 = time.Now()
+					} else if battery > lastChargeLevel2 {
+						// Only update rate if we have at least 3% of data for accuracy
+						if (battery - lastChargeLevel2) >= 3 {
+							elapsed := time.Since(lastChargeTime2).Hours()
+							if elapsed > 0 {
+								chargeRate = float64(battery-lastChargeLevel2) / elapsed
+								lastChargeLevel2 = battery
+								lastChargeTime2 = time.Now()
+							}
 						}
 					}
-					lastChargeLevel2 = battery
-					lastChargeTime2 = time.Now()
 				} else {
 					notifiedFull = false
-					if lastBatteryLevel > 0 && lastBatteryLevel != battery {
-						elapsed := time.Since(lastBatteryTime).Hours()
-						if elapsed > 0 {
-							dischargeRate = float64(lastBatteryLevel-battery) / elapsed
+					// Initialize tracking on first discharge reading
+					if lastBatteryLevel < 0 {
+						lastBatteryLevel = battery
+						lastBatteryTime = time.Now()
+					} else if lastBatteryLevel > battery {
+						// Only update rate if we have at least 3% of data for accuracy
+						if (lastBatteryLevel - battery) >= 3 {
+							elapsed := time.Since(lastBatteryTime).Hours()
+							if elapsed > 0 {
+								dischargeRate = float64(lastBatteryLevel-battery) / elapsed
+								lastBatteryLevel = battery
+								lastBatteryTime = time.Now()
+							}
 						}
 					}
-					lastBatteryLevel = battery
-					lastBatteryTime = time.Now()
 				}
 				
 				// Send notifications only once per threshold
@@ -407,26 +421,27 @@ func updateBattery() {
 				updateTrayTooltip(fmt.Sprintf("Battery: %d%%", battery))
 				updateTrayIcon(battery, charging)
 
+				// Calculate time remaining every tick
 				timeRemaining := ""
 				if !charging && dischargeRate > 0 && battery > 0 {
 					hoursLeft := float64(battery) / dischargeRate
-					if hoursLeft < 100 {
+					if hoursLeft < 100 && hoursLeft > 0 {
 						hours := int(hoursLeft)
 						minutes := int((hoursLeft - float64(hours)) * 60)
 						if hours > 0 {
 							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
-						} else {
+						} else if minutes > 0 {
 							timeRemaining = fmt.Sprintf("%dm", minutes)
 						}
 					}
 				} else if charging && chargeRate > 0 && battery < 100 {
 					hoursLeft := float64(100-battery) / chargeRate
-					if hoursLeft < 100 {
+					if hoursLeft < 100 && hoursLeft > 0 {
 						hours := int(hoursLeft)
 						minutes := int((hoursLeft - float64(hours)) * 60)
 						if hours > 0 {
 							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
-						} else {
+						} else if minutes > 0 {
 							timeRemaining = fmt.Sprintf("%dm", minutes)
 						}
 					}
