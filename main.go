@@ -231,8 +231,11 @@ func startTray() {
 }
 
 func webviewWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
-	if msg == win.WM_CLOSE {
+	switch msg {
+	case win.WM_CLOSE:
 		showWindow.Call(uintptr(hwnd), uintptr(win.SW_HIDE))
+		return 0
+	case win.WM_DESTROY:
 		return 0
 	}
 	oldProc := win.GetWindowLongPtr(hwnd, win.GWLP_USERDATA)
@@ -263,10 +266,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			if device != nil {
 				device.Close()
 			}
-			win.PostQuitMessage(0)
-			kernel32 := syscall.NewLazyDLL("kernel32.dll")
-			exitProcess := kernel32.NewProc("ExitProcess")
-			exitProcess.Call(0)
+			os.Exit(0)
 		}
 	}
 	return win.DefWindowProc(hwnd, msg, wParam, lParam)
