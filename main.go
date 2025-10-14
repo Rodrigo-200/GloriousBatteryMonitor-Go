@@ -68,6 +68,12 @@ type ChargeData struct {
 	LastChargeLevel int    `json:"lastChargeLevel"`
 }
 
+type Settings struct {
+	StartWithWindows bool `json:"startWithWindows"`
+	StartMinimized   bool `json:"startMinimized"`
+	RefreshInterval  int  `json:"refreshInterval"` // in seconds
+}
+
 var (
 	device          *hid.Device
 	deviceModel     string = "Unknown"
@@ -88,19 +94,24 @@ var (
 	w               webview2.WebView
 	serverPort      string = "8765"
 	dataFile        string
+	settingsFile    string
+	settings        Settings
 )
 
 func main() {
-	// Set up data file path
+	// Set up data file paths
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
 		appData = "."
 	}
-	dataFile = filepath.Join(appData, "GloriousBatteryMonitor", "charge_data.json")
-	os.MkdirAll(filepath.Dir(dataFile), 0755)
+	dataDir := filepath.Join(appData, "GloriousBatteryMonitor")
+	os.MkdirAll(dataDir, 0755)
+	dataFile = filepath.Join(dataDir, "charge_data.json")
+	settingsFile = filepath.Join(dataDir, "settings.json")
 	
-	// Load saved charge data
+	// Load saved data
 	loadChargeData()
+	loadSettings()
 	
 	// Allow overriding the embedded web server port via PORT env var (useful for debugging or port conflicts)
 	if p := os.Getenv("PORT"); p != "" {
@@ -142,12 +153,19 @@ func main() {
 	win.SetWindowLongPtr(webviewHwnd, win.GWLP_USERDATA, oldProc)
 
 	w.Navigate(fmt.Sprintf("http://localhost:%s", serverPort))
+	
+	// Start minimized if setting is enabled
+	if settings.StartMinimized {
+		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_HIDE))
+	}
+	
 	w.Run()
 }
 
 func startWebServer() {
 	http.HandleFunc("/", serveHTML)
 	http.HandleFunc("/events", handleSSE)
+	http.HandleFunc("/api/settings", handleSettings)
 	addr := fmt.Sprintf(":%s", serverPort)
 	log.Printf("starting web server on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
@@ -220,8 +238,11 @@ func startTray() {
 }
 
 func webviewWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
-	if msg == win.WM_CLOSE {
+	switch msg {
+	case win.WM_CLOSE:
 		showWindow.Call(uintptr(hwnd), uintptr(win.SW_HIDE))
+		return 0
+	case win.WM_DESTROY:
 		return 0
 	}
 	oldProc := win.GetWindowLongPtr(hwnd, win.GWLP_USERDATA)
@@ -242,21 +263,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			win.SetForegroundWindow(webviewHwnd)
 		}
 		return 0
-	case win.WM_COMMAND:
-		switch wParam {
-		case ID_SHOW:
-			showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
-			win.SetForegroundWindow(webviewHwnd)
-		case ID_QUIT:
-			win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
-			if device != nil {
-				device.Close()
-			}
-			win.PostQuitMessage(0)
-			kernel32 := syscall.NewLazyDLL("kernel32.dll")
-			exitProcess := kernel32.NewProc("ExitProcess")
-			exitProcess.Call(0)
-		}
+
 	}
 	return win.DefWindowProc(hwnd, msg, wParam, lParam)
 }
@@ -283,16 +290,44 @@ func showMenu() {
 	win.SetForegroundWindow(hwnd)
 
 	trackPopupMenu := user32.NewProc("TrackPopupMenu")
-	trackPopupMenu.Call(uintptr(hMenu), uintptr(win.TPM_RIGHTBUTTON), uintptr(pt.X), uintptr(pt.Y), 0, uintptr(hwnd), 0)
+	cmd, _, _ := trackPopupMenu.Call(
+		uintptr(hMenu),
+		uintptr(win.TPM_RETURNCMD|win.TPM_RIGHTBUTTON),
+		uintptr(pt.X),
+		uintptr(pt.Y),
+		0,
+		uintptr(hwnd),
+		0,
+	)
 
 	win.DestroyMenu(hMenu)
+
+	// Handle command immediately
+	if cmd == ID_SHOW {
+		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
+		win.SetForegroundWindow(webviewHwnd)
+	} else if cmd == ID_QUIT {
+		win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
+		if device != nil {
+			device.Close()
+		}
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		terminateProcess := kernel32.NewProc("TerminateProcess")
+		getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
+		handle, _, _ := getCurrentProcess.Call()
+		terminateProcess.Call(handle, 0)
+	}
 }
 
 func updateBattery() {
 	hid.Init()
 	defer hid.Exit()
 
-	ticker := time.NewTicker(5 * time.Second)
+	interval := time.Duration(settings.RefreshInterval) * time.Second
+	if interval < 1*time.Second {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -611,4 +646,91 @@ func saveChargeData() {
 		return
 	}
 	os.WriteFile(dataFile, data, 0644)
+}
+
+func loadSettings() {
+	// Default settings
+	settings = Settings{
+		StartWithWindows: false,
+		StartMinimized:   false,
+		RefreshInterval:  5,
+	}
+	data, err := os.ReadFile(settingsFile)
+	if err != nil {
+		return
+	}
+	json.Unmarshal(data, &settings)
+}
+
+func saveSettings() {
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(settingsFile, data, 0644)
+	
+	// Apply startup setting
+	if settings.StartWithWindows {
+		enableStartup()
+	} else {
+		disableStartup()
+	}
+}
+
+func handleSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if r.Method == "GET" {
+		json.NewEncoder(w).Encode(settings)
+		return
+	}
+	
+	if r.Method == "POST" {
+		var newSettings Settings
+		if err := json.NewDecoder(r.Body).Decode(&newSettings); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		settings = newSettings
+		saveSettings()
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	}
+}
+
+func enableStartup() {
+	exePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	advapi32 := syscall.NewLazyDLL("advapi32.dll")
+	regSetValueEx := advapi32.NewProc("RegSetValueExW")
+	
+	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Run`)
+	var handle syscall.Handle
+	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, key, 0, syscall.KEY_WRITE, &handle) == nil {
+		defer syscall.RegCloseKey(handle)
+		valueName, _ := syscall.UTF16PtrFromString("GloriousBatteryMonitor")
+		valueData, _ := syscall.UTF16FromString(exePath)
+		regSetValueEx.Call(
+			uintptr(handle),
+			uintptr(unsafe.Pointer(valueName)),
+			0,
+			uintptr(syscall.REG_SZ),
+			uintptr(unsafe.Pointer(&valueData[0])),
+			uintptr(len(valueData)*2),
+		)
+	}
+}
+
+func disableStartup() {
+	advapi32 := syscall.NewLazyDLL("advapi32.dll")
+	regDeleteValue := advapi32.NewProc("RegDeleteValueW")
+	
+	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Run`)
+	var handle syscall.Handle
+	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, key, 0, syscall.KEY_WRITE, &handle) == nil {
+		defer syscall.RegCloseKey(handle)
+		valueName, _ := syscall.UTF16PtrFromString("GloriousBatteryMonitor")
+		regDeleteValue.Call(uintptr(handle), uintptr(unsafe.Pointer(valueName)))
+	}
 }
