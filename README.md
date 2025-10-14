@@ -40,7 +40,7 @@
 
 ### Download Pre-built Binary
 
-1. Download the latest `glorious-battery.exe` from [Releases](../../releases)
+1. Download the latest `GloriousBatteryMonitor.exe` from [Releases](../../releases)
 2. Run the executable - no installation required!
 3. The app will appear in your system tray
 
@@ -54,7 +54,7 @@
 
 ### Running the Application
 
-Simply double-click `glorious-battery.exe` to start the application.
+Simply double-click `GloriousBatteryMonitor.exe` to start the application.
 
 ### System Tray Controls
 
@@ -123,10 +123,10 @@ cd GloriousMouseBattery
 go mod download
 
 # Build the executable
-go build -ldflags -H=windowsgui -o glorious-battery.exe
+go build -ldflags -H=windowsgui -o GloriousBatteryMonitor.exe
 
 # Run
-./glorious-battery.exe
+./GloriousBatteryMonitor.exe
 ```
 
 ### Dependencies
