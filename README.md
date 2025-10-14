@@ -29,10 +29,10 @@
 <div align="center">
 
 ### Main Interface
-![Main UI](docs/screenshot-main.png)
+![Main UI](docs/main-page.png)
 
 ### Settings Page
-![System Tray](docs/screenshot-settings.png)
+![System Tray](docs/settings-page.png)
 
 </div>
 
