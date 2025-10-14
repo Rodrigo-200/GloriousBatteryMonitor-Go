@@ -4,13 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.0]
+
 ### Added
 - Low battery notifications with configurable thresholds
 - Windows native toast notifications for battery alerts
-- Critical battery threshold (default 10%)
-- Low battery threshold (default 20%)
+- Critical battery threshold setting (default 10%)
+- Low battery threshold setting (default 20%)
 - Toggle to enable/disable notifications in settings
-- In-app toast notifications for battery warnings
+- One notification per threshold per discharge cycle
+- Notifications reset when charging
+
+### Changed
+- Notifications disabled by default (can be enabled in settings)
 
 ## [1.2.0] - TBD
 
