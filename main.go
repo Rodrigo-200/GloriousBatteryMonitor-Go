@@ -69,11 +69,11 @@ type ChargeData struct {
 }
 
 type Settings struct {
-	StartWithWindows       bool `json:"startWithWindows"`
-	StartMinimized         bool `json:"startMinimized"`
-	RefreshInterval        int  `json:"refreshInterval"` // in seconds
-	NotificationsEnabled   bool `json:"notificationsEnabled"`
-	LowBatteryThreshold    int  `json:"lowBatteryThreshold"`    // percentage
+	StartWithWindows         bool `json:"startWithWindows"`
+	StartMinimized           bool `json:"startMinimized"`
+	RefreshInterval          int  `json:"refreshInterval"` // in seconds
+	NotificationsEnabled     bool `json:"notificationsEnabled"`
+	LowBatteryThreshold      int  `json:"lowBatteryThreshold"`      // percentage
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
@@ -99,12 +99,15 @@ var (
 	dataFile        string
 	settingsFile    string
 	settings        Settings
-	notifiedLow      bool
-	notifiedCritical bool
-	notifiedFull     bool
-	lastBatteryLevel int       = -1
-	lastBatteryTime  time.Time
-	dischargeRate    float64   = 0
+	notifiedLow       bool
+	notifiedCritical  bool
+	notifiedFull      bool
+	lastBatteryLevel  int       = -1
+	lastBatteryTime   time.Time
+	dischargeRate     float64   = 0
+	lastChargeLevel2  int       = -1
+	lastChargeTime2   time.Time
+	chargeRate        float64   = 0
 )
 
 func main() {
@@ -360,6 +363,14 @@ func updateBattery() {
 						sendNotification("Battery Fully Charged", "Your mouse is now at 100% battery", false)
 						notifiedFull = true
 					}
+					if lastChargeLevel2 > 0 && lastChargeLevel2 != battery && battery > lastChargeLevel2 {
+						elapsed := time.Since(lastChargeTime2).Hours()
+						if elapsed > 0 {
+							chargeRate = float64(battery-lastChargeLevel2) / elapsed
+						}
+					}
+					lastChargeLevel2 = battery
+					lastChargeTime2 = time.Now()
 				} else {
 					notifiedFull = false
 					if lastBatteryLevel > 0 && lastBatteryLevel != battery {
@@ -399,6 +410,17 @@ func updateBattery() {
 				timeRemaining := ""
 				if !charging && dischargeRate > 0 && battery > 0 {
 					hoursLeft := float64(battery) / dischargeRate
+					if hoursLeft < 100 {
+						hours := int(hoursLeft)
+						minutes := int((hoursLeft - float64(hours)) * 60)
+						if hours > 0 {
+							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
+						} else {
+							timeRemaining = fmt.Sprintf("%dm", minutes)
+						}
+					}
+				} else if charging && chargeRate > 0 && battery < 100 {
+					hoursLeft := float64(100-battery) / chargeRate
 					if hoursLeft < 100 {
 						hours := int(hoursLeft)
 						minutes := int((hoursLeft - float64(hours)) * 60)
