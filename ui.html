@@ -36,6 +36,7 @@
             padding: 24px;
             text-align: center;
             border-bottom: 1px solid #21262d;
+            position: relative;
         }
 
         .title {
@@ -167,20 +168,24 @@
 
         .settings-btn {
             position: absolute;
-            top: 24px;
-            right: 24px;
+            top: 20px;
+            right: 20px;
             background: transparent;
             border: 1px solid #30363d;
             color: #8b949e;
-            padding: 8px;
+            padding: 6px;
             border-radius: 6px;
             cursor: pointer;
             transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .settings-btn:hover {
             background: #21262d;
             color: #f0f6fc;
+            border-color: #484f58;
         }
 
         .modal {
@@ -387,7 +392,7 @@
             });
             
             closeSettings();
-            alert('Settings saved! Restart the app for changes to take effect.');
+            alert('Settings saved successfully!');
         }
 
         const eventSource = new EventSource('/events');
