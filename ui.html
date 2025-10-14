@@ -137,7 +137,7 @@
                     </div>
                     <div class="info-value" id="timeRemaining">--</div>
                     <div class="info-tooltip" id="timeTooltip">
-                        This estimate is based on your current battery discharge rate. It may show "Calculating..." until enough data is collected (requires at least 1% battery change).
+                        This estimate is based on your current battery rate (discharge or charge). It may show "Calculating..." until enough data is collected (requires at least 1% battery change).
                     </div>
                 </div>
             </div>
@@ -338,12 +338,18 @@
 
             const timeRemainingCard = document.getElementById('timeRemainingCard');
             const timeRemaining = document.getElementById('timeRemaining');
-            if (!data.charging) {
-                if (data.timeRemaining && data.timeRemaining !== '') {
-                    timeRemaining.textContent = data.timeRemaining;
+            const timeLabel = timeRemainingCard.querySelector('.info-label');
+            if (data.timeRemaining && data.timeRemaining !== '') {
+                timeRemaining.textContent = data.timeRemaining;
+                if (data.charging) {
+                    timeLabel.childNodes[0].textContent = 'Time to Full ';
                 } else {
-                    timeRemaining.textContent = 'Calculating...';
+                    timeLabel.childNodes[0].textContent = 'Time Remaining ';
                 }
+                timeRemainingCard.style.display = 'block';
+            } else if (!data.charging) {
+                timeRemaining.textContent = 'Calculating...';
+                timeLabel.childNodes[0].textContent = 'Time Remaining ';
                 timeRemainingCard.style.display = 'block';
             } else {
                 timeRemainingCard.style.display = 'none';
