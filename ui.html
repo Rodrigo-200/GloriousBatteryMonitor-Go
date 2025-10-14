@@ -369,6 +369,13 @@
             </div>
 
             <div class="setting-item">
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="startMinimized">
+                    <label class="setting-label" for="startMinimized" style="margin:0">Start Minimized</label>
+                </div>
+            </div>
+
+            <div class="setting-item">
                 <label class="setting-label" for="refreshInterval">Refresh Interval (seconds)</label>
                 <input type="number" id="refreshInterval" class="setting-input" min="1" max="60" value="5">
             </div>
@@ -387,6 +394,7 @@
             const response = await fetch('/api/settings');
             currentSettings = await response.json();
             document.getElementById('startWithWindows').checked = currentSettings.startWithWindows;
+            document.getElementById('startMinimized').checked = currentSettings.startMinimized;
             document.getElementById('refreshInterval').value = currentSettings.refreshInterval;
         }
 
@@ -415,6 +423,7 @@
         async function saveSettings() {
             const settings = {
                 startWithWindows: document.getElementById('startWithWindows').checked,
+                startMinimized: document.getElementById('startMinimized').checked,
                 refreshInterval: parseInt(document.getElementById('refreshInterval').value)
             };
             
