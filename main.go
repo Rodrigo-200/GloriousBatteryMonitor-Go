@@ -256,25 +256,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			win.SetForegroundWindow(webviewHwnd)
 		}
 		return 0
-	case win.WM_COMMAND:
-		switch wParam {
-		case ID_SHOW:
-			showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
-			win.SetForegroundWindow(webviewHwnd)
-		case ID_QUIT:
-			go func() {
-				win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
-				if device != nil {
-					device.Close()
-				}
-				kernel32 := syscall.NewLazyDLL("kernel32.dll")
-				terminateProcess := kernel32.NewProc("TerminateProcess")
-				getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
-				handle, _, _ := getCurrentProcess.Call()
-				terminateProcess.Call(handle, 0)
-			}()
-			return 0
-		}
+
 	}
 	return win.DefWindowProc(hwnd, msg, wParam, lParam)
 }
@@ -301,10 +283,33 @@ func showMenu() {
 	win.SetForegroundWindow(hwnd)
 
 	trackPopupMenu := user32.NewProc("TrackPopupMenu")
-	trackPopupMenu.Call(uintptr(hMenu), uintptr(win.TPM_BOTTOMALIGN|win.TPM_LEFTALIGN), uintptr(pt.X), uintptr(pt.Y), 0, uintptr(hwnd), 0)
+	cmd, _, _ := trackPopupMenu.Call(
+		uintptr(hMenu),
+		uintptr(win.TPM_RETURNCMD|win.TPM_RIGHTBUTTON),
+		uintptr(pt.X),
+		uintptr(pt.Y),
+		0,
+		uintptr(hwnd),
+		0,
+	)
 
-	win.PostMessage(hwnd, win.WM_NULL, 0, 0)
 	win.DestroyMenu(hMenu)
+
+	// Handle command immediately
+	if cmd == ID_SHOW {
+		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
+		win.SetForegroundWindow(webviewHwnd)
+	} else if cmd == ID_QUIT {
+		win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
+		if device != nil {
+			device.Close()
+		}
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		terminateProcess := kernel32.NewProc("TerminateProcess")
+		getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
+		handle, _, _ := getCurrentProcess.Call()
+		terminateProcess.Call(handle, 0)
+	}
 }
 
 func updateBattery() {
