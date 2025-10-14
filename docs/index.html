@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glorious Mouse Battery Monitor - Never Run Out of Battery</title>
+    <meta name="description" content="A lightweight system tray application for monitoring battery levels of Glorious wireless gaming mice">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            padding: 60px 0 120px;
+            text-align: center;
+            background: linear-gradient(180deg, #0d1117 0%, #161b22 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(88, 166, 255, 0.1) 0%, transparent 70%);
+            animation: pulse 8s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+
+        .logo {
+            font-size: 48px;
+            margin-bottom: 20px;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #58a6ff 0%, #3fb950 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            position: relative;
+            z-index: 1;
+        }
+
+        .subtitle {
+            font-size: 20px;
+            color: #8b949e;
+            margin-bottom: 40px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+
+        .btn {
+            padding: 14px 32px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: #238636;
+            color: white;
+            border: 2px solid #238636;
+        }
+
+        .btn-primary:hover {
+            background: #2ea043;
+            border-color: #2ea043;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(35, 134, 54, 0.4);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: #58a6ff;
+            border: 2px solid #58a6ff;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(88, 166, 255, 0.1);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(88, 166, 255, 0.2);
+        }
+
+        .features {
+            padding: 80px 0;
+            background: #161b22;
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 36px;
+            margin-bottom: 60px;
+            color: #f0f6fc;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+
+        .feature-card {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 32px;
+            transition: all 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: #58a6ff;
+            box-shadow: 0 12px 32px rgba(88, 166, 255, 0.15);
+        }
+
+        .feature-icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+            display: block;
+        }
+
+        .feature-title {
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #f0f6fc;
+        }
+
+        .feature-desc {
+            color: #8b949e;
+            line-height: 1.7;
+        }
+
+        .screenshot {
+            padding: 80px 0;
+            background: #0d1117;
+            text-align: center;
+        }
+
+        .screenshot-img {
+            max-width: 600px;
+            width: 100%;
+            border-radius: 12px;
+            border: 1px solid #30363d;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            margin-top: 40px;
+        }
+
+        .devices {
+            padding: 80px 0;
+            background: #161b22;
+        }
+
+        .device-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 40px;
+        }
+
+        .device-item {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .device-item:hover {
+            border-color: #3fb950;
+            transform: scale(1.05);
+        }
+
+        .device-name {
+            font-weight: 600;
+            color: #f0f6fc;
+            margin-bottom: 8px;
+        }
+
+        .device-status {
+            font-size: 14px;
+            color: #8b949e;
+        }
+
+        .status-tested {
+            color: #3fb950;
+        }
+
+        footer {
+            padding: 60px 0;
+            background: #0d1117;
+            text-align: center;
+            border-top: 1px solid #21262d;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 30px;
+            justify-content: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .footer-links a {
+            color: #58a6ff;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+
+        .footer-links a:hover {
+            color: #79c0ff;
+        }
+
+        .copyright {
+            color: #6e7681;
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 36px;
+            }
+
+            .subtitle {
+                font-size: 18px;
+            }
+
+            .cta-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .btn {
+                width: 100%;
+                max-width: 300px;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="logo">🔋</div>
+            <h1>Glorious Mouse Battery Monitor</h1>
+            <p class="subtitle">Never run out of battery mid-game. Monitor your Glorious wireless mouse battery in real-time.</p>
+            <div class="cta-buttons">
+                <a href="https://github.com/Rodrigo-200/GloriousBatteryMonitor/releases/latest" class="btn btn-primary">
+                    <span>⬇️</span> Download Latest
+                </a>
+                <a href="https://github.com/Rodrigo-200/GloriousBatteryMonitor" class="btn btn-secondary">
+                    <span>⭐</span> View on GitHub
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <section class="features">
+        <div class="container">
+            <h2 class="section-title">✨ Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <span class="feature-icon">🎯</span>
+                    <h3 class="feature-title">System Tray Integration</h3>
+                    <p class="feature-desc">Runs quietly in the background with a battery icon in your system tray. Always visible, never intrusive.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🔋</span>
+                    <h3 class="feature-title">Real-time Monitoring</h3>
+                    <p class="feature-desc">Updates battery level every 5 seconds with customizable refresh intervals from 1-60 seconds.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🔔</span>
+                    <h3 class="feature-title">Low Battery Alerts</h3>
+                    <p class="feature-desc">Configurable notifications at 20% and 10% battery levels. Never get caught off guard again.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">📊</span>
+                    <h3 class="feature-title">Charge History</h3>
+                    <p class="feature-desc">Tracks last charge time and level. Know exactly when you last charged your mouse.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">⚡</span>
+                    <h3 class="feature-title">Charging Detection</h3>
+                    <p class="feature-desc">Automatically detects when your mouse is charging with visual indicators and status updates.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">⚙️</span>
+                    <h3 class="feature-title">Customizable Settings</h3>
+                    <p class="feature-desc">Start with Windows, start minimized, custom refresh intervals, and notification thresholds.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🎨</span>
+                    <h3 class="feature-title">Modern Dark UI</h3>
+                    <p class="feature-desc">Beautiful dark-themed interface with smooth animations and intuitive design.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">💾</span>
+                    <h3 class="feature-title">Lightweight</h3>
+                    <p class="feature-desc">Minimal resource usage at ~10MB RAM. Won't slow down your gaming performance.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🔄</span>
+                    <h3 class="feature-title">Auto-reconnect</h3>
+                    <p class="feature-desc">Automatically detects when your mouse is plugged or unplugged. No manual intervention needed.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="screenshot">
+        <div class="container">
+            <h2 class="section-title">📸 Clean & Intuitive Interface</h2>
+            <p class="subtitle">A modern, distraction-free design that shows you exactly what you need to know</p>
+            <img src="https://via.placeholder.com/600x700/161b22/58a6ff?text=App+Screenshot" alt="App Screenshot" class="screenshot-img">
+        </div>
+    </section>
+
+    <section class="devices">
+        <div class="container">
+            <h2 class="section-title">🖱️ Supported Devices</h2>
+            <p class="subtitle" style="text-align: center;">Works with all Glorious wireless gaming mice</p>
+            <div class="device-list">
+                <div class="device-item">
+                    <div class="device-name">Model O</div>
+                    <div class="device-status">Wireless & Wired</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-name">Model O-</div>
+                    <div class="device-status">Wireless & Wired</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-name">Model O Pro</div>
+                    <div class="device-status">Wireless & Wired</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-name">Model O2</div>
+                    <div class="device-status">Wireless & Wired</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-name">Model D</div>
+                    <div class="device-status status-tested">✓ Tested</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-name">Model D-</div>
+                    <div class="device-status">Wireless & Wired</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-name">Model D2</div>
+                    <div class="device-status">Wireless & Wired</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-name">Model I</div>
+                    <div class="device-status">Wireless & Wired</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-name">Model I2</div>
+                    <div class="device-status">Wireless & Wired</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="features" style="padding: 60px 0;">
+        <div class="container" style="text-align: center;">
+            <h2 class="section-title">🚀 Get Started</h2>
+            <p class="subtitle">Download, run, and you're done. No installation required.</p>
+            <div style="margin-top: 40px;">
+                <ol style="text-align: left; max-width: 500px; margin: 0 auto; color: #8b949e; font-size: 18px;">
+                    <li style="margin-bottom: 16px;">Download <code style="background: #0d1117; padding: 4px 8px; border-radius: 4px; color: #58a6ff;">glorious-battery.exe</code></li>
+                    <li style="margin-bottom: 16px;">Run the executable</li>
+                    <li style="margin-bottom: 16px;">The app appears in your system tray</li>
+                </ol>
+            </div>
+            <div style="margin-top: 40px;">
+                <a href="https://github.com/Rodrigo-200/GloriousBatteryMonitor/releases/latest" class="btn btn-primary" style="font-size: 18px; padding: 16px 40px;">
+                    <span>⬇️</span> Download Now
+                </a>
+            </div>
+            <p style="margin-top: 20px; color: #6e7681; font-size: 14px;">
+                Windows 10/11 (64-bit) • WebView2 Runtime required
+            </p>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="https://github.com/Rodrigo-200/GloriousBatteryMonitor">GitHub</a>
+                <a href="https://github.com/Rodrigo-200/GloriousBatteryMonitor/releases">Releases</a>
+                <a href="https://github.com/Rodrigo-200/GloriousBatteryMonitor/issues">Issues</a>
+                <a href="https://github.com/Rodrigo-200/GloriousBatteryMonitor/blob/main/CHANGELOG.md">Changelog</a>
+            </div>
+            <p class="copyright">
+                Made with ❤️ for the Glorious PC Gaming Race community<br>
+                Open source under MIT License
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
