@@ -69,9 +69,12 @@ type ChargeData struct {
 }
 
 type Settings struct {
-	StartWithWindows bool `json:"startWithWindows"`
-	StartMinimized   bool `json:"startMinimized"`
-	RefreshInterval  int  `json:"refreshInterval"` // in seconds
+	StartWithWindows       bool `json:"startWithWindows"`
+	StartMinimized         bool `json:"startMinimized"`
+	RefreshInterval        int  `json:"refreshInterval"` // in seconds
+	NotificationsEnabled   bool `json:"notificationsEnabled"`
+	LowBatteryThreshold    int  `json:"lowBatteryThreshold"`    // percentage
+	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
 var (
@@ -96,6 +99,8 @@ var (
 	dataFile        string
 	settingsFile    string
 	settings        Settings
+	notifiedLow      bool
+	notifiedCritical bool
 )
 
 func main() {
@@ -341,6 +346,23 @@ func updateBattery() {
 					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
 					lastChargeLevel = battery
 					saveChargeData()
+				}
+				
+				// Reset notification flags when charging
+				if charging {
+					notifiedLow = false
+					notifiedCritical = false
+				}
+				
+				// Send notifications only once per threshold
+				if settings.NotificationsEnabled && !charging {
+					if battery <= settings.CriticalBatteryThreshold && !notifiedCritical {
+						notifiedCritical = true
+						sendNotification("Critical Battery", fmt.Sprintf("Battery at %d%%. Please charge soon!", battery), true)
+					} else if battery <= settings.LowBatteryThreshold && !notifiedLow {
+						notifiedLow = true
+						sendNotification("Low Battery", fmt.Sprintf("Battery at %d%%. Consider charging.", battery), false)
+					}
 				}
 				
 				batteryLvl = battery
@@ -651,9 +673,12 @@ func saveChargeData() {
 func loadSettings() {
 	// Default settings
 	settings = Settings{
-		StartWithWindows: false,
-		StartMinimized:   false,
-		RefreshInterval:  5,
+		StartWithWindows:         false,
+		StartMinimized:           false,
+		RefreshInterval:          5,
+		NotificationsEnabled:     false,
+		LowBatteryThreshold:      20,
+		CriticalBatteryThreshold: 10,
 	}
 	data, err := os.ReadFile(settingsFile)
 	if err != nil {
@@ -733,4 +758,28 @@ func disableStartup() {
 		valueName, _ := syscall.UTF16PtrFromString("GloriousBatteryMonitor")
 		regDeleteValue.Call(uintptr(handle), uintptr(unsafe.Pointer(valueName)))
 	}
+}
+
+func sendNotification(title, message string, critical bool) {
+	log.Printf("Sending notification: %s - %s", title, message)
+	
+	// Send Windows notification via system tray
+	nid.UFlags = win.NIF_INFO
+	nid.DwInfoFlags = win.NIIF_INFO
+	if critical {
+		nid.DwInfoFlags = win.NIIF_WARNING
+	}
+	
+	infoTitle, _ := syscall.UTF16FromString(title)
+	copy(nid.SzInfoTitle[:], infoTitle)
+	
+	infoText, _ := syscall.UTF16FromString(message)
+	copy(nid.SzInfo[:], infoText)
+	
+	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+	
+	// Reset flags
+	time.Sleep(100 * time.Millisecond)
+	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 }
