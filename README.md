@@ -32,8 +32,8 @@
 ### Main Interface
 ![Main UI](docs/screenshot-main.png)
 
-### System Tray
-![System Tray](docs/screenshot-tray.png)
+### Settings Page
+![System Tray](docs/screenshot-settings.png)
 
 </div>
 
