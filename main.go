@@ -347,20 +347,20 @@ func updateBattery() {
 					saveChargeData()
 				}
 				
-				// Reset notification state when charging or battery is good
-				if charging || battery > settings.LowBatteryThreshold {
-					lastNotifiedLevel = -1
-				}
-				
 				// Check for low battery notifications
 				if settings.NotificationsEnabled && !charging && lastNotifiedLevel == -1 {
 					if battery <= settings.CriticalBatteryThreshold {
 						sendNotification("Critical Battery", fmt.Sprintf("Battery at %d%%. Please charge soon!", battery), true)
-						lastNotifiedLevel = 1 // Mark as notified
+						lastNotifiedLevel = 1
 					} else if battery <= settings.LowBatteryThreshold {
 						sendNotification("Low Battery", fmt.Sprintf("Battery at %d%%. Consider charging.", battery), false)
-						lastNotifiedLevel = 1 // Mark as notified
+						lastNotifiedLevel = 1
 					}
+				}
+				
+				// Reset notification state when charging or battery is good
+				if (charging || battery > settings.LowBatteryThreshold) && lastNotifiedLevel != -1 {
+					lastNotifiedLevel = -1
 				}
 				
 				batteryLvl = battery
