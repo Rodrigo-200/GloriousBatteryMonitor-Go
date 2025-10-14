@@ -207,9 +207,6 @@ If you encounter any issues or have questions:
 
 ---
 
-<div align="center">
-
-**Made with ❤️ for the Glorious PC Gaming Race community**
 
 ⭐ Star this repo if you find it useful!
 
