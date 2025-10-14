@@ -68,6 +68,11 @@ type ChargeData struct {
 	LastChargeLevel int    `json:"lastChargeLevel"`
 }
 
+type Settings struct {
+	StartWithWindows bool `json:"startWithWindows"`
+	RefreshInterval  int  `json:"refreshInterval"` // in seconds
+}
+
 var (
 	device          *hid.Device
 	deviceModel     string = "Unknown"
@@ -88,19 +93,24 @@ var (
 	w               webview2.WebView
 	serverPort      string = "8765"
 	dataFile        string
+	settingsFile    string
+	settings        Settings
 )
 
 func main() {
-	// Set up data file path
+	// Set up data file paths
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
 		appData = "."
 	}
-	dataFile = filepath.Join(appData, "GloriousBatteryMonitor", "charge_data.json")
-	os.MkdirAll(filepath.Dir(dataFile), 0755)
+	dataDir := filepath.Join(appData, "GloriousBatteryMonitor")
+	os.MkdirAll(dataDir, 0755)
+	dataFile = filepath.Join(dataDir, "charge_data.json")
+	settingsFile = filepath.Join(dataDir, "settings.json")
 	
-	// Load saved charge data
+	// Load saved data
 	loadChargeData()
+	loadSettings()
 	
 	// Allow overriding the embedded web server port via PORT env var (useful for debugging or port conflicts)
 	if p := os.Getenv("PORT"); p != "" {
@@ -148,6 +158,7 @@ func main() {
 func startWebServer() {
 	http.HandleFunc("/", serveHTML)
 	http.HandleFunc("/events", handleSSE)
+	http.HandleFunc("/api/settings", handleSettings)
 	addr := fmt.Sprintf(":%s", serverPort)
 	log.Printf("starting web server on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
@@ -292,7 +303,11 @@ func updateBattery() {
 	hid.Init()
 	defer hid.Exit()
 
-	ticker := time.NewTicker(5 * time.Second)
+	interval := time.Duration(settings.RefreshInterval) * time.Second
+	if interval < 1*time.Second {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -611,4 +626,90 @@ func saveChargeData() {
 		return
 	}
 	os.WriteFile(dataFile, data, 0644)
+}
+
+func loadSettings() {
+	// Default settings
+	settings = Settings{
+		StartWithWindows: false,
+		RefreshInterval:  5,
+	}
+	data, err := os.ReadFile(settingsFile)
+	if err != nil {
+		return
+	}
+	json.Unmarshal(data, &settings)
+}
+
+func saveSettings() {
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(settingsFile, data, 0644)
+	
+	// Apply startup setting
+	if settings.StartWithWindows {
+		enableStartup()
+	} else {
+		disableStartup()
+	}
+}
+
+func handleSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	if r.Method == "GET" {
+		json.NewEncoder(w).Encode(settings)
+		return
+	}
+	
+	if r.Method == "POST" {
+		var newSettings Settings
+		if err := json.NewDecoder(r.Body).Decode(&newSettings); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		settings = newSettings
+		saveSettings()
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	}
+}
+
+func enableStartup() {
+	exePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	advapi32 := syscall.NewLazyDLL("advapi32.dll")
+	regSetValueEx := advapi32.NewProc("RegSetValueExW")
+	
+	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Run`)
+	var handle syscall.Handle
+	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, key, 0, syscall.KEY_WRITE, &handle) == nil {
+		defer syscall.RegCloseKey(handle)
+		valueName, _ := syscall.UTF16PtrFromString("GloriousBatteryMonitor")
+		valueData, _ := syscall.UTF16FromString(exePath)
+		regSetValueEx.Call(
+			uintptr(handle),
+			uintptr(unsafe.Pointer(valueName)),
+			0,
+			uintptr(syscall.REG_SZ),
+			uintptr(unsafe.Pointer(&valueData[0])),
+			uintptr(len(valueData)*2),
+		)
+	}
+}
+
+func disableStartup() {
+	advapi32 := syscall.NewLazyDLL("advapi32.dll")
+	regDeleteValue := advapi32.NewProc("RegDeleteValueW")
+	
+	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Run`)
+	var handle syscall.Handle
+	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, key, 0, syscall.KEY_WRITE, &handle) == nil {
+		defer syscall.RegCloseKey(handle)
+		valueName, _ := syscall.UTF16PtrFromString("GloriousBatteryMonitor")
+		regDeleteValue.Call(uintptr(handle), uintptr(unsafe.Pointer(valueName)))
+	}
 }
