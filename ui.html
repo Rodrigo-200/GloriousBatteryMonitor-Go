@@ -164,11 +164,135 @@
             font-weight: 600;
             color: #f0f6fc;
         }
+
+        .settings-btn {
+            position: absolute;
+            top: 24px;
+            right: 24px;
+            background: transparent;
+            border: 1px solid #30363d;
+            color: #8b949e;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .settings-btn:hover {
+            background: #21262d;
+            color: #f0f6fc;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 24px;
+            width: 90%;
+            max-width: 400px;
+        }
+
+        .modal-header {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #f0f6fc;
+        }
+
+        .setting-item {
+            margin-bottom: 16px;
+        }
+
+        .setting-label {
+            display: block;
+            font-size: 14px;
+            color: #c9d1d9;
+            margin-bottom: 8px;
+        }
+
+        .setting-input {
+            width: 100%;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            color: #f0f6fc;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .checkbox-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-wrapper input {
+            width: auto;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px;
+            border-radius: 6px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #238636;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2ea043;
+        }
+
+        .btn-secondary {
+            background: #21262d;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+        }
+
+        .btn-secondary:hover {
+            background: #30363d;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
+            <button class="settings-btn" onclick="openSettings()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M12 1v6m0 6v6M5.6 5.6l4.2 4.2m4.2 4.2l4.2 4.2M1 12h6m6 0h6M5.6 18.4l4.2-4.2m4.2-4.2l4.2-4.2"/>
+                </svg>
+            </button>
             <div class="title" id="deviceTitle">Glorious Mouse</div>
             <div class="subtitle">Battery Monitor</div>
         </div>
@@ -208,7 +332,64 @@
         </div>
     </div>
 
+    <div class="modal" id="settingsModal">
+        <div class="modal-content">
+            <div class="modal-header">Settings</div>
+            
+            <div class="setting-item">
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="startWithWindows">
+                    <label class="setting-label" for="startWithWindows" style="margin:0">Start with Windows</label>
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <label class="setting-label" for="refreshInterval">Refresh Interval (seconds)</label>
+                <input type="number" id="refreshInterval" class="setting-input" min="1" max="60" value="5">
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeSettings()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        let currentSettings = {};
+
+        async function loadSettings() {
+            const response = await fetch('/api/settings');
+            currentSettings = await response.json();
+            document.getElementById('startWithWindows').checked = currentSettings.startWithWindows;
+            document.getElementById('refreshInterval').value = currentSettings.refreshInterval;
+        }
+
+        function openSettings() {
+            loadSettings();
+            document.getElementById('settingsModal').classList.add('active');
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsModal').classList.remove('active');
+        }
+
+        async function saveSettings() {
+            const settings = {
+                startWithWindows: document.getElementById('startWithWindows').checked,
+                refreshInterval: parseInt(document.getElementById('refreshInterval').value)
+            };
+            
+            await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+            
+            closeSettings();
+            alert('Settings saved! Restart the app for changes to take effect.');
+        }
+
         const eventSource = new EventSource('/events');
         
         eventSource.onmessage = function(event) {

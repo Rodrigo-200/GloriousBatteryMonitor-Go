@@ -39,14 +39,6 @@ jobs:
         files: glorious-battery.exe
         generate_release_notes: true
         body: |
-          ## What's Changed
-          - **Feature**: Persistent storage for last charge data - charge history now survives app restarts
-          - **Feature**: Mouse model detection - shows which Glorious mouse is connected
-          - **Feature**: Last charged tracking - displays when mouse was last charged and to what level
-          - **Improvement**: SVG icons instead of emojis for cleaner UI
-          - **Fix**: Window now properly hides to system tray instead of closing
-          - **Fix**: Quit button now properly terminates the application
-          
           ## Installation
           1. Download `glorious-battery.exe`
           2. Run the executable
