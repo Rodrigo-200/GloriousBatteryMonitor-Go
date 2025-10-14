@@ -262,15 +262,17 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
 			win.SetForegroundWindow(webviewHwnd)
 		case ID_QUIT:
-			win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
-			if device != nil {
-				device.Close()
-			}
-			kernel32 := syscall.NewLazyDLL("kernel32.dll")
-			terminateProcess := kernel32.NewProc("TerminateProcess")
-			getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
-			handle, _, _ := getCurrentProcess.Call()
-			terminateProcess.Call(handle, 0)
+			go func() {
+				win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
+				if device != nil {
+					device.Close()
+				}
+				kernel32 := syscall.NewLazyDLL("kernel32.dll")
+				terminateProcess := kernel32.NewProc("TerminateProcess")
+				getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
+				handle, _, _ := getCurrentProcess.Call()
+				terminateProcess.Call(handle, 0)
+			}()
 			return 0
 		}
 	}
@@ -299,8 +301,9 @@ func showMenu() {
 	win.SetForegroundWindow(hwnd)
 
 	trackPopupMenu := user32.NewProc("TrackPopupMenu")
-	trackPopupMenu.Call(uintptr(hMenu), uintptr(win.TPM_RIGHTBUTTON), uintptr(pt.X), uintptr(pt.Y), 0, uintptr(hwnd), 0)
+	trackPopupMenu.Call(uintptr(hMenu), uintptr(win.TPM_BOTTOMALIGN|win.TPM_LEFTALIGN), uintptr(pt.X), uintptr(pt.Y), 0, uintptr(hwnd), 0)
 
+	win.PostMessage(hwnd, win.WM_NULL, 0, 0)
 	win.DestroyMenu(hMenu)
 }
 
