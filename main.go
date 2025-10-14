@@ -787,13 +787,4 @@ func sendNotification(title, message string, critical bool) {
 		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 	}()
-	
-	// Also broadcast to UI for in-app toast
-	broadcast(map[string]interface{}{
-		"notification": map[string]interface{}{
-			"title":    title,
-			"message":  message,
-			"critical": critical,
-		},
-	})
 }

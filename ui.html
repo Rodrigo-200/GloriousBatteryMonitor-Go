@@ -464,12 +464,6 @@
         
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            
-            // Handle notifications
-            if (data.notification) {
-                showToast(data.notification.title + ': ' + data.notification.message);
-            }
-            
             updateBattery(data);
         };
 
