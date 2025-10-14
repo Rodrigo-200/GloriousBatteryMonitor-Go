@@ -676,7 +676,7 @@ func loadSettings() {
 		StartWithWindows:         false,
 		StartMinimized:           false,
 		RefreshInterval:          5,
-		NotificationsEnabled:     true,
+		NotificationsEnabled:     false,
 		LowBatteryThreshold:      20,
 		CriticalBatteryThreshold: 10,
 	}
