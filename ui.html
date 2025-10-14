@@ -287,6 +287,26 @@
         .btn-secondary:hover {
             background: #30363d;
         }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #238636;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 6px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s ease;
+            z-index: 2000;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
     </style>
 </head>
 <body>
@@ -379,6 +399,19 @@
             document.getElementById('settingsModal').classList.remove('active');
         }
 
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => toast.classList.add('show'), 10);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 2000);
+        }
+
         async function saveSettings() {
             const settings = {
                 startWithWindows: document.getElementById('startWithWindows').checked,
@@ -392,7 +425,7 @@
             });
             
             closeSettings();
-            alert('Settings saved successfully!');
+            showToast('Settings saved successfully!');
         }
 
         const eventSource = new EventSource('/events');
