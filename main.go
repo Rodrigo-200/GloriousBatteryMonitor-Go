@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -100,9 +99,8 @@ var (
 	dataFile        string
 	settingsFile    string
 	settings        Settings
-	lastNotifiedLevel int = -1
-	lastNotifyTime  time.Time
-	notifyMutex     sync.Mutex
+	notifiedLow      bool
+	notifiedCritical bool
 )
 
 func main() {
@@ -350,25 +348,21 @@ func updateBattery() {
 					saveChargeData()
 				}
 				
-				// Handle notifications with mutex protection
-				notifyMutex.Lock()
-				if settings.NotificationsEnabled && !charging && lastNotifiedLevel == -1 {
-					if battery <= settings.CriticalBatteryThreshold {
-						lastNotifiedLevel = 1
-						notifyMutex.Unlock()
+				// Reset notification flags when charging
+				if charging {
+					notifiedLow = false
+					notifiedCritical = false
+				}
+				
+				// Send notifications only once per threshold
+				if settings.NotificationsEnabled && !charging {
+					if battery <= settings.CriticalBatteryThreshold && !notifiedCritical {
+						notifiedCritical = true
 						sendNotification("Critical Battery", fmt.Sprintf("Battery at %d%%. Please charge soon!", battery), true)
-					} else if battery <= settings.LowBatteryThreshold {
-						lastNotifiedLevel = 1
-						notifyMutex.Unlock()
+					} else if battery <= settings.LowBatteryThreshold && !notifiedLow {
+						notifiedLow = true
 						sendNotification("Low Battery", fmt.Sprintf("Battery at %d%%. Consider charging.", battery), false)
-					} else {
-						notifyMutex.Unlock()
 					}
-				} else if (charging || battery > settings.LowBatteryThreshold) && lastNotifiedLevel != -1 {
-					lastNotifiedLevel = -1
-					notifyMutex.Unlock()
-				} else {
-					notifyMutex.Unlock()
 				}
 				
 				batteryLvl = battery
@@ -767,12 +761,6 @@ func disableStartup() {
 }
 
 func sendNotification(title, message string, critical bool) {
-	// Prevent spam with 5-minute cooldown
-	if time.Since(lastNotifyTime) < 5*time.Minute {
-		return
-	}
-	lastNotifyTime = time.Now()
-	
 	// Send Windows notification via system tray
 	nid.UFlags = win.NIF_INFO
 	nid.DwInfoFlags = win.NIIF_INFO
