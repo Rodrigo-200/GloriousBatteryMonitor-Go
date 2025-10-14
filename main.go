@@ -75,8 +75,6 @@ type Settings struct {
 	NotificationsEnabled     bool `json:"notificationsEnabled"`
 	LowBatteryThreshold      int  `json:"lowBatteryThreshold"`      // percentage
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
-	BatterySaverMode         bool `json:"batterySaverMode"`
-	BatterySaverThreshold    int  `json:"batterySaverThreshold"` // percentage
 }
 
 var (
@@ -337,18 +335,11 @@ func updateBattery() {
 	hid.Init()
 	defer hid.Exit()
 
-	getInterval := func() time.Duration {
-		interval := time.Duration(settings.RefreshInterval) * time.Second
-		if interval < 1*time.Second {
-			interval = 5 * time.Second
-		}
-		if settings.BatterySaverMode && batteryLvl > 0 && batteryLvl <= settings.BatterySaverThreshold && !isCharging {
-			interval = interval * 3
-		}
-		return interval
+	interval := time.Duration(settings.RefreshInterval) * time.Second
+	if interval < 1*time.Second {
+		interval = 5 * time.Second
 	}
-
-	ticker := time.NewTicker(getInterval())
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -440,7 +431,7 @@ func updateBattery() {
 						}
 					}
 				}
-					broadcast(map[string]interface{}{
+				broadcast(map[string]interface{}{
 					"level":           battery,
 					"charging":        charging,
 					"status":          status,
@@ -449,7 +440,6 @@ func updateBattery() {
 					"deviceModel":     deviceModel,
 					"timeRemaining":   timeRemaining,
 				})
-				ticker.Reset(getInterval())
 			}
 		} else {
 			batteryLvl = 0
@@ -743,8 +733,6 @@ func loadSettings() {
 		NotificationsEnabled:     false,
 		LowBatteryThreshold:      20,
 		CriticalBatteryThreshold: 10,
-		BatterySaverMode:         false,
-		BatterySaverThreshold:    15,
 	}
 	data, err := os.ReadFile(settingsFile)
 	if err != nil {

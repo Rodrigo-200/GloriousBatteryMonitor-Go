@@ -184,20 +184,6 @@
                 <div class="hint">Trigger critical alerts below this level.</div>
             </div>
 
-            <div class="setting-item">
-                <div class="checkbox-wrapper">
-                    <input type="checkbox" id="batterySaverMode">
-                    <label class="setting-label" for="batterySaverMode" style="margin:0">Battery Saver Mode</label>
-                </div>
-                <div class="hint">Reduce polling rate when battery is low to conserve power.</div>
-            </div>
-
-            <div class="setting-item">
-                <label class="setting-label" for="batterySaverThreshold">Battery Saver Threshold (%)</label>
-                <input type="number" id="batterySaverThreshold" class="setting-input" min="5" max="30" value="15">
-                <div class="hint">Activate battery saver below this level.</div>
-            </div>
-
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="closeSettings()">Cancel</button>
                 <button id="saveBtn" class="btn btn-primary" onclick="saveSettings()">
@@ -243,8 +229,6 @@
                 byId('notificationsEnabled') && (byId('notificationsEnabled').checked = !!currentSettings.notificationsEnabled);
                 byId('lowBatteryThreshold').value = currentSettings.lowBatteryThreshold ?? 20;
                 byId('criticalBatteryThreshold').value = currentSettings.criticalBatteryThreshold ?? 10;
-                byId('batterySaverMode').checked = !!currentSettings.batterySaverMode;
-                byId('batterySaverThreshold').value = currentSettings.batterySaverThreshold ?? 15;
             }catch(e){ showToast('Failed to load settings','error'); }
         }
 
@@ -294,12 +278,10 @@
                 refreshInterval: clamp(parseInt(byId('refreshInterval').value, 10) || 5, 1, 60),
                 notificationsEnabled: byId('notificationsEnabled') ? byId('notificationsEnabled').checked : currentSettings.notificationsEnabled,
                 lowBatteryThreshold: clamp(parseInt(byId('lowBatteryThreshold').value, 10) || 20, 5, 50),
-                criticalBatteryThreshold: clamp(parseInt(byId('criticalBatteryThreshold').value, 10) || 10, 5, 30),
-                batterySaverMode: byId('batterySaverMode').checked,
-                batterySaverThreshold: clamp(parseInt(byId('batterySaverThreshold').value, 10) || 15, 5, 30)
+                criticalBatteryThreshold: clamp(parseInt(byId('criticalBatteryThreshold').value, 10) || 10, 5, 30)
             };
             // inline validation visuals
-            ['refreshInterval','lowBatteryThreshold','criticalBatteryThreshold','batterySaverThreshold'].forEach(id=>{
+            ['refreshInterval','lowBatteryThreshold','criticalBatteryThreshold'].forEach(id=>{
               const el=byId(id); const min=parseInt(el.min||'0',10); const max=parseInt(el.max||'999',10); const v=parseInt(el.value,10);
               if(isNaN(v) || v<min || v>max){ el.style.borderColor='var(--low)'; el.style.boxShadow='0 0 0 2px rgba(248,81,73,.25)'; } else { el.style.borderColor='var(--border)'; el.style.boxShadow='none'; }
             });
