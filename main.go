@@ -69,12 +69,14 @@ type ChargeData struct {
 }
 
 type Settings struct {
-	StartWithWindows       bool `json:"startWithWindows"`
-	StartMinimized         bool `json:"startMinimized"`
-	RefreshInterval        int  `json:"refreshInterval"` // in seconds
-	NotificationsEnabled   bool `json:"notificationsEnabled"`
-	LowBatteryThreshold    int  `json:"lowBatteryThreshold"`    // percentage
+	StartWithWindows         bool `json:"startWithWindows"`
+	StartMinimized           bool `json:"startMinimized"`
+	RefreshInterval          int  `json:"refreshInterval"` // in seconds
+	NotificationsEnabled     bool `json:"notificationsEnabled"`
+	LowBatteryThreshold      int  `json:"lowBatteryThreshold"`      // percentage
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
+	BatterySaverMode         bool `json:"batterySaverMode"`
+	BatterySaverThreshold    int  `json:"batterySaverThreshold"` // percentage
 }
 
 var (
@@ -99,12 +101,15 @@ var (
 	dataFile        string
 	settingsFile    string
 	settings        Settings
-	notifiedLow      bool
-	notifiedCritical bool
-	notifiedFull     bool
-	lastBatteryLevel int       = -1
-	lastBatteryTime  time.Time
-	dischargeRate    float64   = 0
+	notifiedLow       bool
+	notifiedCritical  bool
+	notifiedFull      bool
+	lastBatteryLevel  int       = -1
+	lastBatteryTime   time.Time
+	dischargeRate     float64   = 0
+	lastChargeLevel2  int       = -1
+	lastChargeTime2   time.Time
+	chargeRate        float64   = 0
 )
 
 func main() {
@@ -332,11 +337,18 @@ func updateBattery() {
 	hid.Init()
 	defer hid.Exit()
 
-	interval := time.Duration(settings.RefreshInterval) * time.Second
-	if interval < 1*time.Second {
-		interval = 5 * time.Second
+	getInterval := func() time.Duration {
+		interval := time.Duration(settings.RefreshInterval) * time.Second
+		if interval < 1*time.Second {
+			interval = 5 * time.Second
+		}
+		if settings.BatterySaverMode && batteryLvl > 0 && batteryLvl <= settings.BatterySaverThreshold && !isCharging {
+			interval = interval * 3
+		}
+		return interval
 	}
-	ticker := time.NewTicker(interval)
+
+	ticker := time.NewTicker(getInterval())
 	defer ticker.Stop()
 
 	for {
@@ -360,6 +372,14 @@ func updateBattery() {
 						sendNotification("Battery Fully Charged", "Your mouse is now at 100% battery", false)
 						notifiedFull = true
 					}
+					if lastChargeLevel2 > 0 && lastChargeLevel2 != battery && battery > lastChargeLevel2 {
+						elapsed := time.Since(lastChargeTime2).Hours()
+						if elapsed > 0 {
+							chargeRate = float64(battery-lastChargeLevel2) / elapsed
+						}
+					}
+					lastChargeLevel2 = battery
+					lastChargeTime2 = time.Now()
 				} else {
 					notifiedFull = false
 					if lastBatteryLevel > 0 && lastBatteryLevel != battery {
@@ -408,8 +428,19 @@ func updateBattery() {
 							timeRemaining = fmt.Sprintf("%dm", minutes)
 						}
 					}
+				} else if charging && chargeRate > 0 && battery < 100 {
+					hoursLeft := float64(100-battery) / chargeRate
+					if hoursLeft < 100 {
+						hours := int(hoursLeft)
+						minutes := int((hoursLeft - float64(hours)) * 60)
+						if hours > 0 {
+							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
+						} else {
+							timeRemaining = fmt.Sprintf("%dm", minutes)
+						}
+					}
 				}
-				broadcast(map[string]interface{}{
+					broadcast(map[string]interface{}{
 					"level":           battery,
 					"charging":        charging,
 					"status":          status,
@@ -418,6 +449,7 @@ func updateBattery() {
 					"deviceModel":     deviceModel,
 					"timeRemaining":   timeRemaining,
 				})
+				ticker.Reset(getInterval())
 			}
 		} else {
 			batteryLvl = 0
@@ -711,6 +743,8 @@ func loadSettings() {
 		NotificationsEnabled:     false,
 		LowBatteryThreshold:      20,
 		CriticalBatteryThreshold: 10,
+		BatterySaverMode:         false,
+		BatterySaverThreshold:    15,
 	}
 	data, err := os.ReadFile(settingsFile)
 	if err != nil {
