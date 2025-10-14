@@ -761,6 +761,8 @@ func disableStartup() {
 }
 
 func sendNotification(title, message string, critical bool) {
+	log.Printf("Sending notification: %s - %s", title, message)
+	
 	// Send Windows notification via system tray
 	nid.UFlags = win.NIF_INFO
 	nid.DwInfoFlags = win.NIIF_INFO
@@ -776,10 +778,8 @@ func sendNotification(title, message string, critical bool) {
 	
 	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 	
-	// Reset flags after notification
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
-		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
-	}()
+	// Reset flags
+	time.Sleep(100 * time.Millisecond)
+	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 }
