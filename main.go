@@ -262,11 +262,15 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
 			win.SetForegroundWindow(webviewHwnd)
 		case ID_QUIT:
-			win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
-			if device != nil {
-				device.Close()
-			}
-			os.Exit(0)
+			go func() {
+				win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
+				if device != nil {
+					device.Close()
+				}
+				time.Sleep(100 * time.Millisecond)
+				os.Exit(0)
+			}()
+			return 0
 		}
 	}
 	return win.DefWindowProc(hwnd, msg, wParam, lParam)
