@@ -70,6 +70,7 @@ type ChargeData struct {
 
 type Settings struct {
 	StartWithWindows bool `json:"startWithWindows"`
+	StartMinimized   bool `json:"startMinimized"`
 	RefreshInterval  int  `json:"refreshInterval"` // in seconds
 }
 
@@ -152,6 +153,12 @@ func main() {
 	win.SetWindowLongPtr(webviewHwnd, win.GWLP_USERDATA, oldProc)
 
 	w.Navigate(fmt.Sprintf("http://localhost:%s", serverPort))
+	
+	// Start minimized if setting is enabled
+	if settings.StartMinimized {
+		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_HIDE))
+	}
+	
 	w.Run()
 }
 
@@ -645,6 +652,7 @@ func loadSettings() {
 	// Default settings
 	settings = Settings{
 		StartWithWindows: false,
+		StartMinimized:   false,
 		RefreshInterval:  5,
 	}
 	data, err := os.ReadFile(settingsFile)
