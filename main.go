@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -100,6 +101,7 @@ var (
 	settingsFile    string
 	settings        Settings
 	lastNotifiedLevel int = -1
+	notifyMutex     sync.Mutex
 )
 
 func main() {
@@ -347,20 +349,25 @@ func updateBattery() {
 					saveChargeData()
 				}
 				
-				// Check for low battery notifications
+				// Handle notifications with mutex protection
+				notifyMutex.Lock()
 				if settings.NotificationsEnabled && !charging && lastNotifiedLevel == -1 {
 					if battery <= settings.CriticalBatteryThreshold {
+						lastNotifiedLevel = 1
+						notifyMutex.Unlock()
 						sendNotification("Critical Battery", fmt.Sprintf("Battery at %d%%. Please charge soon!", battery), true)
-						lastNotifiedLevel = 1
 					} else if battery <= settings.LowBatteryThreshold {
-						sendNotification("Low Battery", fmt.Sprintf("Battery at %d%%. Consider charging.", battery), false)
 						lastNotifiedLevel = 1
+						notifyMutex.Unlock()
+						sendNotification("Low Battery", fmt.Sprintf("Battery at %d%%. Consider charging.", battery), false)
+					} else {
+						notifyMutex.Unlock()
 					}
-				}
-				
-				// Reset notification state when charging or battery is good
-				if (charging || battery > settings.LowBatteryThreshold) && lastNotifiedLevel != -1 {
+				} else if (charging || battery > settings.LowBatteryThreshold) && lastNotifiedLevel != -1 {
 					lastNotifiedLevel = -1
+					notifyMutex.Unlock()
+				} else {
+					notifyMutex.Unlock()
 				}
 				
 				batteryLvl = battery
