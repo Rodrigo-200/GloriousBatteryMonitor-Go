@@ -101,6 +101,7 @@ var (
 	settingsFile    string
 	settings        Settings
 	lastNotifiedLevel int = -1
+	lastNotifyTime  time.Time
 	notifyMutex     sync.Mutex
 )
 
@@ -766,6 +767,12 @@ func disableStartup() {
 }
 
 func sendNotification(title, message string, critical bool) {
+	// Prevent spam with 5-minute cooldown
+	if time.Since(lastNotifyTime) < 5*time.Minute {
+		return
+	}
+	lastNotifyTime = time.Now()
+	
 	// Send Windows notification via system tray
 	nid.UFlags = win.NIF_INFO
 	nid.DwInfoFlags = win.NIIF_INFO
