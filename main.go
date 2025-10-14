@@ -108,6 +108,8 @@ var (
 	lastChargeLevel2  int       = -1
 	lastChargeTime2   time.Time
 	chargeRate        float64   = 0
+	animationFrame    int       = 0
+	stopAnimation     chan bool
 )
 
 func main() {
@@ -130,9 +132,11 @@ func main() {
 		serverPort = p
 	}
 
+	stopAnimation = make(chan bool)
 	go startWebServer()
 	go startTray()
 	go updateBattery()
+	go animateChargingIcon()
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -235,7 +239,7 @@ func startTray() {
 	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 	nid.UCallbackMessage = WM_TRAYICON
 	// Create battery icon
-	nid.HIcon = createBatteryIcon(0, false)
+	nid.HIcon = createBatteryIcon(0, false, 0)
 
 	tip, _ := syscall.UTF16FromString("Glorious Battery")
 	copy(nid.SzTip[:], tip)
@@ -552,7 +556,7 @@ func readBattery() (int, bool) {
 	return 0, false
 }
 
-func createBatteryIcon(level int, charging bool) win.HICON {
+func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 	// Get system metrics for icon size
 	getSystemMetrics := user32.NewProc("GetSystemMetrics")
 	smCxIcon, _, _ := getSystemMetrics.Call(uintptr(11)) // SM_CXICON
@@ -682,9 +686,17 @@ func createBatteryIcon(level int, charging bool) win.HICON {
 		}
 	}
 
-	// Fill battery based on level
+	// Fill battery based on level with animation for charging
 	if level > 0 {
-		fillWidth := int32(float32(38) * scale * float32(level) / 100.0)
+		displayLevel := level
+		if charging {
+			// Pulsing animation: cycle through +0%, +10%, +20%
+			displayLevel = level + (frame * 10)
+			if displayLevel > 100 {
+				displayLevel = 100
+			}
+		}
+		fillWidth := int32(float32(38) * scale * float32(displayLevel) / 100.0)
 		for y := bodyTop + 1; y < bodyBottom; y++ {
 			for x := bodyLeft + 1; x < bodyLeft+1+fillWidth; x++ {
 				if x < bodyRight {
@@ -708,10 +720,28 @@ func createBatteryIcon(level int, charging bool) win.HICON {
 
 func updateTrayIcon(level int, charging bool) {
 	oldIcon := nid.HIcon
-	nid.HIcon = createBatteryIcon(level, charging)
+	nid.HIcon = createBatteryIcon(level, charging, animationFrame)
 	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 	if oldIcon != 0 {
 		win.DestroyIcon(oldIcon)
+	}
+}
+
+func animateChargingIcon() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if isCharging {
+				animationFrame = (animationFrame + 1) % 3
+				updateTrayIcon(batteryLvl, isCharging)
+			} else {
+				animationFrame = 0
+			}
+		case <-stopAnimation:
+			return
+		}
 	}
 }
 
