@@ -39,22 +39,23 @@ jobs:
         files: glorious-battery.exe
         generate_release_notes: true
         body: |
-          ## What's New in v1.2.0
+          ## What's New in v1.3.0
           
-          ### ⚙️ Settings Page
-          - **Start with Windows**: Toggle automatic startup via Windows registry
-          - **Start Minimized**: Launch directly to system tray
-          - **Refresh Interval**: Configurable battery check interval (1-60 seconds)
-          - Settings persist across app restarts
+          ### 🔔 Low Battery Notifications
+          - **Configurable Thresholds**: Set custom low battery (default 20%) and critical battery (default 10%) levels
+          - **Windows Native Notifications**: System tray toast notifications
+          - **Smart Logic**: One notification per threshold per discharge cycle
+          - **Auto-reset**: Notification flags reset when charging
+          - **Toggle On/Off**: Enable or disable notifications in settings
           
-          ### 🎨 UI Improvements
-          - Custom toast notifications replace browser alerts
-          - Settings gear icon in top-right corner
-          - Smooth animations and transitions
+          ### ⚙️ Settings
+          - Low battery threshold setting (5-50%)
+          - Critical battery threshold setting (5-30%)
+          - Notifications disabled by default (enable in settings)
           
-          ### 🐛 Bug Fixes
-          - Fixed quit button requiring double-click (TPM_RETURNCMD implementation)
-          - Settings apply immediately without restart
+          ### 📝 Other Improvements
+          - Added CHANGELOG.md for version tracking
+          - Improved notification state management
           
           ---
           
