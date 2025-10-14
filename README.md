@@ -22,7 +22,6 @@
 - 🎨 **Modern UI** - Clean, dark-themed interface with smooth animations
 - 🔄 **Auto-reconnect** - Automatically detects when mouse is plugged/unplugged
 - ⚡ **Charging Detection** - Shows charging status with visual indicators
-- 🎮 **Multi-device Support** - Works with all Glorious wireless mice
 - 💾 **Lightweight** - Minimal resource usage (~10MB RAM)
 
 ## 📸 Screenshots
