@@ -37,9 +37,15 @@
         .status-fair { background: rgba(210,153,34,.14); color: var(--warn); border-color:#b1811022; }
 
         .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .info-card { background: #0d1117; border: 1px solid var(--border); padding: 14px; border-radius: 10px; text-align: center; }
-        .info-label { font-size: 11px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 800; }
+        .info-card.full-width { grid-column: 1 / -1; }
+        .info-card { background: #0d1117; border: 1px solid var(--border); padding: 14px; border-radius: 10px; text-align: center; position: relative; }
+        .info-label { font-size: 11px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 800; display: flex; align-items: center; justify-content: center; gap: 4px; }
         .info-value { font-size: 16px; font-weight: 800; color: #f0f6fc; }
+        .info-btn { background: transparent; border: 1px solid var(--border); color: var(--ink-muted); width: 16px; height: 16px; border-radius: 50%; font-size: 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; line-height: 1; }
+        .info-btn:hover { background: #21262d; color: #f0f6fc; border-color: #3a4250; }
+        .info-tooltip { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%) translateY(-8px); background: #21262d; border: 1px solid var(--border); padding: 10px 12px; border-radius: 8px; font-size: 11px; color: var(--ink); width: max-content; max-width: 280px; text-align: left; box-shadow: 0 8px 24px rgba(0,0,0,.4); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 100; }
+        .info-tooltip.show { opacity: 1; pointer-events: auto; }
+        .info-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: var(--border); }
 
         .settings-btn { position: absolute; top: 16px; right: 16px; background: rgba(33,38,45,.35); border: 1px solid var(--border); color: var(--ink-muted); padding: 6px; border-radius: 8px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
         .settings-btn:hover { background: #21262d; color: #f0f6fc; border-color: #3a4250; }
@@ -115,7 +121,7 @@
                 <div class="status-badge" id="status"><span id="status-text">Connecting...</span></div>
             </div>
 
-            <div class="info-grid">
+            <div class="info-grid" id="infoGrid">
                 <div class="info-card">
                     <div class="info-label">Last Charged</div>
                     <div class="info-value" id="lastCharge">Never</div>
@@ -123,6 +129,16 @@
                 <div class="info-card">
                     <div class="info-label">Charged To</div>
                     <div class="info-value" id="chargeLevel">--</div>
+                </div>
+                <div class="info-card full-width" id="timeRemainingCard" style="display:none">
+                    <div class="info-label">
+                        Time Remaining
+                        <button class="info-btn" onclick="toggleTooltip()" aria-label="More info">?</button>
+                    </div>
+                    <div class="info-value" id="timeRemaining">--</div>
+                    <div class="info-tooltip" id="timeTooltip">
+                        This estimate is based on your current battery discharge rate. It may show "Calculating..." until enough data is collected (requires at least 1% battery change).
+                    </div>
                 </div>
             </div>
         </div>
@@ -185,6 +201,18 @@
 
         function clamp(n,min,max){ return Math.max(min, Math.min(max, n)); }
         function byId(id){ return document.getElementById(id); }
+
+        function toggleTooltip() {
+            const tooltip = byId('timeTooltip');
+            tooltip.classList.toggle('show');
+            setTimeout(() => tooltip.classList.remove('show'), 4000);
+        }
+        document.addEventListener('click', (e) => {
+            const tooltip = byId('timeTooltip');
+            if (tooltip && !e.target.closest('.info-card') && tooltip.classList.contains('show')) {
+                tooltip.classList.remove('show');
+            }
+        });
 
         function getCircumference(circle){
             const r = parseFloat(circle.getAttribute('r')) || 85;
@@ -306,6 +334,19 @@
             if (data.lastChargeTime && data.lastChargeTime !== 'Never') {
                 lastCharge.textContent = data.lastChargeTime;
                 chargeLevel.textContent = (data.lastChargeLevel ?? '--') + '%';
+            }
+
+            const timeRemainingCard = document.getElementById('timeRemainingCard');
+            const timeRemaining = document.getElementById('timeRemaining');
+            if (!data.charging) {
+                if (data.timeRemaining && data.timeRemaining !== '') {
+                    timeRemaining.textContent = data.timeRemaining;
+                } else {
+                    timeRemaining.textContent = 'Calculating...';
+                }
+                timeRemainingCard.style.display = 'block';
+            } else {
+                timeRemainingCard.style.display = 'none';
             }
 
             const level = Math.max(0, Math.min(100, parseInt(data.level,10) || 0));
