@@ -380,6 +380,23 @@
                 <input type="number" id="refreshInterval" class="setting-input" min="1" max="60" value="5">
             </div>
 
+            <div class="setting-item">
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="notificationsEnabled">
+                    <label class="setting-label" for="notificationsEnabled" style="margin:0">Enable Low Battery Notifications</label>
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <label class="setting-label" for="lowBatteryThreshold">Low Battery Threshold (%)</label>
+                <input type="number" id="lowBatteryThreshold" class="setting-input" min="5" max="50" value="20">
+            </div>
+
+            <div class="setting-item">
+                <label class="setting-label" for="criticalBatteryThreshold">Critical Battery Threshold (%)</label>
+                <input type="number" id="criticalBatteryThreshold" class="setting-input" min="5" max="30" value="10">
+            </div>
+
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="closeSettings()">Cancel</button>
                 <button class="btn btn-primary" onclick="saveSettings()">Save</button>
@@ -396,6 +413,9 @@
             document.getElementById('startWithWindows').checked = currentSettings.startWithWindows;
             document.getElementById('startMinimized').checked = currentSettings.startMinimized;
             document.getElementById('refreshInterval').value = currentSettings.refreshInterval;
+            document.getElementById('notificationsEnabled').checked = currentSettings.notificationsEnabled;
+            document.getElementById('lowBatteryThreshold').value = currentSettings.lowBatteryThreshold;
+            document.getElementById('criticalBatteryThreshold').value = currentSettings.criticalBatteryThreshold;
         }
 
         function openSettings() {
@@ -424,7 +444,10 @@
             const settings = {
                 startWithWindows: document.getElementById('startWithWindows').checked,
                 startMinimized: document.getElementById('startMinimized').checked,
-                refreshInterval: parseInt(document.getElementById('refreshInterval').value)
+                refreshInterval: parseInt(document.getElementById('refreshInterval').value),
+                notificationsEnabled: document.getElementById('notificationsEnabled').checked,
+                lowBatteryThreshold: parseInt(document.getElementById('lowBatteryThreshold').value),
+                criticalBatteryThreshold: parseInt(document.getElementById('criticalBatteryThreshold').value)
             };
             
             await fetch('/api/settings', {
