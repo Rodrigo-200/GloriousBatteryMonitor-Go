@@ -80,6 +80,8 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
+const currentVersion = "2.1.0"
+
 var (
 	device          *hid.Device
 	deviceModel     string = "Unknown"
@@ -131,6 +133,14 @@ func main() {
 	// Load saved data
 	loadChargeData()
 	loadSettings()
+	
+	// Fix startup registry path if needed
+	if settings.StartWithWindows {
+		enableStartup()
+	}
+	
+	// Check for updates in background
+	go checkForUpdates()
 	
 	// Allow overriding the embedded web server port via PORT env var (useful for debugging or port conflicts)
 	if p := os.Getenv("PORT"); p != "" {
@@ -829,7 +839,7 @@ func saveSettings() {
 	}
 	os.WriteFile(settingsFile, data, 0644)
 	
-	// Apply startup setting
+	// Apply startup setting (always updates path to current location)
 	if settings.StartWithWindows {
 		enableStartup()
 	} else {
@@ -933,4 +943,121 @@ func sendNotification(title, message string, critical bool) {
 	time.Sleep(100 * time.Millisecond)
 	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+}
+
+type GitHubRelease struct {
+	TagName string `json:"tag_name"`
+	HTMLURL string `json:"html_url"`
+	Assets  []struct {
+		Name               string `json:"name"`
+		BrowserDownloadURL string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+func checkForUpdates() {
+	// Wait 5 seconds before checking (let app start first)
+	time.Sleep(5 * time.Second)
+	
+	resp, err := http.Get("https://api.github.com/repos/Rodrigo-200/GloriousBatteryMonitor/releases/latest")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	
+	var release GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return
+	}
+	
+	// Remove 'v' prefix from tag for comparison
+	latestVersion := release.TagName
+	if len(latestVersion) > 0 && latestVersion[0] == 'v' {
+		latestVersion = latestVersion[1:]
+	}
+	
+	if latestVersion != currentVersion {
+		// Find the .exe asset
+		var downloadURL string
+		for _, asset := range release.Assets {
+			if asset.Name == "GloriousBatteryMonitor.exe" {
+				downloadURL = asset.BrowserDownloadURL
+				break
+			}
+		}
+		
+		if downloadURL != "" {
+			go promptUpdate(latestVersion, downloadURL)
+		}
+	}
+}
+
+func promptUpdate(version, downloadURL string) {
+	// Show notification with update available
+	message := fmt.Sprintf("Version %s is available. Click to download and install.", version)
+	sendNotification("Update Available", message, false)
+	
+	// Wait a bit, then offer to download
+	time.Sleep(3 * time.Second)
+	
+	// Download and install update
+	if err := downloadAndInstallUpdate(downloadURL); err != nil {
+		log.Printf("Update failed: %v", err)
+	}
+}
+
+func downloadAndInstallUpdate(downloadURL string) error {
+	// Get current exe path
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	
+	// Download new version to temp file
+	tempFile := exePath + ".new"
+	resp, err := http.Get(downloadURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	out, err := os.Create(tempFile)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	
+	if _, err := out.ReadFrom(resp.Body); err != nil {
+		return err
+	}
+	out.Close()
+	
+	// Create batch script to replace exe and restart
+	batchScript := fmt.Sprintf(`@echo off
+timeout /t 2 /nobreak >nul
+del "%s"
+move "%s" "%s"
+start "" "%s"
+del "%%~f0"
+`, exePath, tempFile, exePath, exePath)
+	
+	batchFile := filepath.Join(os.TempDir(), "update_glorious.bat")
+	if err := os.WriteFile(batchFile, []byte(batchScript), 0644); err != nil {
+		return err
+	}
+	
+	// Execute batch script and exit
+	cmd := syscall.NewLazyDLL("kernel32.dll").NewProc("WinExec")
+	cmd.Call(
+		uintptr(unsafe.Pointer(syscall.StringBytePtr(batchFile))),
+		uintptr(0), // SW_HIDE
+	)
+	
+	// Exit current app
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	terminateProcess := kernel32.NewProc("TerminateProcess")
+	getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
+	handle, _, _ := getCurrentProcess.Call()
+	terminateProcess.Call(handle, 0)
+	
+	return nil
 }
