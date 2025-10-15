@@ -322,6 +322,12 @@ func showMenu() {
 	batteryItem, _ := syscall.UTF16PtrFromString(batteryText)
 	appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_STRING|win.MF_GRAYED), 0, uintptr(unsafe.Pointer(batteryItem)))
 
+	if updateAvailable {
+		updateText := fmt.Sprintf("🚀 Update Available (v%s)", updateVersion)
+		updateItem, _ := syscall.UTF16PtrFromString(updateText)
+		appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_STRING|win.MF_GRAYED), 0, uintptr(unsafe.Pointer(updateItem)))
+	}
+
 	appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_SEPARATOR), 0, 0)
 
 	showItem, _ := syscall.UTF16PtrFromString("Show Window")
