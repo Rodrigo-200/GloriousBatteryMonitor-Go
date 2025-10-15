@@ -84,12 +84,30 @@
         .toast.info  { background:#111a24; color:#d7e7ff; border-color:#28486a }
         .toast .cls { appearance:none; border:none; background:transparent; color:inherit; cursor:pointer; opacity:.7 }
 
+        /* Update Banner */
+        .update-banner { background: linear-gradient(135deg, #1f6feb 0%, #0969da 100%); color: white; padding: 14px 18px; display: none; align-items: center; gap: 12px; border-bottom: 1px solid #0969da; }
+        .update-banner.show { display: flex; }
+        .update-icon { font-size: 20px; }
+        .update-text { flex: 1; font-size: 13px; font-weight: 600; }
+        .update-version { opacity: 0.9; font-size: 12px; font-weight: 400; }
+        .update-btn { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.15s; }
+        .update-btn:hover { background: rgba(255,255,255,0.3); }
+        .update-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
         /* Small helper */
         .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0 }
     </style>
 </head>
 <body>
     <div class="container">
+        <div class="update-banner" id="updateBanner">
+            <span class="update-icon" aria-hidden="true">🚀</span>
+            <div class="update-text">
+                Update Available
+                <div class="update-version" id="updateVersion"></div>
+            </div>
+            <button class="update-btn" id="updateBtn" onclick="installUpdate()">Install Now</button>
+        </div>
         <div class="header">
             <button class="settings-btn" onclick="openSettings()" aria-label="Open settings">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -342,6 +360,21 @@
             try { const data = JSON.parse(event.data); updateBattery(data); } catch(e){}
         };
 
+        async function installUpdate() {
+            const btn = byId('updateBtn');
+            btn.disabled = true;
+            btn.textContent = 'Installing...';
+            try {
+                const res = await fetch('/api/update', { method: 'POST' });
+                if (!res.ok) throw new Error('Update failed');
+                showToast('Update started. App will restart...', 'info');
+            } catch(e) {
+                showToast('Update failed. Please try again.', 'error');
+                btn.disabled = false;
+                btn.textContent = 'Install Now';
+            }
+        }
+
         function updateBattery(data) {
             const percentage = document.getElementById('percentage');
             const icon = document.getElementById('icon');
@@ -350,6 +383,14 @@
             const lastCharge = document.getElementById('lastCharge');
             const chargeLevel = document.getElementById('chargeLevel');
             const deviceTitle = document.getElementById('deviceTitle');
+
+            // Handle update banner
+            if (data.updateAvailable && data.updateVersion) {
+                const banner = byId('updateBanner');
+                const versionText = byId('updateVersion');
+                versionText.textContent = `Version ${data.updateVersion} is ready to install`;
+                banner.classList.add('show');
+            }
 
             if (data.deviceModel && data.deviceModel !== 'Unknown') {
                 deviceTitle.textContent = 'Glorious ' + data.deviceModel;
