@@ -80,42 +80,42 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.0"
+const currentVersion = "2.0.0"
 
 var (
-	device          *hid.Device
-	deviceModel     string = "Unknown"
-	hwnd            win.HWND
-	webviewHwnd     win.HWND
-	nid             win.NOTIFYICONDATA
-	batteryText     string = "Connecting..."
-	batteryLvl      int
-	isCharging      bool
-	wasCharging     bool
-	lastChargeTime  string = "Never"
-	lastChargeLevel int    = 0
-	user32          = syscall.NewLazyDLL("user32.dll")
-	appendMenuW     = user32.NewProc("AppendMenuW")
-	setWindowLong   = user32.NewProc("SetWindowLongPtrW")
-	showWindow      = user32.NewProc("ShowWindow")
-	clients         = make(map[chan string]bool)
-	w               webview2.WebView
-	serverPort      string = "8765"
-	dataFile        string
-	settingsFile    string
-	settings        Settings
+	device            *hid.Device
+	deviceModel       string = "Unknown"
+	hwnd              win.HWND
+	webviewHwnd       win.HWND
+	nid               win.NOTIFYICONDATA
+	batteryText       string = "Connecting..."
+	batteryLvl        int
+	isCharging        bool
+	wasCharging       bool
+	lastChargeTime    string = "Never"
+	lastChargeLevel   int    = 0
+	user32                   = syscall.NewLazyDLL("user32.dll")
+	appendMenuW              = user32.NewProc("AppendMenuW")
+	setWindowLong            = user32.NewProc("SetWindowLongPtrW")
+	showWindow               = user32.NewProc("ShowWindow")
+	clients                  = make(map[chan string]bool)
+	w                 webview2.WebView
+	serverPort        string = "8765"
+	dataFile          string
+	settingsFile      string
+	settings          Settings
 	notifiedLow       bool
 	notifiedCritical  bool
 	notifiedFull      bool
-	lastBatteryLevel  int       = -1
+	lastBatteryLevel  int = -1
 	lastBatteryTime   time.Time
-	dischargeRate     float64   = 0
-	lastChargeLevel2  int       = -1
+	dischargeRate     float64 = 0
+	lastChargeLevel2  int     = -1
 	lastChargeTime2   time.Time
-	chargeRate        float64   = 0
+	chargeRate        float64 = 0
 	rateHistory       []float64
 	chargeRateHistory []float64
-	animationFrame    int       = 0
+	animationFrame    int = 0
 	stopAnimation     chan bool
 	updateAvailable   bool
 	updateVersion     string
@@ -132,19 +132,19 @@ func main() {
 	os.MkdirAll(dataDir, 0755)
 	dataFile = filepath.Join(dataDir, "charge_data.json")
 	settingsFile = filepath.Join(dataDir, "settings.json")
-	
+
 	// Load saved data
 	loadChargeData()
 	loadSettings()
-	
+
 	// Fix startup registry path if needed
 	if settings.StartWithWindows {
 		enableStartup()
 	}
-	
+
 	// Check for updates in background
 	go checkForUpdates()
-	
+
 	// Allow overriding the embedded web server port via PORT env var (useful for debugging or port conflicts)
 	if p := os.Getenv("PORT"); p != "" {
 		serverPort = p
@@ -178,7 +178,7 @@ func main() {
 	defer w.Destroy()
 
 	webviewHwnd = win.HWND(w.Window())
-	
+
 	// Load and set window icon
 	hInst := win.GetModuleHandle(nil)
 	hIcon := win.LoadIcon(hInst, win.MAKEINTRESOURCE(1))
@@ -186,17 +186,17 @@ func main() {
 		win.SendMessage(webviewHwnd, win.WM_SETICON, 0, uintptr(hIcon)) // Small icon
 		win.SendMessage(webviewHwnd, win.WM_SETICON, 1, uintptr(hIcon)) // Large icon
 	}
-	
+
 	oldProc := win.SetWindowLongPtr(webviewHwnd, win.GWLP_WNDPROC, syscall.NewCallback(webviewWndProc))
 	win.SetWindowLongPtr(webviewHwnd, win.GWLP_USERDATA, oldProc)
 
 	w.Navigate(fmt.Sprintf("http://localhost:%s", serverPort))
-	
+
 	// Start minimized if setting is enabled
 	if settings.StartMinimized {
 		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_HIDE))
 	}
-	
+
 	w.Run()
 }
 
@@ -381,7 +381,7 @@ func updateBattery() {
 					lastChargeLevel = battery
 					saveChargeData()
 				}
-				
+
 				// Reset notification flags when charging
 				if charging {
 					notifiedLow = false
@@ -435,7 +435,7 @@ func updateBattery() {
 						}
 					}
 				}
-				
+
 				// Send notifications only once per threshold
 				if settings.NotificationsEnabled && !charging {
 					if battery <= settings.CriticalBatteryThreshold && !notifiedCritical {
@@ -446,7 +446,7 @@ func updateBattery() {
 						sendNotification("Low Battery", fmt.Sprintf("Battery at %d%%. Consider charging.", battery), false)
 					}
 				}
-				
+
 				batteryLvl = battery
 				wasCharging = charging
 				isCharging = charging
@@ -491,7 +491,7 @@ func updateBattery() {
 					"status":          status,
 					"lastChargeTime":  lastChargeTime,
 					"lastChargeLevel": lastChargeLevel,
-							"deviceModel":     deviceModel,
+					"deviceModel":     deviceModel,
 					"timeRemaining":   timeRemaining,
 					"updateAvailable": updateAvailable,
 					"updateVersion":   updateVersion,
@@ -793,7 +793,7 @@ func loadChargeData() {
 	if err := json.Unmarshal(data, &cd); err == nil {
 		lastChargeTime = cd.LastChargeTime
 		lastChargeLevel = cd.LastChargeLevel
-		
+
 		// Load battery rates if data is fresh (< 24 hours old)
 		if cd.Timestamp != "" {
 			if savedTime, err := time.Parse(time.RFC3339, cd.Timestamp); err == nil {
@@ -844,7 +844,7 @@ func saveSettings() {
 		return
 	}
 	os.WriteFile(settingsFile, data, 0644)
-	
+
 	// Apply startup setting (always updates path to current location)
 	if settings.StartWithWindows {
 		enableStartup()
@@ -855,12 +855,12 @@ func saveSettings() {
 
 func handleSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	if r.Method == "GET" {
 		json.NewEncoder(w).Encode(settings)
 		return
 	}
-	
+
 	if r.Method == "POST" {
 		var newSettings Settings
 		if err := json.NewDecoder(r.Body).Decode(&newSettings); err != nil {
@@ -878,18 +878,18 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	if !updateAvailable || updateURL == "" {
 		http.Error(w, "No update available", http.StatusBadRequest)
 		return
 	}
-	
+
 	go func() {
 		if err := downloadAndInstallUpdate(updateURL); err != nil {
 			log.Printf("Update failed: %v", err)
 		}
 	}()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
@@ -901,7 +901,7 @@ func enableStartup() {
 	}
 	advapi32 := syscall.NewLazyDLL("advapi32.dll")
 	regSetValueEx := advapi32.NewProc("RegSetValueExW")
-	
+
 	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Run`)
 	var handle syscall.Handle
 	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, key, 0, syscall.KEY_WRITE, &handle) == nil {
@@ -922,7 +922,7 @@ func enableStartup() {
 func disableStartup() {
 	advapi32 := syscall.NewLazyDLL("advapi32.dll")
 	regDeleteValue := advapi32.NewProc("RegDeleteValueW")
-	
+
 	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Run`)
 	var handle syscall.Handle
 	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, key, 0, syscall.KEY_WRITE, &handle) == nil {
@@ -950,22 +950,22 @@ func calculateEMA(rates []float64) float64 {
 
 func sendNotification(title, message string, critical bool) {
 	log.Printf("Sending notification: %s - %s", title, message)
-	
+
 	// Send Windows notification via system tray
 	nid.UFlags = win.NIF_INFO
 	nid.DwInfoFlags = win.NIIF_INFO
 	if critical {
 		nid.DwInfoFlags = win.NIIF_WARNING
 	}
-	
+
 	infoTitle, _ := syscall.UTF16FromString(title)
 	copy(nid.SzInfoTitle[:], infoTitle)
-	
+
 	infoText, _ := syscall.UTF16FromString(message)
 	copy(nid.SzInfo[:], infoText)
-	
+
 	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
-	
+
 	// Reset flags
 	time.Sleep(100 * time.Millisecond)
 	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
@@ -984,24 +984,24 @@ type GitHubRelease struct {
 func checkForUpdates() {
 	// Wait 5 seconds before checking (let app start first)
 	time.Sleep(5 * time.Second)
-	
+
 	resp, err := http.Get("https://api.github.com/repos/Rodrigo-200/GloriousBatteryMonitor/releases/latest")
 	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	var release GitHubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return
 	}
-	
+
 	// Remove 'v' prefix from tag for comparison
 	latestVersion := release.TagName
 	if len(latestVersion) > 0 && latestVersion[0] == 'v' {
 		latestVersion = latestVersion[1:]
 	}
-	
+
 	if latestVersion != currentVersion {
 		// Find the .exe asset
 		var downloadURL string
@@ -1011,7 +1011,7 @@ func checkForUpdates() {
 				break
 			}
 		}
-		
+
 		if downloadURL != "" {
 			go promptUpdate(latestVersion, downloadURL)
 		}
@@ -1022,11 +1022,11 @@ func promptUpdate(version, downloadURL string) {
 	updateAvailable = true
 	updateVersion = version
 	updateURL = downloadURL
-	
+
 	// Show notification
 	message := fmt.Sprintf("Version %s is available. Open the app to update.", version)
 	sendNotification("Update Available", message, false)
-	
+
 	// Broadcast to UI clients
 	broadcast(map[string]interface{}{
 		"updateAvailable": true,
@@ -1035,58 +1035,58 @@ func promptUpdate(version, downloadURL string) {
 }
 
 func downloadAndInstallUpdate(downloadURL string) error {
-	// Get current exe path
 	exePath, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	
-	// Download new version to temp file
+
 	tempFile := exePath + ".new"
 	resp, err := http.Get(downloadURL)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	out, err := os.Create(tempFile)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	
+
 	if _, err := out.ReadFrom(resp.Body); err != nil {
+		out.Close()
 		return err
 	}
 	out.Close()
-	
-	// Create batch script to replace exe and restart
+
 	batchScript := fmt.Sprintf(`@echo off
-timeout /t 2 /nobreak >nul
-del "%s"
-move "%s" "%s"
+:wait
+tasklist /FI "IMAGENAME eq %s" 2>NUL | find /I "%s" >NUL
+if "%%ERRORLEVEL"=="0" (
+    timeout /t 1 /nobreak >nul
+    goto wait
+)
+del /F /Q "%s" 2>nul
+move /Y "%s" "%s"
 start "" "%s"
 del "%%~f0"
-`, exePath, tempFile, exePath, exePath)
-	
+`, filepath.Base(exePath), filepath.Base(exePath), exePath, tempFile, exePath, exePath)
+
 	batchFile := filepath.Join(os.TempDir(), "update_glorious.bat")
 	if err := os.WriteFile(batchFile, []byte(batchScript), 0644); err != nil {
 		return err
 	}
-	
-	// Execute batch script and exit
-	cmd := syscall.NewLazyDLL("kernel32.dll").NewProc("WinExec")
-	cmd.Call(
-		uintptr(unsafe.Pointer(syscall.StringBytePtr(batchFile))),
-		uintptr(0), // SW_HIDE
-	)
-	
-	// Exit current app
+
+	shell32 := syscall.NewLazyDLL("shell32.dll")
+	shellExecute := shell32.NewProc("ShellExecuteW")
+	verb, _ := syscall.UTF16PtrFromString("open")
+	file, _ := syscall.UTF16PtrFromString(batchFile)
+	shellExecute.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), 0, 0, 0)
+
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	terminateProcess := kernel32.NewProc("TerminateProcess")
 	getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
 	handle, _, _ := getCurrentProcess.Call()
 	terminateProcess.Call(handle, 0)
-	
+
 	return nil
 }
