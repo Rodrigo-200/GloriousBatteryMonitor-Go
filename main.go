@@ -167,8 +167,8 @@ func main() {
 		AutoFocus: true,
 		WindowOptions: webview2.WindowOptions{
 			Title:  "Glorious Mouse Battery Monitor",
-			Width:  500,
-			Height: 650,
+			Width:  520,
+			Height: 700,
 			IconId: 0,
 		},
 	})
@@ -187,6 +187,11 @@ func main() {
 		win.SendMessage(webviewHwnd, win.WM_SETICON, 1, uintptr(hIcon)) // Large icon
 	}
 
+	// Disable window resizing
+	style := win.GetWindowLongPtr(webviewHwnd, win.GWL_STYLE)
+	style &^= win.WS_THICKFRAME | win.WS_MAXIMIZEBOX
+	win.SetWindowLongPtr(webviewHwnd, win.GWL_STYLE, style)
+	
 	oldProc := win.SetWindowLongPtr(webviewHwnd, win.GWLP_WNDPROC, syscall.NewCallback(webviewWndProc))
 	win.SetWindowLongPtr(webviewHwnd, win.GWLP_USERDATA, oldProc)
 
@@ -205,6 +210,7 @@ func startWebServer() {
 	http.HandleFunc("/events", handleSSE)
 	http.HandleFunc("/api/settings", handleSettings)
 	http.HandleFunc("/api/update", handleUpdate)
+	http.HandleFunc("/api/resize", handleResize)
 	addr := fmt.Sprintf(":%s", serverPort)
 	log.Printf("starting web server on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
@@ -890,6 +896,25 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func handleResize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Height int `json:"height"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var rect win.RECT
+	win.GetWindowRect(webviewHwnd, &rect)
+	win.SetWindowPos(webviewHwnd, 0, 0, 0, rect.Right-rect.Left, int32(req.Height), win.SWP_NOMOVE|win.SWP_NOZORDER)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
