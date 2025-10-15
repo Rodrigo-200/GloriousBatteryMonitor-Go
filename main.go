@@ -483,8 +483,10 @@ func updateBattery() {
 			}
 		} else {
 			batteryLvl = 0
+			isCharging = false
 			batteryText = "Mouse Not Found"
 			updateTrayTooltip("Mouse Not Found")
+			updateTrayIcon(0, false) // Update icon to show disconnected state
 			broadcast(map[string]interface{}{"level": 0, "charging": false, "status": "disconnected"})
 		}
 
