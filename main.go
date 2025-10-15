@@ -27,6 +27,7 @@ const (
 	WM_APP_HIDE = WM_USER + 2
 	ID_SHOW     = 1001
 	ID_QUIT     = 1002
+	ID_UPDATE   = 1003
 )
 
 // Supported Glorious mice product IDs
@@ -80,7 +81,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.1"
+const currentVersion = "2.0.0"
 
 var (
 	device            *hid.Device
@@ -191,7 +192,7 @@ func main() {
 	style := win.GetWindowLongPtr(webviewHwnd, win.GWL_STYLE)
 	style &^= win.WS_THICKFRAME | win.WS_MAXIMIZEBOX
 	win.SetWindowLongPtr(webviewHwnd, win.GWL_STYLE, style)
-	
+
 	oldProc := win.SetWindowLongPtr(webviewHwnd, win.GWLP_WNDPROC, syscall.NewCallback(webviewWndProc))
 	win.SetWindowLongPtr(webviewHwnd, win.GWLP_USERDATA, oldProc)
 
@@ -325,7 +326,7 @@ func showMenu() {
 	if updateAvailable {
 		updateText := fmt.Sprintf("🚀 Update Available (v%s)", updateVersion)
 		updateItem, _ := syscall.UTF16PtrFromString(updateText)
-		appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_STRING|win.MF_GRAYED), 0, uintptr(unsafe.Pointer(updateItem)))
+		appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_STRING), ID_UPDATE, uintptr(unsafe.Pointer(updateItem)))
 	}
 
 	appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_SEPARATOR), 0, 0)
@@ -355,6 +356,9 @@ func showMenu() {
 
 	// Handle command immediately
 	if cmd == ID_SHOW {
+		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
+		win.SetForegroundWindow(webviewHwnd)
+	} else if cmd == ID_UPDATE {
 		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
 		win.SetForegroundWindow(webviewHwnd)
 	} else if cmd == ID_QUIT {
@@ -503,7 +507,7 @@ func updateBattery() {
 					"status":          status,
 					"lastChargeTime":  lastChargeTime,
 					"lastChargeLevel": lastChargeLevel,
-							"deviceModel":     deviceModel,
+					"deviceModel":     deviceModel,
 					"timeRemaining":   timeRemaining,
 					"updateAvailable": updateAvailable,
 					"updateVersion":   updateVersion,
