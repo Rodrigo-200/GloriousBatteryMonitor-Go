@@ -81,7 +81,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.3"
+const currentVersion = "2.2.4"
 
 var (
 	device            *hid.Device
@@ -1057,7 +1057,7 @@ func checkForUpdates() {
 		// Find the .exe asset
 		var downloadURL string
 		for _, asset := range release.Assets {
-			if asset.Name == "GloriousBatteryMonitor.exe" {
+			if asset.Name == "GloriousBatteryMonitor-Go.exe" {
 				downloadURL = asset.BrowserDownloadURL
 				break
 			}
