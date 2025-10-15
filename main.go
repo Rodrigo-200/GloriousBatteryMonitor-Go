@@ -108,6 +108,8 @@ var (
 	lastChargeLevel2  int       = -1
 	lastChargeTime2   time.Time
 	chargeRate        float64   = 0
+	rateHistory       []float64
+	chargeRateHistory []float64
 	animationFrame    int       = 0
 	stopAnimation     chan bool
 )
@@ -376,7 +378,12 @@ func updateBattery() {
 						if (battery - lastChargeLevel2) >= 3 {
 							elapsed := time.Since(lastChargeTime2).Hours()
 							if elapsed > 0 {
-								chargeRate = float64(battery-lastChargeLevel2) / elapsed
+								newRate := float64(battery-lastChargeLevel2) / elapsed
+								chargeRateHistory = append(chargeRateHistory, newRate)
+								if len(chargeRateHistory) > 5 {
+									chargeRateHistory = chargeRateHistory[1:]
+								}
+								chargeRate = calculateEMA(chargeRateHistory)
 								lastChargeLevel2 = battery
 								lastChargeTime2 = time.Now()
 							}
@@ -393,7 +400,12 @@ func updateBattery() {
 						if (lastBatteryLevel - battery) >= 3 {
 							elapsed := time.Since(lastBatteryTime).Hours()
 							if elapsed > 0 {
-								dischargeRate = float64(lastBatteryLevel-battery) / elapsed
+								newRate := float64(lastBatteryLevel-battery) / elapsed
+								rateHistory = append(rateHistory, newRate)
+								if len(rateHistory) > 5 {
+									rateHistory = rateHistory[1:]
+								}
+								dischargeRate = calculateEMA(rateHistory)
 								lastBatteryLevel = battery
 								lastBatteryTime = time.Now()
 							}
@@ -857,6 +869,22 @@ func disableStartup() {
 		valueName, _ := syscall.UTF16PtrFromString("GloriousBatteryMonitor")
 		regDeleteValue.Call(uintptr(handle), uintptr(unsafe.Pointer(valueName)))
 	}
+}
+
+func calculateEMA(rates []float64) float64 {
+	if len(rates) == 0 {
+		return 0
+	}
+	if len(rates) == 1 {
+		return rates[0]
+	}
+	// Use exponential moving average with alpha=0.3 (similar to phones)
+	alpha := 0.3
+	ema := rates[0]
+	for i := 1; i < len(rates); i++ {
+		ema = alpha*rates[i] + (1-alpha)*ema
+	}
+	return ema
 }
 
 func sendNotification(title, message string, critical bool) {
