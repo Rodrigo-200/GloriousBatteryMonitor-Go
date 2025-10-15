@@ -198,6 +198,39 @@
 
     <script>
         let currentSettings = {};
+        let timeHistory = [];
+        
+        function parseTime(timeStr) {
+            if (!timeStr || timeStr === 'Calculating...') return null;
+            const match = timeStr.match(/(\d+)h\s*(\d+)m|(\d+)m/);
+            if (!match) return null;
+            if (match[1]) return parseInt(match[1]) * 60 + parseInt(match[2]);
+            return parseInt(match[3]);
+        }
+        
+        function formatTime(minutes) {
+            if (minutes >= 60) {
+                const h = Math.floor(minutes / 60);
+                const m = minutes % 60;
+                return `${h}h ${m}m`;
+            }
+            return `${minutes}m`;
+        }
+        
+        function smoothTime(newTime) {
+            if (!newTime || newTime === 'Calculating...') {
+                timeHistory = [];
+                return newTime;
+            }
+            const minutes = parseTime(newTime);
+            if (minutes === null) return newTime;
+            timeHistory.push(minutes);
+            if (timeHistory.length > 10) timeHistory.shift();
+            if (timeHistory.length < 3) return newTime;
+            const sorted = [...timeHistory].sort((a, b) => a - b);
+            const median = sorted[Math.floor(sorted.length / 2)];
+            return formatTime(median);
+        }
 
         function clamp(n,min,max){ return Math.max(min, Math.min(max, n)); }
         function byId(id){ return document.getElementById(id); }
@@ -340,7 +373,7 @@
             const timeRemaining = document.getElementById('timeRemaining');
             const timeLabel = timeRemainingCard.querySelector('.info-label');
             if (data.timeRemaining && data.timeRemaining !== '') {
-                timeRemaining.textContent = data.timeRemaining;
+                timeRemaining.textContent = smoothTime(data.timeRemaining);
                 if (data.charging) {
                     timeLabel.childNodes[0].textContent = 'Time to Full ';
                 } else {
@@ -388,3 +421,4 @@
     </script>
 </body>
 </html>
+
