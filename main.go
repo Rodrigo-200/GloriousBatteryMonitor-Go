@@ -1109,23 +1109,25 @@ func downloadAndInstallUpdate(downloadURL string) error {
 	}
 	out.Close()
 
-	// Use native Windows API to replace file on next reboot (no cmd.exe)
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	moveFileEx := kernel32.NewProc("MoveFileExW")
-	
-	exePathW, _ := syscall.UTF16PtrFromString(exePath)
-	tempFileW, _ := syscall.UTF16PtrFromString(tempFile)
-	
-	// MOVEFILE_REPLACE_EXISTING (0x1) | MOVEFILE_DELAY_UNTIL_REBOOT (0x4)
-	moveFileEx.Call(
-		uintptr(unsafe.Pointer(tempFileW)),
-		uintptr(unsafe.Pointer(exePathW)),
-		uintptr(0x1|0x4),
-	)
+	// Rename old exe to .old
+	oldFile := exePath + ".old"
+	os.Remove(oldFile) // Remove any existing .old file
+	if err := os.Rename(exePath, oldFile); err != nil {
+		return err
+	}
+
+	// Rename new exe to current exe
+	if err := os.Rename(tempFile, exePath); err != nil {
+		// Restore old file if rename fails
+		os.Rename(oldFile, exePath)
+		return err
+	}
 
 	// Restart the application
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	shell32 := syscall.NewLazyDLL("shell32.dll")
 	shellExecute := shell32.NewProc("ShellExecuteW")
+	exePathW, _ := syscall.UTF16PtrFromString(exePath)
 	verb, _ := syscall.UTF16PtrFromString("open")
 	shellExecute.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(exePathW)), 0, 0, 1)
 
