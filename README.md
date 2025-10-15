@@ -7,7 +7,6 @@
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=flat&logo=windows)](https://www.microsoft.com/windows)
-[![Buy Me a Coffee](https://img.shields.io/badge/☕-Buy%20Me%20a%20Coffee-FFDD00?style=flat&logo=buymeacoffee)](https://www.buymeacoffee.com/gloriousbattery)
 
 [Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Supported Devices](#-supported-devices) • [Building](#-building-from-source)
 
@@ -223,6 +222,17 @@ If you encounter any issues or have questions:
 - Check existing issues for solutions
 
 ---
+
+## ☕ Support Us
+
+If you enjoy using **Glorious Battery Monitor** or want to support future development, you can buy me a coffee!  
+Every bit of support helps keep the project updated and polished. ❤️
+
+<p align="center">
+  <a href="https://www.buymeacoffee.com/gloriousbattery" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="200"/>
+  </a>
+</p>
 
 
 ⭐ Star this repo if you find it useful!
