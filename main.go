@@ -80,7 +80,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.1.0"
+const currentVersion = "2.2.0"
 
 var (
 	device          *hid.Device
@@ -117,6 +117,9 @@ var (
 	chargeRateHistory []float64
 	animationFrame    int       = 0
 	stopAnimation     chan bool
+	updateAvailable   bool
+	updateVersion     string
+	updateURL         string
 )
 
 func main() {
@@ -201,6 +204,7 @@ func startWebServer() {
 	http.HandleFunc("/", serveHTML)
 	http.HandleFunc("/events", handleSSE)
 	http.HandleFunc("/api/settings", handleSettings)
+	http.HandleFunc("/api/update", handleUpdate)
 	addr := fmt.Sprintf(":%s", serverPort)
 	log.Printf("starting web server on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
@@ -487,8 +491,10 @@ func updateBattery() {
 					"status":          status,
 					"lastChargeTime":  lastChargeTime,
 					"lastChargeLevel": lastChargeLevel,
-					"deviceModel":     deviceModel,
+							"deviceModel":     deviceModel,
 					"timeRemaining":   timeRemaining,
+					"updateAvailable": updateAvailable,
+					"updateVersion":   updateVersion,
 				})
 			}
 		} else {
@@ -867,6 +873,27 @@ func handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	if !updateAvailable || updateURL == "" {
+		http.Error(w, "No update available", http.StatusBadRequest)
+		return
+	}
+	
+	go func() {
+		if err := downloadAndInstallUpdate(updateURL); err != nil {
+			log.Printf("Update failed: %v", err)
+		}
+	}()
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
 func enableStartup() {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -992,17 +1019,19 @@ func checkForUpdates() {
 }
 
 func promptUpdate(version, downloadURL string) {
-	// Show notification with update available
-	message := fmt.Sprintf("Version %s is available. Click to download and install.", version)
+	updateAvailable = true
+	updateVersion = version
+	updateURL = downloadURL
+	
+	// Show notification
+	message := fmt.Sprintf("Version %s is available. Open the app to update.", version)
 	sendNotification("Update Available", message, false)
 	
-	// Wait a bit, then offer to download
-	time.Sleep(3 * time.Second)
-	
-	// Download and install update
-	if err := downloadAndInstallUpdate(downloadURL); err != nil {
-		log.Printf("Update failed: %v", err)
-	}
+	// Broadcast to UI clients
+	broadcast(map[string]interface{}{
+		"updateAvailable": true,
+		"updateVersion":   version,
+	})
 }
 
 func downloadAndInstallUpdate(downloadURL string) error {
