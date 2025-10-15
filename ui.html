@@ -389,7 +389,10 @@
                 const banner = byId('updateBanner');
                 const versionText = byId('updateVersion');
                 versionText.textContent = `Version ${data.updateVersion} is ready to install`;
-                banner.classList.add('show');
+                if (!banner.classList.contains('show')) {
+                    banner.classList.add('show');
+                    fetch('/api/resize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ height: 760 }) });
+                }
             }
 
             if (data.deviceModel && data.deviceModel !== 'Unknown') {
