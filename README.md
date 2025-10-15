@@ -22,7 +22,7 @@
 - 🎨 **Modern UI** - Clean, dark-themed interface with smooth animations
 - 🔄 **Auto-reconnect** - Automatically detects when mouse is plugged/unplugged
 - ⚡ **Charging Detection** - Shows charging status with visual indicators
-- 💾 **Lightweight** - Minimal resource usage (~10MB RAM)
+- 💾 **Lightweight** - Low resource usage (app ~10MB, WebView2 runtime ~50-100MB)
 
 ## 📸 Screenshots
 
@@ -196,6 +196,23 @@ git push origin v1.0.0
 ```
 
 The workflow will automatically build and publish the release with the executable.
+
+## ⚠️ Troubleshooting
+
+### Antivirus False Positives
+
+Some antivirus software (Bitdefender, etc.) may flag the application as suspicious due to WebView2's crash reporting system (Crashpad). This is a **false positive**.
+
+**Solutions:**
+1. **Add to antivirus exclusions**: Whitelist `GloriousBatteryMonitor.exe` and `%APPDATA%\GloriousBatteryMonitor\`
+2. **Submit false positive report**: Report to your antivirus vendor
+3. **Verify file integrity**: Check the SHA256 hash matches the release
+
+**Why this happens:** Unsigned executables using WebView2 can trigger heuristic detection.
+
+### High Memory Usage
+
+The app itself uses ~10MB RAM, but Microsoft Edge WebView2 runtime (required for the UI) uses an additional 50-100MB. This is normal for Chromium-based UIs.
 
 ## 📧 Support
 
