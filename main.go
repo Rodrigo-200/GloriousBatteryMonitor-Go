@@ -64,8 +64,11 @@ var deviceNames = map[uint16]string{
 }
 
 type ChargeData struct {
-	LastChargeTime  string `json:"lastChargeTime"`
-	LastChargeLevel int    `json:"lastChargeLevel"`
+	LastChargeTime  string  `json:"lastChargeTime"`
+	LastChargeLevel int     `json:"lastChargeLevel"`
+	DischargeRate   float64 `json:"dischargeRate"`
+	ChargeRate      float64 `json:"chargeRate"`
+	Timestamp       string  `json:"timestamp"`
 }
 
 type Settings struct {
@@ -390,6 +393,7 @@ func updateBattery() {
 								chargeRate = calculateEMA(chargeRateHistory)
 								lastChargeLevel2 = battery
 								lastChargeTime2 = time.Now()
+								saveChargeData() // Save rates after update
 							}
 						}
 					}
@@ -412,6 +416,7 @@ func updateBattery() {
 								dischargeRate = calculateEMA(rateHistory)
 								lastBatteryLevel = battery
 								lastBatteryTime = time.Now()
+								saveChargeData() // Save rates after update
 							}
 						}
 					}
@@ -770,6 +775,16 @@ func loadChargeData() {
 	if err := json.Unmarshal(data, &cd); err == nil {
 		lastChargeTime = cd.LastChargeTime
 		lastChargeLevel = cd.LastChargeLevel
+		
+		// Load battery rates if data is fresh (< 24 hours old)
+		if cd.Timestamp != "" {
+			if savedTime, err := time.Parse(time.RFC3339, cd.Timestamp); err == nil {
+				if time.Since(savedTime) < 24*time.Hour {
+					dischargeRate = cd.DischargeRate
+					chargeRate = cd.ChargeRate
+				}
+			}
+		}
 	}
 }
 
@@ -777,6 +792,9 @@ func saveChargeData() {
 	cd := ChargeData{
 		LastChargeTime:  lastChargeTime,
 		LastChargeLevel: lastChargeLevel,
+		DischargeRate:   dischargeRate,
+		ChargeRate:      chargeRate,
+		Timestamp:       time.Now().Format(time.RFC3339),
 	}
 	data, err := json.MarshalIndent(cd, "", "  ")
 	if err != nil {
