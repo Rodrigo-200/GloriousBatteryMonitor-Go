@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🖱️ Glorious Mouse Battery Monitor
+# 🖱️ Glorious Battery Monitor (GBM)
 
-**A lightweight system tray application for monitoring battery levels of Glorious wireless gaming mice**
+**A lightweight, open-source system tray app for checking real-time battery levels of Glorious wireless mice.**
 
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -16,13 +16,18 @@
 
 ## ✨ Features
 
-- 🎯 **System Tray Integration** - Runs quietly in the background with battery icon
-- 🔋 **Real-time Monitoring** - Updates battery level every 5 seconds
-- 📅 **Charge History** - Tracks last charge time and level
-- 🎨 **Modern UI** - Clean, dark-themed interface with smooth animations
-- 🔄 **Auto-reconnect** - Automatically detects when mouse is plugged/unplugged
-- ⚡ **Charging Detection** - Shows charging status with visual indicators
-- 💾 **Lightweight** - Low resource usage (app ~10MB, WebView2 runtime ~50-100MB)
+- 🔋 **Live Battery Percentage** – Exact value from your Glorious mouse (no LED guessing)
+- ⚡ **Charging Detection** – Shows charge state in real-time
+- 🎯 **System Tray Integration** – Clean tray icon with quick controls
+- 📅 **Charge History** – Tracks last charge level and time
+- 🔄 **Auto Reconnect** – Detects when mouse is plugged/unplugged
+- ⚙️ **Custom Alerts** – Set low and critical battery warnings
+- 💾 **Lightweight** – App uses ~10MB RAM
+
+> ⏱️ **Note:** The “time remaining” value is **only an estimation** and may not always be accurate.  
+> This is a **known limitation**, and we’re working to improve its accuracy in future releases.
+
+---
 
 ## 📸 Screenshots
 
@@ -36,61 +41,50 @@
 
 </div>
 
+---
+
 ## 🚀 Installation
 
-### Download Pre-built Binary
+1. **Download:** Get the latest release from [Releases](../../releases).  
+2. **Run:** Double-click `GloriousBatteryMonitor.exe`.  
+3. **Done:** The app starts in your Windows system tray.  
 
-1. Download the latest `GloriousBatteryMonitor.exe` from [Releases](../../releases)
-2. Run the executable - no installation required!
-3. The app will appear in your system tray
-
-### Requirements
-
+**Requirements**
 - Windows 10/11 (64-bit)
-- WebView2 Runtime (usually pre-installed on Windows 11)
-- Glorious wireless gaming mouse
+- WebView2 Runtime (included on Windows 11)
+- Glorious wireless mouse
+
+---
 
 ## 📖 Usage
 
-### Running the Application
+- 🖱️ **Left Click** → Show/hide main window  
+- ⚙️ **Right Click** → Open tray menu (Battery info, Show Window, Quit)  
+- ❌ **Close Window** → Minimizes to tray (use "Quit" to fully exit)
 
-Simply double-click `GloriousBatteryMonitor.exe` to start the application.
-
-### System Tray Controls
-
-- **Left Click** - Show/hide the main window
-- **Right Click** - Open context menu
-  - Battery status display
-  - Show Window
-  - Quit
-
-### Window Behavior
-
-- Closing the window minimizes to system tray (app keeps running)
-- Use "Quit" from tray menu to fully exit
+---
 
 ## 🖱️ Supported Devices
 
-> **Note:** Only tested with **Model D Wireless**. Other models should work but are untested.
+> Tested with **Model D Wireless**.  
+> Other Glorious mice should work, but are not yet verified.
 
-| Mouse Model | Wired | Wireless | Tested |
-|------------|-------|----------|--------|
-| Model O | ✅ | ✅ | ❌ |
-| Model O- | ✅ | ✅ | ❌ |
-| Model O Pro | ✅ | ✅ | ❌ |
+| Model | Wired | Wireless | Tested |
+|--------|--------|-----------|:------:|
+| Model O / O- | ✅ | ✅ | ❌ |
 | Model O2 | ✅ | ✅ | ❌ |
 | Model D | ✅ | ✅ | ✅ |
-| Model D- | ✅ | ✅ | ❌ |
-| Model D2 | ✅ | ✅ | ❌ |
-| Model I | ✅ | ✅ | ❌ |
-| Model I2 | ✅ | ✅ | ❌ |
+| Model D- / D2 | ✅ | ✅ | ❌ |
+| Model I / I2 | ✅ | ✅ | ❌ |
+| Model O Pro | ✅ | ✅ | ❌ |
 
-**Vendor ID:** `0x258a` (Glorious LLC)
+**Vendor ID:** `0x258a (Glorious LLC)`
 
 <details>
 <summary>View Product IDs</summary>
 
 ```
+
 Model O:      0x2011 (Wired), 0x2013 (Wireless)
 Model O-:     0x2019 (Wired), 0x2024 (Wireless)
 Model O Pro:  0x2017 (Wired), 0x2018 (Wireless)
@@ -100,133 +94,79 @@ Model D-:     0x2015 (Wired), 0x2025 (Wireless)
 Model D2:     0x2031 (Wired), 0x2033 (Wireless)
 Model I:      0x2036 (Wired), 0x2046 (Wireless)
 Model I2:     0x2014 (Wired), 0x2016 (Wireless)
-```
+
+````
 
 </details>
 
-## 🛠️ Building from Source
+---
 
-### Prerequisites
+## 🛠️ Build from Source
 
+**Prerequisites**
 - [Go 1.21+](https://go.dev/dl/)
 - Windows 10/11
 - Git
 
-### Build Steps
-
+**Commands**
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/GloriousMouseBattery.git
-cd GloriousMouseBattery
-
-# Download dependencies
+git clone https://github.com/Rodrigo-200/GloriousBatteryMonitor.git
+cd GloriousBatteryMonitor
 go mod download
-
-# Build the executable
 go build -ldflags -H=windowsgui -o GloriousBatteryMonitor.exe
+````
 
-# Run
-./GloriousBatteryMonitor.exe
-```
-
-### Dependencies
+**Dependencies**
 
 - [go-webview2](https://github.com/jchv/go-webview2) - WebView2 bindings for Go
 - [go-hid](https://github.com/sstallion/go-hid) - HID device communication
 - [win](https://github.com/lxn/win) - Windows API bindings
 
-## 🏗️ Project Structure
+---
 
-```
-GloriousMouseBattery/
-├── main.go              # Main application logic, HID communication, system tray
-├── ui.html              # Embedded web UI (HTML/CSS/JavaScript)
-├── go.mod               # Go module dependencies
-├── go.sum               # Dependency checksums
-├── README.md            # This file
-├── LICENSE              # MIT License
-└── .gitignore           # Git ignore rules
-```
+## 🔧 Technical Overview
 
-## 🔧 Technical Details
-
-### Battery Protocol
-
-The application communicates with Glorious mice using HID Feature Reports:
+**Battery Protocol**
 
 ```go
 Command:  {0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x83}
-Response: inputReport[6] == 0x83 (valid response)
-          inputReport[8] = battery level (0-100)
-          inputReport[7] = charging status (1 = charging)
+Response: inputReport[6] == 0x83 (valid)
+           inputReport[8] = battery level (0–100)
+           inputReport[7] = charging status (1 = charging)
 ```
 
-### Architecture
+**Architecture**
 
-- **Backend**: Go with native Windows API calls
-- **Frontend**: HTML/CSS/JavaScript served via embedded HTTP server
-- **Communication**: Server-Sent Events (SSE) for real-time updates
-- **System Tray**: Custom 32-bit ARGB icons with transparency
+* **Backend:** Go (Windows API + HID)
+* **Frontend:** HTML/CSS/JS via WebView2
+* **Updates:** Real-time via Server-Sent Events (SSE)
+* **Tray:** Custom ARGB icons with transparency
 
-## 🙏 Acknowledgments
+---
 
-- **Reference Project**: [GloriousBatteryMonitor (C#)](https://github.com/Cruxial0/GloriousBatteryMonitor) - Used as reference for HID protocol implementation in `main.go`
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 🚀 Releasing
-
-Releases are automated via GitHub Actions. To create a new release:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The workflow will automatically build and publish the release with the executable.
-
-## ⚠️ Troubleshooting
+## 🐞 Troubleshooting
 
 ### Antivirus False Positives
 
-Some antivirus software (Bitdefender, etc.) may flag the application as suspicious due to WebView2's crash reporting system (Crashpad). This is a **false positive**.
+Some antivirus software may flag the app due to WebView2’s crash reporter (Crashpad).
+✅ **Solution:** Whitelist the executable or report a false positive.
 
-**Solutions:**
-1. **Add to antivirus exclusions**: Whitelist `GloriousBatteryMonitor.exe` and `%APPDATA%\GloriousBatteryMonitor\`
-2. **Submit false positive report**: Report to your antivirus vendor
-3. **Verify file integrity**: Check the SHA256 hash matches the release
+### Memory Usage
 
-**Why this happens:** Unsigned executables using WebView2 can trigger heuristic detection.
+The app uses ~10MB RAM.
+The WebView2 runtime adds 50–100MB (standard for Chromium-based UIs).
 
-### High Memory Usage
+---
 
-The app itself uses ~10MB RAM, but Microsoft Edge WebView2 runtime (required for the UI) uses an additional 50-100MB. This is normal for Chromium-based UIs.
+## 🙏 Acknowledgments
 
-## 📧 Support
-
-If you encounter any issues or have questions:
-
-- Open an [Issue](../../issues)
-- Check existing issues for solutions
+* [Cruxial0/GloriousBatteryMonitor (C#)](https://github.com/Cruxial0/GloriousBatteryMonitor) – Reference for HID protocol implementation.
 
 ---
 
 ## ☕ Support Us
 
-If you enjoy using **Glorious Battery Monitor** or want to support future development, you can buy me a coffee!  
-Every bit of support helps keep the project updated and polished. ❤️
+If you find **Glorious Battery Monitor** helpful, you can buy me a coffee — every bit helps keep it updated. ❤️
 
 <p align="center">
   <a href="https://www.buymeacoffee.com/gloriousbattery" target="_blank">
@@ -234,7 +174,6 @@ Every bit of support helps keep the project updated and polished. ❤️
   </a>
 </p>
 
-
-⭐ Star this repo if you find it useful!
+⭐ **Star this repo** if you find it useful!
 
 </div>
