@@ -46,7 +46,7 @@
 ## 🚀 Installation
 
 1. **Download:** Get the latest release from [Releases](../../releases).  
-2. **Run:** Double-click `GloriousBatteryMonitor.exe`.  
+2. **Run:** Double-click `GloriousBatteryMonitor-Go.exe`.  
 3. **Done:** The app starts in your Windows system tray.  
 
 **Requirements**
@@ -113,7 +113,7 @@ Model I2:     0x2014 (Wired), 0x2016 (Wireless)
 git clone https://github.com/Rodrigo-200/GloriousBatteryMonitor.git
 cd GloriousBatteryMonitor
 go mod download
-go build -ldflags -H=windowsgui -o GloriousBatteryMonitor.exe
+go build -ldflags -H=windowsgui -o GloriousBatteryMonitor-Go.exe
 ````
 
 **Dependencies**
