@@ -31,12 +31,12 @@ jobs:
       run: windres -o icon.syso icon.rc
 
     - name: Build executable
-      run: go build -ldflags "-H=windowsgui" -o GloriousBatteryMonitor.exe
+      run: go build -ldflags "-H=windowsgui" -o GloriousBatteryMonitor-Go.exe
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        files: GloriousBatteryMonitor.exe
+        files: GloriousBatteryMonitor-Go.exe
         generate_release_notes: true
         body: |
           ## What's New in v1.3.0
@@ -60,7 +60,7 @@ jobs:
           ---
           
           ## Installation
-          1. Download `GloriousBatteryMonitor.exe`
+          1. Download `GloriousBatteryMonitor-Go.exe`
           2. Run the executable
           3. The app will appear in your system tray
           

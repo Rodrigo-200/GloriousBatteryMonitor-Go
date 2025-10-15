@@ -1057,7 +1057,7 @@ func checkForUpdates() {
 		// Find the .exe asset
 		var downloadURL string
 		for _, asset := range release.Assets {
-			if asset.Name == "GloriousBatteryMonitor.exe" {
+			if asset.Name == "GloriousBatteryMonitor-Go.exe" {
 				downloadURL = asset.BrowserDownloadURL
 				break
 			}
