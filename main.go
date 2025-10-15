@@ -81,7 +81,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.5"
+const currentVersion = "2.2.4"
 
 var (
 	device            *hid.Device
@@ -1036,7 +1036,7 @@ func checkForUpdates() {
 	// Wait 5 seconds before checking (let app start first)
 	time.Sleep(5 * time.Second)
 
-	resp, err := http.Get("https://api.github.com/repos/Rodrigo-200/GloriousBatteryMonitor/releases/latest")
+	resp, err := http.Get("https://api.github.com/repos/Rodrigo-200/GloriousBatteryMonitor-Go/releases/latest")
 	if err != nil {
 		return
 	}
