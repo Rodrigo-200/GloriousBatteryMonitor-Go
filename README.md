@@ -223,6 +223,17 @@ If you encounter any issues or have questions:
 
 ---
 
+## ☕ Support Us
+
+If you enjoy using **Glorious Battery Monitor** or want to support future development, you can buy me a coffee!  
+Every bit of support helps keep the project updated and polished. ❤️
+
+<p align="center">
+  <a href="https://www.buymeacoffee.com/gloriousbattery" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="200"/>
+  </a>
+</p>
+
 
 ⭐ Star this repo if you find it useful!
 
