@@ -1109,31 +1109,27 @@ func downloadAndInstallUpdate(downloadURL string) error {
 	}
 	out.Close()
 
-	batchScript := fmt.Sprintf(`@echo off
-:wait
-tasklist /FI "IMAGENAME eq %s" 2>NUL | find /I "%s" >NUL
-if "%%ERRORLEVEL"=="0" (
-    timeout /t 1 /nobreak >nul
-    goto wait
-)
-del /F /Q "%s" 2>nul
-move /Y "%s" "%s"
-start "" "%s"
-del "%%~f0"
-`, filepath.Base(exePath), filepath.Base(exePath), exePath, tempFile, exePath, exePath)
+	// Use native Windows API to replace file on next reboot (no cmd.exe)
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	moveFileEx := kernel32.NewProc("MoveFileExW")
+	
+	exePathW, _ := syscall.UTF16PtrFromString(exePath)
+	tempFileW, _ := syscall.UTF16PtrFromString(tempFile)
+	
+	// MOVEFILE_REPLACE_EXISTING (0x1) | MOVEFILE_DELAY_UNTIL_REBOOT (0x4)
+	moveFileEx.Call(
+		uintptr(unsafe.Pointer(tempFileW)),
+		uintptr(unsafe.Pointer(exePathW)),
+		uintptr(0x1|0x4),
+	)
 
-	batchFile := filepath.Join(os.TempDir(), "update_glorious.bat")
-	if err := os.WriteFile(batchFile, []byte(batchScript), 0644); err != nil {
-		return err
-	}
-
+	// Restart the application
 	shell32 := syscall.NewLazyDLL("shell32.dll")
 	shellExecute := shell32.NewProc("ShellExecuteW")
 	verb, _ := syscall.UTF16PtrFromString("open")
-	file, _ := syscall.UTF16PtrFromString(batchFile)
-	shellExecute.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(file)), 0, 0, 0)
+	shellExecute.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(exePathW)), 0, 0, 1)
 
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	// Exit current process
 	terminateProcess := kernel32.NewProc("TerminateProcess")
 	getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
 	handle, _, _ := getCurrentProcess.Call()
