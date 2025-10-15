@@ -483,7 +483,15 @@ func updateBattery() {
 					if hoursLeft < 100 && hoursLeft > 0 {
 						hours := int(hoursLeft)
 						minutes := int((hoursLeft - float64(hours)) * 60)
-						if hours > 0 {
+						if hours >= 24 {
+							days := hours / 24
+							remainingHours := hours % 24
+							if remainingHours > 0 {
+								timeRemaining = fmt.Sprintf("%dd %dh", days, remainingHours)
+							} else {
+								timeRemaining = fmt.Sprintf("%dd", days)
+							}
+						} else if hours > 0 {
 							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
 						} else if minutes > 0 {
 							timeRemaining = fmt.Sprintf("%dm", minutes)
@@ -494,7 +502,15 @@ func updateBattery() {
 					if hoursLeft < 100 && hoursLeft > 0 {
 						hours := int(hoursLeft)
 						minutes := int((hoursLeft - float64(hours)) * 60)
-						if hours > 0 {
+						if hours >= 24 {
+							days := hours / 24
+							remainingHours := hours % 24
+							if remainingHours > 0 {
+								timeRemaining = fmt.Sprintf("%dd %dh", days, remainingHours)
+							} else {
+								timeRemaining = fmt.Sprintf("%dd", days)
+							}
+						} else if hours > 0 {
 							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
 						} else if minutes > 0 {
 							timeRemaining = fmt.Sprintf("%dm", minutes)
