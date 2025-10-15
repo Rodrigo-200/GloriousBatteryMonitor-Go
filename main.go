@@ -104,6 +104,8 @@ var (
 	serverPort        string = "8765"
 	dataFile          string
 	settingsFile      string
+	logFile           string
+	logger            *log.Logger
 	settings          Settings
 	notifiedLow       bool
 	notifiedCritical  bool
@@ -133,6 +135,10 @@ func main() {
 	os.MkdirAll(dataDir, 0755)
 	dataFile = filepath.Join(dataDir, "charge_data.json")
 	settingsFile = filepath.Join(dataDir, "settings.json")
+	logFile = filepath.Join(dataDir, "debug.log")
+
+	// Set up logging
+	setupLogging()
 
 	// Load saved data
 	loadChargeData()
@@ -1036,7 +1042,7 @@ func checkForUpdates() {
 	// Wait 5 seconds before checking (let app start first)
 	time.Sleep(5 * time.Second)
 
-	resp, err := http.Get("https://api.github.com/repos/Rodrigo-200/GloriousBatteryMonitor/releases/latest")
+	resp, err := http.Get("https://api.github.com/repos/Rodrigo-200/GloriousBatteryMonitor-Go/releases/latest")
 	if err != nil {
 		return
 	}
@@ -1138,4 +1144,49 @@ func downloadAndInstallUpdate(downloadURL string) error {
 	terminateProcess.Call(handle, 0)
 
 	return nil
+}
+func setupLogging() {
+	logFileHandle, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		log.Printf("Failed to open log file: %v", err)
+		return
+	}
+	
+	// Write only to file for windowsgui build
+	logger = log.New(logFileHandle, "", log.LstdFlags)
+	// No console output needed
+	
+	logger.Printf("=== Glorious Battery Monitor v%s Started ===", currentVersion)
+	logger.Printf("Log file location: %s", logFile)
+	
+	scanAllDevices()
+}
+
+func scanAllDevices() {
+	logger.Printf("=== Scanning for HID devices ===")
+	
+	var foundDevices []string
+	hid.Enumerate(VendorID, 0, func(info *hid.DeviceInfo) error {
+		deviceInfo := fmt.Sprintf("Found Glorious device - PID: 0x%04x, Path: %s", 
+			info.ProductID, info.Path)
+		foundDevices = append(foundDevices, deviceInfo)
+		logger.Printf(deviceInfo)
+		return nil
+	})
+	
+	if len(foundDevices) == 0 {
+		logger.Printf("No Glorious devices found (Vendor ID: 0x%04x)", VendorID)
+		
+		count := 0
+		hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
+			if count < 10 {
+				logger.Printf("HID Device - VID: 0x%04x, PID: 0x%04x", 
+					info.VendorID, info.ProductID)
+				count++
+			}
+			return nil
+		})
+	} else {
+		logger.Printf("Found %d Glorious device(s)", len(foundDevices))
+	}
 }
