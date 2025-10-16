@@ -82,7 +82,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.5"
+const currentVersion = "2.2.6"
 
 var (
 	device            *hid.Device
