@@ -85,7 +85,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.7"
+const currentVersion = "2.2.8"
 
 var (
 	device            *hid.Device
@@ -97,6 +97,7 @@ var (
 	batteryLvl        int
 	isCharging        bool
 	wasCharging       bool
+	hasPrevCharging   bool
 	lastChargeTime    string = "Never"
 	lastChargeLevel   int    = 0
 	user32                   = syscall.NewLazyDLL("user32.dll")
@@ -401,6 +402,11 @@ func updateBattery() {
 		if device != nil {
 			battery, charging := readBattery()
 			if battery > 0 {
+				if !hasPrevCharging {
+					wasCharging = charging
+					hasPrevCharging = true
+				}
+
 				// Detect charge completion
 				if wasCharging && !charging {
 					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
@@ -678,7 +684,6 @@ func reconnect() {
 			// Initialize the tray icon and tooltip immediately
 			batteryLvl = lvl
 			isCharging = chg
-			wasCharging = chg
 			icon := "🔋"
 			status := "Discharging"
 			if chg {
