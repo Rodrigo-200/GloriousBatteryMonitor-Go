@@ -34,6 +34,11 @@ const (
 	ID_UPDATE   = 1003
 )
 
+var gloriousVendorIDs = []uint16{
+	0x258a, // older Glorious VID
+	0x342d, // newer Glorious VID (seen in the user's log)
+}
+
 // Supported Glorious mice product IDs
 var supportedDevices = []uint16{
 	0x2011, // Model O Wired
@@ -85,7 +90,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.8"
+const currentVersion = "2.2.9"
 
 var (
 	device            *hid.Device
@@ -631,34 +636,53 @@ func reconnect() {
 		return
 	}
 
-	// Enumerate *all* Glorious devices (VendorID only, any PID)
+	// 1) Collect candidates from all known Glorious VIDs
 	var candidates []hid.DeviceInfo
-	hid.Enumerate(VendorID, 0, func(info *hid.DeviceInfo) error {
-		candidates = append(candidates, *info)
-		return nil
-	})
+	seen := make(map[string]bool)
+	for _, vid := range gloriousVendorIDs {
+		hid.Enumerate(vid, 0, func(info *hid.DeviceInfo) error {
+			if !seen[info.Path] {
+				candidates = append(candidates, *info)
+				seen[info.Path] = true
+			}
+			return nil
+		})
+	}
 
-	// Optional: prioritize likely dongle/battery interfaces first
+	// 2) Fallback: broaden search (some firmwares ship with unexpected VID/strings)
+	// We only add devices that *might* be Glorious: product/manufacturer mentions,
+	// known PIDs, or vendor-defined usage pages.
+	if len(candidates) == 0 {
+		hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
+			if seen[info.Path] {
+				return nil
+			}
+			lowProd := strings.ToLower(info.ProductStr)
+			looksGlorious := strings.Contains(lowProd, "glorious")
+			isVendorPage := info.UsagePage >= 0xFF00
+			_, pidKnown := deviceNames[info.ProductID]
+			if looksGlorious || isVendorPage || pidKnown {
+				candidates = append(candidates, *info)
+				seen[info.Path] = true
+			}
+			return nil
+		})
+	}
+
+	// Prioritize likely battery/dongle interfaces
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
-
-		// 1) Vendor-defined usage pages (0xFF00–0xFFFF) first
 		av := a.UsagePage >= 0xFF00
 		bv := b.UsagePage >= 0xFF00
 		if av != bv {
 			return av && !bv
 		}
-
-		// 2) If both (or neither) are vendor-defined, prefer non-zero Usage (has meaning)
 		if (a.Usage != 0) != (b.Usage != 0) {
 			return a.Usage != 0 && b.Usage == 0
 		}
-
-		// 3) As a weak tie-breaker, smaller InterfaceNbr first (often receiver channel)
 		if a.InterfaceNbr != b.InterfaceNbr {
 			return a.InterfaceNbr < b.InterfaceNbr
 		}
-
 		return false
 	})
 
@@ -673,7 +697,6 @@ func reconnect() {
 		if ok {
 			device = d
 
-			// Prefer readable product string, fallback to known map
 			deviceModel = "Unknown"
 			if ci.ProductStr != "" {
 				deviceModel = ci.ProductStr
@@ -681,14 +704,13 @@ func reconnect() {
 				deviceModel = name
 			}
 
-			// Initialize the tray icon and tooltip immediately
 			batteryLvl = lvl
 			isCharging = chg
-			icon := "🔋"
 			status := "Discharging"
+			icon := "🔋"
 			if chg {
-				icon = "⚡"
 				status = "Charging"
+				icon = "⚡"
 			}
 			batteryText = fmt.Sprintf("%s %d%% (%s)", icon, lvl, status)
 			updateTrayTooltip(fmt.Sprintf("Battery: %d%%", lvl))
@@ -1322,29 +1344,33 @@ func setupLogging() {
 
 func scanAllDevices() {
 	logger.Printf("=== Scanning for HID devices ===")
-
-	var foundDevices []string
-	hid.Enumerate(VendorID, 0, func(info *hid.DeviceInfo) error {
-		deviceInfo := fmt.Sprintf("Found Glorious device - PID: 0x%04x, Path: %s",
-			info.ProductID, info.Path)
-		foundDevices = append(foundDevices, deviceInfo)
-		logger.Printf(deviceInfo)
-		return nil
-	})
-
-	if len(foundDevices) == 0 {
-		logger.Printf("No Glorious devices found (Vendor ID: 0x%04x)", VendorID)
-
-		count := 0
-		hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
-			if count < 10 {
-				logger.Printf("HID Device - VID: 0x%04x, PID: 0x%04x",
-					info.VendorID, info.ProductID)
-				count++
-			}
+	for _, vid := range gloriousVendorIDs {
+		logger.Printf("Scanning for Glorious VID: 0x%04x", vid)
+		found := 0
+		hid.Enumerate(vid, 0, func(info *hid.DeviceInfo) error {
+			logger.Printf("Glorious-ish match - VID: 0x%04x, PID: 0x%04x, Prod: %q, Mfr: %q, Path: %s",
+				info.VendorID, info.ProductID, info.ProductStr, info.Path)
+			found++
 			return nil
 		})
-	} else {
-		logger.Printf("Found %d Glorious device(s)", len(foundDevices))
+		if found == 0 {
+			logger.Printf("No devices found for VID: 0x%04x", vid)
+		}
 	}
+
+	logger.Printf("Fallback probe for suspicious-but-possible Glorious interfaces…")
+	count := 0
+	hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
+		if count < 15 {
+			looksGlorious := strings.Contains(strings.ToLower(info.ProductStr), "glorious")
+			isVendorPage := info.UsagePage >= 0xFF00
+			_, pidKnown := deviceNames[info.ProductID]
+			if looksGlorious || isVendorPage || pidKnown {
+				logger.Printf("Fallback candidate - VID: 0x%04x, PID: 0x%04x, Prod: %q, Mfr: %q, UsagePage: 0x%04x, If#: %d",
+					info.VendorID, info.ProductID, info.ProductStr, info.UsagePage, info.InterfaceNbr)
+				count++
+			}
+		}
+		return nil
+	})
 }
