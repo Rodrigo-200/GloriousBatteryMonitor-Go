@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
 	"time"
 	"unsafe"
@@ -81,7 +82,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.5"
+const currentVersion = "2.2.6"
 
 var (
 	device            *hid.Device
@@ -554,50 +555,141 @@ func updateTrayTooltip(text string) {
 	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 }
 
+/* ---------------------- */
+// parseBattery tries common layouts (with/without ReportID, small shifts).
+// Returns (level, charging, ok).
+func parseBattery(buf []byte) (int, bool, bool) {
+	// Need at least 9 bytes in any layout we test.
+	if len(buf) < 9 {
+		return 0, false, false
+	}
+
+	// Try several plausible offsets:
+	// - off=0  : no ReportID (buf[0] is first field)
+	// - off=1  : 1-byte ReportID at start (common in HID feature reports)
+	// - off=2  : some stacks prepend 2 (rare, but cheap to try)
+	for _, off := range []int{0, 1, 2} {
+		i83 := 6 + off
+		ichg := 7 + off
+		ibat := 8 + off
+		if i83 >= 0 && ibat < len(buf) && ichg < len(buf) && i83 < len(buf) {
+			if buf[i83] == 0x83 {
+				lvl := int(buf[ibat])
+				chg := buf[ichg] == 1
+				if lvl >= 0 && lvl <= 100 {
+					return lvl, chg, true
+				}
+			}
+		}
+	}
+	return 0, false, false
+}
+
+// sendBatteryCommand writes the known Glorious battery feature report request.
+func sendBatteryCommand(d *hid.Device) error {
+	// Keep your existing command; it’s correct for Glorious receivers.
+	command := []byte{0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x83}
+	outputReport := make([]byte, 65)
+	copy(outputReport, command)
+	_, err := d.SendFeatureReport(outputReport)
+	return err
+}
+
+func tryProbeDevice(d *hid.Device) (int, bool, bool) {
+	if err := sendBatteryCommand(d); err != nil {
+		return 0, false, false
+	}
+	time.Sleep(100 * time.Millisecond)
+	inputReport := make([]byte, 65)
+	n, err := d.GetFeatureReport(inputReport)
+	if err != nil || n == 0 {
+		return 0, false, false
+	}
+	lvl, chg, ok := parseBattery(inputReport[:n])
+	return lvl, chg, ok
+}
+
+/* ---------------------- */
+
 func reconnect() {
 	if device != nil {
 		return
 	}
 
-	for _, pid := range supportedDevices {
-		var paths []string
-		hid.Enumerate(VendorID, pid, func(info *hid.DeviceInfo) error {
-			paths = append(paths, info.Path)
-			return nil
-		})
+	// Enumerate *all* Glorious devices (VendorID only, any PID)
+	var candidates []hid.DeviceInfo
+	hid.Enumerate(VendorID, 0, func(info *hid.DeviceInfo) error {
+		candidates = append(candidates, *info)
+		return nil
+	})
 
-		for _, path := range paths {
-			d, err := hid.OpenPath(path)
-			if err != nil {
-				continue
-			}
+	// Optional: prioritize likely dongle/battery interfaces first
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
 
-			battery, _ := testBattery(d)
-			if battery > 0 {
-				device = d
-				if name, ok := deviceNames[pid]; ok {
-					deviceModel = name
-				}
-				return
-			}
-			d.Close()
+		// 1) Vendor-defined usage pages (0xFF00–0xFFFF) first
+		av := a.UsagePage >= 0xFF00
+		bv := b.UsagePage >= 0xFF00
+		if av != bv {
+			return av && !bv
 		}
+
+		// 2) If both (or neither) are vendor-defined, prefer non-zero Usage (has meaning)
+		if (a.Usage != 0) != (b.Usage != 0) {
+			return a.Usage != 0 && b.Usage == 0
+		}
+
+		// 3) As a weak tie-breaker, smaller InterfaceNbr first (often receiver channel)
+		if a.InterfaceNbr != b.InterfaceNbr {
+			return a.InterfaceNbr < b.InterfaceNbr
+		}
+
+		return false
+	})
+
+	// Try each interface until one responds to the battery probe
+	for _, ci := range candidates {
+		d, err := hid.OpenPath(ci.Path)
+		if err != nil {
+			continue
+		}
+
+		lvl, chg, ok := tryProbeDevice(d)
+		if ok {
+			device = d
+
+			// Prefer readable product string, fallback to known map
+			deviceModel = "Unknown"
+			if ci.ProductStr != "" {
+				deviceModel = ci.ProductStr
+			} else if name, ok := deviceNames[ci.ProductID]; ok {
+				deviceModel = name
+			}
+
+			// Initialize the tray icon and tooltip immediately
+			batteryLvl = lvl
+			isCharging = chg
+			wasCharging = chg
+			icon := "🔋"
+			status := "Discharging"
+			if chg {
+				icon = "⚡"
+				status = "Charging"
+			}
+			batteryText = fmt.Sprintf("%s %d%% (%s)", icon, lvl, status)
+			updateTrayTooltip(fmt.Sprintf("Battery: %d%%", lvl))
+			updateTrayIcon(lvl, chg)
+			return
+		}
+
+		d.Close()
 	}
 }
 
 func testBattery(d *hid.Device) (int, bool) {
-	command := []byte{0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x83}
-	outputReport := make([]byte, 65)
-	copy(outputReport, command)
-
-	d.SendFeatureReport(outputReport)
-	time.Sleep(100 * time.Millisecond)
-
-	inputReport := make([]byte, 65)
-	n, _ := d.GetFeatureReport(inputReport)
-
-	if n >= 9 && inputReport[6] == 0x83 {
-		return int(inputReport[8]), inputReport[7] == 1
+	lvl, chg, ok := tryProbeDevice(d)
+	if ok {
+		return lvl, chg
 	}
 	return 0, false
 }
@@ -606,30 +698,25 @@ func readBattery() (int, bool) {
 	if device == nil {
 		return 0, false
 	}
-
-	command := []byte{0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x83}
-	outputReport := make([]byte, 65)
-	copy(outputReport, command)
-
-	if _, err := device.SendFeatureReport(outputReport); err != nil {
+	if err := sendBatteryCommand(device); err != nil {
 		device.Close()
 		device = nil
 		return 0, false
 	}
-
 	time.Sleep(100 * time.Millisecond)
-
 	inputReport := make([]byte, 65)
 	n, err := device.GetFeatureReport(inputReport)
-	if err != nil {
+	if err != nil || n == 0 {
 		device.Close()
 		device = nil
 		return 0, false
 	}
-
-	if n >= 9 && inputReport[6] == 0x83 {
-		return int(inputReport[8]), inputReport[7] == 1
+	if lvl, chg, ok := parseBattery(inputReport[:n]); ok {
+		return lvl, chg
 	}
+	// If the layout wasn't recognized, drop and re-probe next tick.
+	device.Close()
+	device = nil
 	return 0, false
 }
 
@@ -1151,36 +1238,36 @@ func setupLogging() {
 		log.Printf("Failed to open log file: %v", err)
 		return
 	}
-	
+
 	// Write only to file for windowsgui build
 	logger = log.New(logFileHandle, "", log.LstdFlags)
 	// No console output needed
-	
+
 	logger.Printf("=== Glorious Battery Monitor v%s Started ===", currentVersion)
 	logger.Printf("Log file location: %s", logFile)
-	
+
 	scanAllDevices()
 }
 
 func scanAllDevices() {
 	logger.Printf("=== Scanning for HID devices ===")
-	
+
 	var foundDevices []string
 	hid.Enumerate(VendorID, 0, func(info *hid.DeviceInfo) error {
-		deviceInfo := fmt.Sprintf("Found Glorious device - PID: 0x%04x, Path: %s", 
+		deviceInfo := fmt.Sprintf("Found Glorious device - PID: 0x%04x, Path: %s",
 			info.ProductID, info.Path)
 		foundDevices = append(foundDevices, deviceInfo)
 		logger.Printf(deviceInfo)
 		return nil
 	})
-	
+
 	if len(foundDevices) == 0 {
 		logger.Printf("No Glorious devices found (Vendor ID: 0x%04x)", VendorID)
-		
+
 		count := 0
 		hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
 			if count < 10 {
-				logger.Printf("HID Device - VID: 0x%04x, PID: 0x%04x", 
+				logger.Printf("HID Device - VID: 0x%04x, PID: 0x%04x",
 					info.VendorID, info.ProductID)
 				count++
 			}
