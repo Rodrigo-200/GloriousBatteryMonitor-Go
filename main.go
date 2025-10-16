@@ -92,7 +92,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.11"
+const currentVersion = "2.2.12"
 
 var (
 	device            *hid.Device
@@ -135,6 +135,7 @@ var (
 	updateAvailable   bool
 	updateVersion     string
 	updateURL         string
+	selectedReportID  byte = 0x00
 )
 
 func main() {
@@ -622,7 +623,7 @@ func sendBatteryCommandWithReportID(d *hid.Device, reportID byte) error {
 
 func sendBatteryCommand(d *hid.Device) error {
 	// Try common report IDs seen on PixArt receivers.
-	for _, rid := range []byte{0x00, 0x02} {
+	for _, rid := range []byte{0x00, 0x02, 0x07} {
 		if err := sendBatteryCommandWithReportID(d, rid); err == nil {
 			return nil
 		}
@@ -630,25 +631,31 @@ func sendBatteryCommand(d *hid.Device) error {
 	return fmt.Errorf("SendFeatureReport failed for all report IDs")
 }
 
-func tryProbeDevice(d *hid.Device) (int, bool, bool) {
-	for _, rid := range []byte{0x00, 0x02} {
+func tryProbeDevice(d *hid.Device) (int, bool, bool, byte) {
+	for _, rid := range []byte{0x00, 0x02, 0x07} {
 		if err := sendBatteryCommandWithReportID(d, rid); err != nil {
+			if logger != nil {
+				logger.Printf("SendFeatureReport failed (rid=0x%02x): %v", rid, err)
+			}
 			continue
 		}
 		time.Sleep(150 * time.Millisecond)
 
 		buf := make([]byte, 65)
+		buf[0] = rid // IMPORTANT on Windows: buf[0] must contain ReportID
 		n, err := d.GetFeatureReport(buf)
 		if err != nil || n == 0 {
+			if logger != nil {
+				logger.Printf("GetFeatureReport failed/empty (rid=0x%02x): n=%d err=%v", rid, n, err)
+			}
 			continue
 		}
 		if lvl, chg, ok := parseBattery(buf[:n]); ok {
 			if logger != nil {
 				logger.Printf("Probe OK (rid=0x%02x): n=%d lvl=%d chg=%v", rid, n, lvl, chg)
 			}
-			return lvl, chg, true
+			return lvl, chg, true, rid
 		} else if logger != nil {
-			// Log first few bytes to tweak parser later if needed
 			cut := n
 			if cut > 12 {
 				cut = 12
@@ -656,7 +663,7 @@ func tryProbeDevice(d *hid.Device) (int, bool, bool) {
 			logger.Printf("Probe parse miss (rid=0x%02x): n=%d bytes=% x", rid, n, buf[:cut])
 		}
 	}
-	return 0, false, false
+	return 0, false, false, 0
 }
 
 /* ---------------------- */
@@ -759,9 +766,10 @@ func reconnect() {
 			continue
 		}
 
-		lvl, chg, ok := tryProbeDevice(d)
+		lvl, chg, ok, rid := tryProbeDevice(d)
 		if ok {
 			device = d
+			selectedReportID = rid
 
 			deviceModel = "Unknown"
 			if ci.ProductStr != "" {
@@ -789,7 +797,7 @@ func reconnect() {
 }
 
 func testBattery(d *hid.Device) (int, bool) {
-	lvl, chg, ok := tryProbeDevice(d)
+	lvl, chg, ok, _ := tryProbeDevice(d) // ignore report ID here
 	if ok {
 		return lvl, chg
 	}
@@ -800,15 +808,23 @@ func readBattery() (int, bool) {
 	if device == nil {
 		return 0, false
 	}
-	if err := sendBatteryCommand(device); err != nil {
+	if err := sendBatteryCommandWithReportID(device, selectedReportID); err != nil {
+		if logger != nil {
+			logger.Printf("SendFeatureReport(read) failed (rid=0x%02x): %v", selectedReportID, err)
+		}
 		device.Close()
 		device = nil
 		return 0, false
 	}
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
+
 	inputReport := make([]byte, 65)
+	inputReport[0] = selectedReportID // IMPORTANT
 	n, err := device.GetFeatureReport(inputReport)
 	if err != nil || n == 0 {
+		if logger != nil {
+			logger.Printf("GetFeatureReport(read) failed/empty (rid=0x%02x): n=%d err=%v", selectedReportID, n, err)
+		}
 		device.Close()
 		device = nil
 		return 0, false
@@ -816,7 +832,7 @@ func readBattery() (int, bool) {
 	if lvl, chg, ok := parseBattery(inputReport[:n]); ok {
 		return lvl, chg
 	}
-	// If the layout wasn't recognized, drop and re-probe next tick.
+	// Layout not recognized; drop and re-probe next tick.
 	device.Close()
 	device = nil
 	return 0, false
