@@ -92,7 +92,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.13"
+const currentVersion = "2.2.14"
 
 var (
 	device               *hid.Device
@@ -140,6 +140,7 @@ var (
 	useGetOnly           bool
 	consecutiveReadFails int
 	linkDown             bool
+	probeRIDs            = []byte{0x00, 0x02, 0x04, 0x03, 0x05, 0x06, 0x07, 0x08}
 )
 
 func main() {
@@ -645,12 +646,15 @@ func parseBattery(buf []byte) (int, bool, bool) {
 		return 0, false, false
 	}
 
+	// Accept several known tokens (some firmwares use 0x82/0x81/0x80 instead of 0x83)
+	isTok := func(b byte) bool { return b == 0x83 || b == 0x82 || b == 0x81 || b == 0x80 }
+
 	// Try fixed offsets first (fast path).
 	for _, off := range []int{0, 1, 2} {
-		i83 := 6 + off
+		iTok := 6 + off
 		ichg := 7 + off
 		ibat := 8 + off
-		if i83 < len(buf) && ichg < len(buf) && ibat < len(buf) && buf[i83] == 0x83 {
+		if iTok < len(buf) && ichg < len(buf) && ibat < len(buf) && isTok(buf[iTok]) {
 			lvl := int(buf[ibat])
 			chg := buf[ichg] == 1
 			if lvl >= 0 && lvl <= 100 {
@@ -659,16 +663,16 @@ func parseBattery(buf []byte) (int, bool, bool) {
 		}
 	}
 
-	// Fallback: search for 0x83 token in the first 12 bytes
+	// Fallback: search for token in the first 20 bytes
 	maxScan := len(buf)
-	if maxScan > 12 {
-		maxScan = 12
+	if maxScan > 20 {
+		maxScan = 20
 	}
 	for i := 0; i < maxScan; i++ {
-		if buf[i] != 0x83 {
+		if !isTok(buf[i]) {
 			continue
 		}
-		// Try [83, CHG, LVL]
+		// Try [TOKEN, CHG, LVL]
 		if i+2 < len(buf) {
 			ch := buf[i+1]
 			lv := int(buf[i+2])
@@ -676,7 +680,7 @@ func parseBattery(buf []byte) (int, bool, bool) {
 				return lv, ch == 1, true
 			}
 		}
-		// Try [83, LVL, CHG]
+		// Try [TOKEN, LVL, CHG]
 		if i+2 < len(buf) {
 			lv := int(buf[i+1])
 			ch := buf[i+2]
@@ -685,6 +689,7 @@ func parseBattery(buf []byte) (int, bool, bool) {
 			}
 		}
 	}
+
 	return 0, false, false
 }
 
@@ -709,7 +714,7 @@ func sendBatteryFeatureAnyLen(d *hid.Device, reportID byte, body []byte) error {
 }
 
 func getBatteryFeatureAnyLen(d *hid.Device, reportID byte) (int, bool, bool, int) {
-	sizes := []int{9, 16, 33, 65}
+	sizes := []int{65, 33, 16, 9}
 	for _, sz := range sizes {
 		if sz < 1 {
 			continue
@@ -717,14 +722,22 @@ func getBatteryFeatureAnyLen(d *hid.Device, reportID byte) (int, bool, bool, int
 		buf := make([]byte, sz)
 		buf[0] = reportID
 		n, err := d.GetFeatureReport(buf)
-		if err != nil || n == 0 {
+		if err != nil {
+			if logger != nil {
+				logger.Printf("GetFeatureReport err (rid=0x%02x, len=%d): %v", reportID, sz, err)
+			}
+			continue
+		}
+		if n == 0 {
+			if logger != nil {
+				logger.Printf("GetFeatureReport returned 0 bytes (rid=0x%02x, len=%d)", reportID, sz)
+			}
 			continue
 		}
 		if lvl, chg, ok := parseBattery(buf[:n]); ok {
 			return lvl, chg, true, sz
 		}
 		if logger != nil {
-			// brief dump of first up to 16 bytes
 			max := n
 			if max > 16 {
 				max = 16
@@ -740,11 +753,11 @@ func getBatteryFeatureAnyLen(d *hid.Device, reportID byte) (int, bool, bool, int
 }
 
 func sendBatteryCommandWithReportID(d *hid.Device, reportID byte) error {
-	// Known variants seen in the wild
 	bodies := [][]byte{
 		{0x00, 0x02, 0x02, 0x00, 0x83},
 		{0x00, 0x02, 0x02, 0x00, 0x80},
 		{0x00, 0x02, 0x02, 0x00, 0x81},
+		{0x00, 0x02, 0x02, 0x00, 0x84}, // NEW: seen on some PixArt stacks
 	}
 	var lastErr error
 	for _, body := range bodies {
@@ -758,8 +771,7 @@ func sendBatteryCommandWithReportID(d *hid.Device, reportID byte) error {
 }
 
 func sendBatteryCommand(d *hid.Device) error {
-	// Try common report IDs seen on PixArt receivers.
-	for _, rid := range []byte{0x00, 0x02, 0x07} {
+	for _, rid := range probeRIDs {
 		if err := sendBatteryCommandWithReportID(d, rid); err == nil {
 			return nil
 		}
@@ -768,9 +780,8 @@ func sendBatteryCommand(d *hid.Device) error {
 }
 
 func tryProbeDevice(d *hid.Device) (int, bool, bool, byte) {
-	for _, rid := range []byte{0x00, 0x02, 0x07} {
-
-		// A) Try direct GET first (no prior SET).
+	for _, rid := range probeRIDs {
+		// A) GET-only
 		if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
 			if logger != nil {
 				logger.Printf("Probe OK via GET-only (rid=0x%02x) usedLen=%d lvl=%d chg=%v", rid, usedLen, lvl, chg)
@@ -780,10 +791,9 @@ func tryProbeDevice(d *hid.Device) (int, bool, bool, byte) {
 			useGetOnly = true
 			return lvl, chg, true, rid
 		}
-
-		// B) Fall back to SET→GET.
+		// B) SET->GET
 		if err := sendBatteryCommandWithReportID(d, rid); err == nil {
-			time.Sleep(150 * time.Millisecond)
+			time.Sleep(250 * time.Millisecond) // a little longer
 			if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
 				if logger != nil {
 					logger.Printf("Probe OK (rid=0x%02x) usedLen=%d lvl=%d chg=%v", rid, usedLen, lvl, chg)
@@ -874,11 +884,11 @@ func reconnect() {
 	// After building candidates, stable-stable prioritize the exact path that matched before
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
-		// exact best: UsagePage vendor-defined AND InterfaceNbr==2
-		aBest := (a.UsagePage >= 0xFF00) && (a.InterfaceNbr == 2)
-		bBest := (b.UsagePage >= 0xFF00) && (b.InterfaceNbr == 2)
-		if aBest != bBest {
-			return aBest && !bBest
+		// exact best: UsagePage vendor-defined
+		aVnd := (a.UsagePage >= 0xFF00)
+		bVnd := (b.UsagePage >= 0xFF00)
+		if aVnd != bVnd {
+			return aVnd && !bVnd
 		}
 
 		// then any vendor page over generic
