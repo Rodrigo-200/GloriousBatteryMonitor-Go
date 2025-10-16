@@ -71,12 +71,12 @@
 
 | Model | Wired | Wireless | Tested |
 |--------|--------|-----------|:------:|
-| Model O / O- | ✅ | ✅ | ❌ |
-| Model O2 | ✅ | ✅ | ❌ |
+| Model O / O- | ❔ | ❔ | ❌ |
+| Model O2 | ❔ | ❔ | ❌ |
 | Model D | ✅ | ✅ | ✅ |
-| Model D- / D2 | ✅ | ✅ | ❌ |
-| Model I / I2 | ✅ | ✅ | ❌ |
-| Model O Pro | ✅ | ✅ | ❌ |
+| Model D- / D2 | ❔ | ❔ | Currently testing |
+| Model I / I2 | ❔ | ❔ | ❌ |
+| Model O Pro | ❔ | ❔ | ❌ |
 
 **Vendor ID:** `0x258a (Glorious LLC)`
 
