@@ -92,7 +92,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.10"
+const currentVersion = "2.2.11"
 
 var (
 	device            *hid.Device
@@ -607,28 +607,56 @@ func parseBattery(buf []byte) (int, bool, bool) {
 	return 0, false, false
 }
 
-// sendBatteryCommand writes the known Glorious battery feature report request.
-func sendBatteryCommand(d *hid.Device) error {
-	// Keep your existing command; it’s correct for Glorious receivers.
-	command := []byte{0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x83}
-	outputReport := make([]byte, 65)
-	copy(outputReport, command)
-	_, err := d.SendFeatureReport(outputReport)
+func sendBatteryCommandWithReportID(d *hid.Device, reportID byte) error {
+	// Payload for Glorious/PixArt battery query (without report ID in position 0).
+	// Keep this 5-byte body; reportID goes in byte 0 of the 65-byte buffer.
+	body := []byte{0x00, 0x02, 0x02, 0x00, 0x83}
+
+	output := make([]byte, 65) // [0] = ReportID, [1..] = payload
+	output[0] = reportID
+	copy(output[1:], body)
+
+	_, err := d.SendFeatureReport(output)
 	return err
 }
 
+func sendBatteryCommand(d *hid.Device) error {
+	// Try common report IDs seen on PixArt receivers.
+	for _, rid := range []byte{0x00, 0x02} {
+		if err := sendBatteryCommandWithReportID(d, rid); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("SendFeatureReport failed for all report IDs")
+}
+
 func tryProbeDevice(d *hid.Device) (int, bool, bool) {
-	if err := sendBatteryCommand(d); err != nil {
-		return 0, false, false
+	for _, rid := range []byte{0x00, 0x02} {
+		if err := sendBatteryCommandWithReportID(d, rid); err != nil {
+			continue
+		}
+		time.Sleep(150 * time.Millisecond)
+
+		buf := make([]byte, 65)
+		n, err := d.GetFeatureReport(buf)
+		if err != nil || n == 0 {
+			continue
+		}
+		if lvl, chg, ok := parseBattery(buf[:n]); ok {
+			if logger != nil {
+				logger.Printf("Probe OK (rid=0x%02x): n=%d lvl=%d chg=%v", rid, n, lvl, chg)
+			}
+			return lvl, chg, true
+		} else if logger != nil {
+			// Log first few bytes to tweak parser later if needed
+			cut := n
+			if cut > 12 {
+				cut = 12
+			}
+			logger.Printf("Probe parse miss (rid=0x%02x): n=%d bytes=% x", rid, n, buf[:cut])
+		}
 	}
-	time.Sleep(100 * time.Millisecond)
-	inputReport := make([]byte, 65)
-	n, err := d.GetFeatureReport(inputReport)
-	if err != nil || n == 0 {
-		return 0, false, false
-	}
-	lvl, chg, ok := parseBattery(inputReport[:n])
-	return lvl, chg, ok
+	return 0, false, false
 }
 
 /* ---------------------- */
@@ -650,6 +678,11 @@ func reconnect() {
 				strings.Contains(lp, "headset") ||
 				strings.Contains(lp, "audio") {
 				return nil // skip
+			}
+
+			// Also skip KBD interface paths
+			if strings.Contains(strings.ToLower(info.Path), `\kbd`) {
+				return nil
 			}
 
 			if !seen[info.Path] {
@@ -676,6 +709,11 @@ func reconnect() {
 				strings.Contains(lp, "headset") ||
 				strings.Contains(lp, "audio") {
 				return nil // skip
+			}
+
+			// Also skip KBD interface paths
+			if strings.Contains(strings.ToLower(info.Path), `\kbd`) {
+				return nil
 			}
 
 			lowProd := strings.ToLower(info.ProductStr)
@@ -712,6 +750,10 @@ func reconnect() {
 
 	// Try each interface until one responds to the battery probe
 	for _, ci := range candidates {
+		if logger != nil {
+			logger.Printf("Probing: VID=0x%04x PID=0x%04x UsagePage=0x%04x If#=%d Path=%s",
+				ci.VendorID, ci.ProductID, ci.UsagePage, ci.InterfaceNbr, ci.Path)
+		}
 		d, err := hid.OpenPath(ci.Path)
 		if err != nil {
 			continue
@@ -1349,16 +1391,32 @@ func downloadAndInstallUpdate(downloadURL string) error {
 
 	return nil
 }
+
 func setupLogging() {
-	logFileHandle, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		log.Printf("Failed to open log file: %v", err)
-		return
+	// Ensure parent dir exists
+	if err := os.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
+		// fall back silently if needed
 	}
 
-	// Write only to file for windowsgui build
+	// Open + truncate so each run starts with a clean log
+	logFileHandle, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		// If truncate fails for some reason, try append as a fallback
+		logFileHandle, err = os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			// Last resort: keep default logger (no file)
+			log.Printf("Failed to open log file: %v", err)
+			return
+		}
+	}
+
+	// Send the stdlib logger output to the file too (so all log.Printf end up here)
+	log.SetOutput(logFileHandle)
+	// Optional: set flags to match your custom logger
+	log.SetFlags(log.LstdFlags)
+
+	// Your dedicated logger that also writes to the same file
 	logger = log.New(logFileHandle, "", log.LstdFlags)
-	// No console output needed
 
 	logger.Printf("=== Glorious Battery Monitor v%s Started ===", currentVersion)
 	logger.Printf("Log file location: %s", logFile)
