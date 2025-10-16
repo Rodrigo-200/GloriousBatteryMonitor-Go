@@ -9,10 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
 
+	"github.com/go-ole/go-ole"
+	"github.com/go-ole/go-ole/oleutil"
 	"github.com/jchv/go-webview2"
 	"github.com/lxn/win"
 	"github.com/sstallion/go-hid"
@@ -1038,42 +1041,99 @@ func handleResize(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
+// ---------- Startup shortcut helpers (Startup folder .lnk) ----------
+
+func startupShortcutPath(appName string) string {
+	// %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\<app>.lnk
+	return filepath.Join(
+		os.Getenv("APPDATA"),
+		`Microsoft\Windows\Start Menu\Programs\Startup`,
+		appName+".lnk",
+	)
+}
+
+func createStartupShortcut(appName, exePath, args string) error {
+	// Ensure the Startup folder exists
+	startupDir := filepath.Dir(startupShortcutPath(appName))
+	if err := os.MkdirAll(startupDir, 0755); err != nil {
+		return err
+	}
+
+	linkPath := startupShortcutPath(appName)
+
+	// Initialize COM (STA)
+	if err := ole.CoInitialize(0); err != nil {
+		return fmt.Errorf("CoInitialize failed: %v", err)
+	}
+	defer ole.CoUninitialize()
+
+	// Use WScript.Shell (automation-friendly) to create the .lnk
+	shellObj, err := oleutil.CreateObject("WScript.Shell")
+	if err != nil {
+		return fmt.Errorf("CreateObject(WScript.Shell) failed: %v", err)
+	}
+	defer shellObj.Release()
+
+	shellDisp, err := shellObj.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		return fmt.Errorf("QueryInterface IDispatch failed: %v", err)
+	}
+	defer shellDisp.Release()
+
+	// shortcut = WScript.Shell.CreateShortcut(linkPath)
+	scV, err := oleutil.CallMethod(shellDisp, "CreateShortcut", linkPath)
+	if err != nil {
+		return fmt.Errorf("CreateShortcut failed: %v", err)
+	}
+	sc := scV.ToIDispatch()
+	defer sc.Release()
+
+	// Set properties
+	if _, err = oleutil.PutProperty(sc, "TargetPath", exePath); err != nil {
+		return fmt.Errorf("Set TargetPath failed: %v", err)
+	}
+	if strings.TrimSpace(args) != "" {
+		if _, err = oleutil.PutProperty(sc, "Arguments", args); err != nil {
+			return fmt.Errorf("Set Arguments failed: %v", err)
+		}
+	}
+	_, _ = oleutil.PutProperty(sc, "Description", appName)
+	_, _ = oleutil.PutProperty(sc, "IconLocation", exePath) // optional
+	// 7 = SW_SHOWMINNOACTIVE, 1 = SW_NORMAL. Keep normal; you already handle minimize via your own logic.
+	_, _ = oleutil.PutProperty(sc, "WindowStyle", 1)
+
+	// Save the shortcut
+	if _, err = oleutil.CallMethod(sc, "Save"); err != nil {
+		return fmt.Errorf("Shortcut Save failed: %v", err)
+	}
+	return nil
+}
+
+func removeStartupShortcut(appName string) error {
+	linkPath := startupShortcutPath(appName)
+	if _, err := os.Stat(linkPath); err == nil {
+		return os.Remove(linkPath)
+	}
+	return nil
+}
+
+// ---------- Public API used by your settings logic ----------
+
 func enableStartup() {
 	exePath, err := os.Executable()
 	if err != nil {
 		return
 	}
-	advapi32 := syscall.NewLazyDLL("advapi32.dll")
-	regSetValueEx := advapi32.NewProc("RegSetValueExW")
-
-	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Run`)
-	var handle syscall.Handle
-	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, key, 0, syscall.KEY_WRITE, &handle) == nil {
-		defer syscall.RegCloseKey(handle)
-		valueName, _ := syscall.UTF16PtrFromString("GloriousBatteryMonitor")
-		valueData, _ := syscall.UTF16FromString(exePath)
-		regSetValueEx.Call(
-			uintptr(handle),
-			uintptr(unsafe.Pointer(valueName)),
-			0,
-			uintptr(syscall.REG_SZ),
-			uintptr(unsafe.Pointer(&valueData[0])),
-			uintptr(len(valueData)*2),
-		)
+	// If you want the app to start minimized when launched from Startup:
+	args := ""
+	if settings.StartMinimized {
+		args = "--minimized"
 	}
+	_ = createStartupShortcut("GloriousBatteryMonitor", exePath, args)
 }
 
 func disableStartup() {
-	advapi32 := syscall.NewLazyDLL("advapi32.dll")
-	regDeleteValue := advapi32.NewProc("RegDeleteValueW")
-
-	key, _ := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Run`)
-	var handle syscall.Handle
-	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, key, 0, syscall.KEY_WRITE, &handle) == nil {
-		defer syscall.RegCloseKey(handle)
-		valueName, _ := syscall.UTF16PtrFromString("GloriousBatteryMonitor")
-		regDeleteValue.Call(uintptr(handle), uintptr(unsafe.Pointer(valueName)))
-	}
+	_ = removeStartupShortcut("GloriousBatteryMonitor")
 }
 
 func calculateEMA(rates []float64) float64 {

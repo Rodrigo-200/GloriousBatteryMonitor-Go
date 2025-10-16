@@ -3,6 +3,7 @@ module glorious-battery
 go 1.21
 
 require (
+	github.com/go-ole/go-ole v1.3.0
 	github.com/jchv/go-webview2 v0.0.0-20221223143126-dc24628cff85
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
 	github.com/sstallion/go-hid v0.14.1
