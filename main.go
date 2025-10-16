@@ -35,8 +35,9 @@ const (
 )
 
 var gloriousVendorIDs = []uint16{
-	0x258a, // older Glorious VID
-	0x342d, // newer Glorious VID (seen in the user's log)
+	0x258a, // older Glorious
+	0x342d, // newer Glorious (keyboards, some mice)
+	0x093a, // PixArt (wireless dongles for many Glorious mice)
 }
 
 // Supported Glorious mice product IDs
@@ -70,6 +71,7 @@ var deviceNames = map[uint16]string{
 	0x2017: "Model O Pro", 0x2018: "Model O Pro",
 	0x2031: "Model D2", 0x2033: "Model D2",
 	0x2009: "Model O2", 0x200b: "Model O2",
+	0x824d: "Model D2 Wireless (PixArt Dongle)",
 	0x2014: "Model I2", 0x2016: "Model I2",
 }
 
@@ -90,7 +92,7 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.9"
+const currentVersion = "2.2.10"
 
 var (
 	device            *hid.Device
@@ -641,6 +643,15 @@ func reconnect() {
 	seen := make(map[string]bool)
 	for _, vid := range gloriousVendorIDs {
 		hid.Enumerate(vid, 0, func(info *hid.DeviceInfo) error {
+			// Skip obviously unrelated devices
+			lp := strings.ToLower(info.ProductStr)
+			if strings.Contains(lp, "gmmk") ||
+				strings.Contains(lp, "keyboard") ||
+				strings.Contains(lp, "headset") ||
+				strings.Contains(lp, "audio") {
+				return nil // skip
+			}
+
 			if !seen[info.Path] {
 				candidates = append(candidates, *info)
 				seen[info.Path] = true
@@ -657,8 +668,21 @@ func reconnect() {
 			if seen[info.Path] {
 				return nil
 			}
+
+			// Skip obviously unrelated devices
+			lp := strings.ToLower(info.ProductStr)
+			if strings.Contains(lp, "gmmk") ||
+				strings.Contains(lp, "keyboard") ||
+				strings.Contains(lp, "headset") ||
+				strings.Contains(lp, "audio") {
+				return nil // skip
+			}
+
 			lowProd := strings.ToLower(info.ProductStr)
-			looksGlorious := strings.Contains(lowProd, "glorious")
+			looksGlorious := strings.Contains(lowProd, "glorious") ||
+				strings.Contains(lowProd, "model o") ||
+				strings.Contains(lowProd, "model d") ||
+				strings.Contains(lowProd, "model i")
 			isVendorPage := info.UsagePage >= 0xFF00
 			_, pidKnown := deviceNames[info.ProductID]
 			if looksGlorious || isVendorPage || pidKnown {
@@ -1348,7 +1372,7 @@ func scanAllDevices() {
 		logger.Printf("Scanning for Glorious VID: 0x%04x", vid)
 		found := 0
 		hid.Enumerate(vid, 0, func(info *hid.DeviceInfo) error {
-			logger.Printf("Glorious-ish match - VID: 0x%04x, PID: 0x%04x, Prod: %q, Mfr: %q, Path: %s",
+			logger.Printf("Glorious-ish match - VID: 0x%04x, PID: 0x%04x, Prod: %q, Path: %s",
 				info.VendorID, info.ProductID, info.ProductStr, info.Path)
 			found++
 			return nil
@@ -1366,8 +1390,8 @@ func scanAllDevices() {
 			isVendorPage := info.UsagePage >= 0xFF00
 			_, pidKnown := deviceNames[info.ProductID]
 			if looksGlorious || isVendorPage || pidKnown {
-				logger.Printf("Fallback candidate - VID: 0x%04x, PID: 0x%04x, Prod: %q, Mfr: %q, UsagePage: 0x%04x, If#: %d",
-					info.VendorID, info.ProductID, info.ProductStr, info.UsagePage, info.InterfaceNbr)
+				logger.Printf("Fallback candidate - VID: 0x%04x, PID: 0x%04x, Prod: %q, UsagePage: 0x%04x, If#: %d, Path: %s",
+					info.VendorID, info.ProductID, info.ProductStr, info.UsagePage, info.InterfaceNbr, info.Path)
 				count++
 			}
 		}
