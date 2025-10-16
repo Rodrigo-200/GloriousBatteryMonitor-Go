@@ -92,50 +92,54 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.12"
+const currentVersion = "2.2.13"
 
 var (
-	device            *hid.Device
-	deviceModel       string = "Unknown"
-	hwnd              win.HWND
-	webviewHwnd       win.HWND
-	nid               win.NOTIFYICONDATA
-	batteryText       string = "Connecting..."
-	batteryLvl        int
-	isCharging        bool
-	wasCharging       bool
-	hasPrevCharging   bool
-	lastChargeTime    string = "Never"
-	lastChargeLevel   int    = 0
-	user32                   = syscall.NewLazyDLL("user32.dll")
-	appendMenuW              = user32.NewProc("AppendMenuW")
-	setWindowLong            = user32.NewProc("SetWindowLongPtrW")
-	showWindow               = user32.NewProc("ShowWindow")
-	clients                  = make(map[chan string]bool)
-	w                 webview2.WebView
-	serverPort        string = "8765"
-	dataFile          string
-	settingsFile      string
-	logFile           string
-	logger            *log.Logger
-	settings          Settings
-	notifiedLow       bool
-	notifiedCritical  bool
-	notifiedFull      bool
-	lastBatteryLevel  int = -1
-	lastBatteryTime   time.Time
-	dischargeRate     float64 = 0
-	lastChargeLevel2  int     = -1
-	lastChargeTime2   time.Time
-	chargeRate        float64 = 0
-	rateHistory       []float64
-	chargeRateHistory []float64
-	animationFrame    int = 0
-	stopAnimation     chan bool
-	updateAvailable   bool
-	updateVersion     string
-	updateURL         string
-	selectedReportID  byte = 0x00
+	device               *hid.Device
+	deviceModel          string = "Unknown"
+	hwnd                 win.HWND
+	webviewHwnd          win.HWND
+	nid                  win.NOTIFYICONDATA
+	batteryText          string = "Connecting..."
+	batteryLvl           int
+	isCharging           bool
+	wasCharging          bool
+	hasPrevCharging      bool
+	lastChargeTime       string = "Never"
+	lastChargeLevel      int    = 0
+	user32                      = syscall.NewLazyDLL("user32.dll")
+	appendMenuW                 = user32.NewProc("AppendMenuW")
+	setWindowLong               = user32.NewProc("SetWindowLongPtrW")
+	showWindow                  = user32.NewProc("ShowWindow")
+	clients                     = make(map[chan string]bool)
+	w                    webview2.WebView
+	serverPort           string = "8765"
+	dataFile             string
+	settingsFile         string
+	logFile              string
+	logger               *log.Logger
+	settings             Settings
+	notifiedLow          bool
+	notifiedCritical     bool
+	notifiedFull         bool
+	lastBatteryLevel     int = -1
+	lastBatteryTime      time.Time
+	dischargeRate        float64 = 0
+	lastChargeLevel2     int     = -1
+	lastChargeTime2      time.Time
+	chargeRate           float64 = 0
+	rateHistory          []float64
+	chargeRateHistory    []float64
+	animationFrame       int = 0
+	stopAnimation        chan bool
+	updateAvailable      bool
+	updateVersion        string
+	updateURL            string
+	selectedReportID     byte = 0x00
+	selectedReportLen    int  = 65
+	useGetOnly           bool
+	consecutiveReadFails int
+	linkDown             bool
 )
 
 func main() {
@@ -409,26 +413,59 @@ func updateBattery() {
 
 		if device != nil {
 			battery, charging := readBattery()
-			if battery > 0 {
+
+			if linkDown {
+				batteryLvl = 0
+				isCharging = false
+				batteryText = "Mouse Not Found"
+				updateTrayTooltip("Mouse Not Found")
+				updateTrayIcon(0, false)
+				broadcast(map[string]interface{}{
+					"level": 0, "charging": false,
+					"status":          "disconnected",
+					"statusText":      "Disconnected",
+					"deviceModel":     deviceModel,
+					"updateAvailable": updateAvailable, "updateVersion": updateVersion,
+				})
+
+				consecutiveReadFails++
+				if consecutiveReadFails >= 3 {
+					if device != nil {
+						device.Close()
+					}
+					device = nil // <- allows reconnect() to run next tick
+					hasPrevCharging = false
+					selectedReportLen = 65
+					useGetOnly = false
+					consecutiveReadFails = 0
+				}
+
+				<-ticker.C
+				continue
+			}
+
+			// battery == -1 means "invalid/no data"
+			if battery >= 0 {
+				consecutiveReadFails = 0
+
 				if !hasPrevCharging {
 					wasCharging = charging
 					hasPrevCharging = true
 				}
 
-				// Detect charge completion
-				if wasCharging && !charging {
+				// Detect charge completion (skip when battery==0 to avoid noise)
+				if wasCharging && !charging && battery > 0 {
 					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
 					lastChargeLevel = battery
 					saveChargeData()
 				}
-
 				if charging && battery == 100 && lastChargeLevel != 100 {
 					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
 					lastChargeLevel = 100
 					saveChargeData()
 				}
 
-				// Reset notification flags when charging
+				// Reset flags when charging
 				if charging {
 					notifiedLow = false
 					notifiedCritical = false
@@ -482,8 +519,8 @@ func updateBattery() {
 					}
 				}
 
-				// Send notifications only once per threshold
-				if settings.NotificationsEnabled && !charging {
+				// Notifications only when we have a real level (>=0), and not charging
+				if settings.NotificationsEnabled && !charging && battery >= 0 {
 					if battery <= settings.CriticalBatteryThreshold && !notifiedCritical {
 						notifiedCritical = true
 						sendNotification("Critical Battery", fmt.Sprintf("Battery at %d%%. Please charge soon!", battery), true)
@@ -496,17 +533,19 @@ func updateBattery() {
 				batteryLvl = battery
 				wasCharging = charging
 				isCharging = charging
+
 				status := "Discharging"
 				icon := "🔋"
 				if charging {
 					status = "Charging"
 					icon = "⚡"
 				}
+				// Show 0% correctly
 				batteryText = fmt.Sprintf("%s %d%% (%s)", icon, battery, status)
 				updateTrayTooltip(fmt.Sprintf("Battery: %d%%", battery))
 				updateTrayIcon(battery, charging)
 
-				// Calculate time remaining every tick
+				// ETA only when we have rate and a sensible level
 				timeRemaining := ""
 				if !charging && dischargeRate > 0 && battery > 0 {
 					hoursLeft := float64(battery) / dischargeRate
@@ -548,9 +587,11 @@ func updateBattery() {
 					}
 				}
 				broadcast(map[string]interface{}{
+					"status":          "connected", // connection state
+					"mode":            status,      // "Charging"/"Discharging"
+					"statusText":      status,      // ← back-compat for old UI
 					"level":           battery,
 					"charging":        charging,
-					"status":          status,
 					"lastChargeTime":  lastChargeTime,
 					"lastChargeLevel": lastChargeLevel,
 					"deviceModel":     deviceModel,
@@ -558,14 +599,32 @@ func updateBattery() {
 					"updateAvailable": updateAvailable,
 					"updateVersion":   updateVersion,
 				})
+			} else {
+				// invalid read → force reconnect next tick
+				batteryLvl = 0
+				isCharging = false
+				batteryText = "Connecting..."
+				updateTrayTooltip("Connecting…")
+				updateTrayIcon(0, false)
+				broadcast(map[string]interface{}{
+					"level":      0,
+					"charging":   false,
+					"status":     "connecting",
+					"statusText": "Connecting",
+				})
 			}
 		} else {
 			batteryLvl = 0
 			isCharging = false
 			batteryText = "Mouse Not Found"
 			updateTrayTooltip("Mouse Not Found")
-			updateTrayIcon(0, false) // Update icon to show disconnected state
-			broadcast(map[string]interface{}{"level": 0, "charging": false, "status": "disconnected"})
+			updateTrayIcon(0, false)
+			broadcast(map[string]interface{}{
+				"level":      0,
+				"charging":   false,
+				"status":     "disconnected",
+				"statusText": "Disconnected",
+			})
 		}
 
 		<-ticker.C
@@ -579,46 +638,123 @@ func updateTrayTooltip(text string) {
 }
 
 /* ---------------------- */
-// parseBattery tries common layouts (with/without ReportID, small shifts).
-// Returns (level, charging, ok).
+// parseBattery tries to find the 0x83 token and interpret following bytes
+// in a couple of known layouts. Returns (level, charging, ok).
 func parseBattery(buf []byte) (int, bool, bool) {
-	// Need at least 9 bytes in any layout we test.
 	if len(buf) < 9 {
 		return 0, false, false
 	}
 
-	// Try several plausible offsets:
-	// - off=0  : no ReportID (buf[0] is first field)
-	// - off=1  : 1-byte ReportID at start (common in HID feature reports)
-	// - off=2  : some stacks prepend 2 (rare, but cheap to try)
+	// Try fixed offsets first (fast path).
 	for _, off := range []int{0, 1, 2} {
 		i83 := 6 + off
 		ichg := 7 + off
 		ibat := 8 + off
-		if i83 >= 0 && ibat < len(buf) && ichg < len(buf) && i83 < len(buf) {
-			if buf[i83] == 0x83 {
-				lvl := int(buf[ibat])
-				chg := buf[ichg] == 1
-				if lvl >= 0 && lvl <= 100 {
-					return lvl, chg, true
-				}
+		if i83 < len(buf) && ichg < len(buf) && ibat < len(buf) && buf[i83] == 0x83 {
+			lvl := int(buf[ibat])
+			chg := buf[ichg] == 1
+			if lvl >= 0 && lvl <= 100 {
+				return lvl, chg, true
+			}
+		}
+	}
+
+	// Fallback: search for 0x83 token in the first 12 bytes
+	maxScan := len(buf)
+	if maxScan > 12 {
+		maxScan = 12
+	}
+	for i := 0; i < maxScan; i++ {
+		if buf[i] != 0x83 {
+			continue
+		}
+		// Try [83, CHG, LVL]
+		if i+2 < len(buf) {
+			ch := buf[i+1]
+			lv := int(buf[i+2])
+			if (ch == 0 || ch == 1) && lv >= 0 && lv <= 100 {
+				return lv, ch == 1, true
+			}
+		}
+		// Try [83, LVL, CHG]
+		if i+2 < len(buf) {
+			lv := int(buf[i+1])
+			ch := buf[i+2]
+			if (ch == 0 || ch == 1) && lv >= 0 && lv <= 100 {
+				return lv, ch == 1, true
 			}
 		}
 	}
 	return 0, false, false
 }
 
+func sendBatteryFeatureAnyLen(d *hid.Device, reportID byte, body []byte) error {
+	sizes := []int{9, 16, 33, 65} // common FeatureReportByteLength values (incl. 1 for ReportID)
+	var lastErr error
+	for _, sz := range sizes {
+		if sz < 1 {
+			continue
+		}
+		buf := make([]byte, sz)
+		buf[0] = reportID
+		// copy as much of the body as fits
+		copy(buf[1:], body)
+		if _, err := d.SendFeatureReport(buf); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+func getBatteryFeatureAnyLen(d *hid.Device, reportID byte) (int, bool, bool, int) {
+	sizes := []int{9, 16, 33, 65}
+	for _, sz := range sizes {
+		if sz < 1 {
+			continue
+		}
+		buf := make([]byte, sz)
+		buf[0] = reportID
+		n, err := d.GetFeatureReport(buf)
+		if err != nil || n == 0 {
+			continue
+		}
+		if lvl, chg, ok := parseBattery(buf[:n]); ok {
+			return lvl, chg, true, sz
+		}
+		if logger != nil {
+			// brief dump of first up to 16 bytes
+			max := n
+			if max > 16 {
+				max = 16
+			}
+			hb := make([]string, 0, max)
+			for i := 0; i < max; i++ {
+				hb = append(hb, fmt.Sprintf("%02x", buf[i]))
+			}
+			logger.Printf("Unparsed feature (rid=0x%02x, len=%d): %s", reportID, n, strings.Join(hb, " "))
+		}
+	}
+	return 0, false, false, 0
+}
+
 func sendBatteryCommandWithReportID(d *hid.Device, reportID byte) error {
-	// Payload for Glorious/PixArt battery query (without report ID in position 0).
-	// Keep this 5-byte body; reportID goes in byte 0 of the 65-byte buffer.
-	body := []byte{0x00, 0x02, 0x02, 0x00, 0x83}
-
-	output := make([]byte, 65) // [0] = ReportID, [1..] = payload
-	output[0] = reportID
-	copy(output[1:], body)
-
-	_, err := d.SendFeatureReport(output)
-	return err
+	// Known variants seen in the wild
+	bodies := [][]byte{
+		{0x00, 0x02, 0x02, 0x00, 0x83},
+		{0x00, 0x02, 0x02, 0x00, 0x80},
+		{0x00, 0x02, 0x02, 0x00, 0x81},
+	}
+	var lastErr error
+	for _, body := range bodies {
+		if err := sendBatteryFeatureAnyLen(d, reportID, body); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return lastErr
 }
 
 func sendBatteryCommand(d *hid.Device) error {
@@ -633,34 +769,30 @@ func sendBatteryCommand(d *hid.Device) error {
 
 func tryProbeDevice(d *hid.Device) (int, bool, bool, byte) {
 	for _, rid := range []byte{0x00, 0x02, 0x07} {
-		if err := sendBatteryCommandWithReportID(d, rid); err != nil {
-			if logger != nil {
-				logger.Printf("SendFeatureReport failed (rid=0x%02x): %v", rid, err)
-			}
-			continue
-		}
-		time.Sleep(150 * time.Millisecond)
 
-		buf := make([]byte, 65)
-		buf[0] = rid // IMPORTANT on Windows: buf[0] must contain ReportID
-		n, err := d.GetFeatureReport(buf)
-		if err != nil || n == 0 {
+		// A) Try direct GET first (no prior SET).
+		if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
 			if logger != nil {
-				logger.Printf("GetFeatureReport failed/empty (rid=0x%02x): n=%d err=%v", rid, n, err)
+				logger.Printf("Probe OK via GET-only (rid=0x%02x) usedLen=%d lvl=%d chg=%v", rid, usedLen, lvl, chg)
 			}
-			continue
-		}
-		if lvl, chg, ok := parseBattery(buf[:n]); ok {
-			if logger != nil {
-				logger.Printf("Probe OK (rid=0x%02x): n=%d lvl=%d chg=%v", rid, n, lvl, chg)
-			}
+			selectedReportID = rid
+			selectedReportLen = usedLen
+			useGetOnly = true
 			return lvl, chg, true, rid
-		} else if logger != nil {
-			cut := n
-			if cut > 12 {
-				cut = 12
+		}
+
+		// B) Fall back to SET→GET.
+		if err := sendBatteryCommandWithReportID(d, rid); err == nil {
+			time.Sleep(150 * time.Millisecond)
+			if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
+				if logger != nil {
+					logger.Printf("Probe OK (rid=0x%02x) usedLen=%d lvl=%d chg=%v", rid, usedLen, lvl, chg)
+				}
+				selectedReportID = rid
+				selectedReportLen = usedLen
+				useGetOnly = false
+				return lvl, chg, true, rid
 			}
-			logger.Printf("Probe parse miss (rid=0x%02x): n=%d bytes=% x", rid, n, buf[:cut])
 		}
 	}
 	return 0, false, false, 0
@@ -739,16 +871,25 @@ func reconnect() {
 	}
 
 	// Prioritize likely battery/dongle interfaces
+	// After building candidates, stable-stable prioritize the exact path that matched before
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
-		av := a.UsagePage >= 0xFF00
-		bv := b.UsagePage >= 0xFF00
-		if av != bv {
-			return av && !bv
+		// exact best: UsagePage vendor-defined AND InterfaceNbr==2
+		aBest := (a.UsagePage >= 0xFF00) && (a.InterfaceNbr == 2)
+		bBest := (b.UsagePage >= 0xFF00) && (b.InterfaceNbr == 2)
+		if aBest != bBest {
+			return aBest && !bBest
 		}
+
+		// then any vendor page over generic
+		if (a.UsagePage >= 0xFF00) != (b.UsagePage >= 0xFF00) {
+			return a.UsagePage >= 0xFF00
+		}
+		// then non-zero usage (collections)
 		if (a.Usage != 0) != (b.Usage != 0) {
-			return a.Usage != 0 && b.Usage == 0
+			return a.Usage != 0
 		}
+		// then lower interface number
 		if a.InterfaceNbr != b.InterfaceNbr {
 			return a.InterfaceNbr < b.InterfaceNbr
 		}
@@ -796,6 +937,36 @@ func reconnect() {
 	}
 }
 
+func likelyNoMouse(buf []byte) bool {
+	// If first up to 16 bytes are all 0x00/0xFF → likely no link
+	max := len(buf)
+	if max > 16 {
+		max = 16
+	}
+	nonTrivial := 0
+	for i := 0; i < max; i++ {
+		if buf[i] != 0x00 && buf[i] != 0xFF {
+			nonTrivial++
+		}
+	}
+	if nonTrivial == 0 {
+		return true
+	}
+	// Common idle: reportID + ~8 zeros
+	if len(buf) >= 9 {
+		zeros := 0
+		for i := 1; i < 9; i++ {
+			if buf[i] == 0x00 {
+				zeros++
+			}
+		}
+		if zeros >= 7 {
+			return true
+		}
+	}
+	return false
+}
+
 func testBattery(d *hid.Device) (int, bool) {
 	lvl, chg, ok, _ := tryProbeDevice(d) // ignore report ID here
 	if ok {
@@ -806,36 +977,63 @@ func testBattery(d *hid.Device) (int, bool) {
 
 func readBattery() (int, bool) {
 	if device == nil {
-		return 0, false
+		linkDown = true
+		return -1, false
 	}
-	if err := sendBatteryCommandWithReportID(device, selectedReportID); err != nil {
-		if logger != nil {
-			logger.Printf("SendFeatureReport(read) failed (rid=0x%02x): %v", selectedReportID, err)
-		}
-		device.Close()
-		device = nil
-		return 0, false
-	}
-	time.Sleep(150 * time.Millisecond)
 
-	inputReport := make([]byte, 65)
-	inputReport[0] = selectedReportID // IMPORTANT
-	n, err := device.GetFeatureReport(inputReport)
-	if err != nil || n == 0 {
-		if logger != nil {
-			logger.Printf("GetFeatureReport(read) failed/empty (rid=0x%02x): n=%d err=%v", selectedReportID, n, err)
+	// Only send SET when we know the device supports it
+	if !useGetOnly {
+		if err := sendBatteryCommandWithReportID(device, selectedReportID); err != nil {
+			if logger != nil {
+				logger.Printf("SendFeatureReport(read) failed (rid=0x%02x): %v (switching to GET-only for this session)", selectedReportID, err)
+			}
+			useGetOnly = true // permanently flip to GET-only for this handle
+		} else {
+			time.Sleep(150 * time.Millisecond)
 		}
-		device.Close()
-		device = nil
-		return 0, false
 	}
-	if lvl, chg, ok := parseBattery(inputReport[:n]); ok {
-		return lvl, chg
+
+	// Robust GET with a few retries before giving up
+	rl := selectedReportLen
+	if rl < 2 || rl > 65 {
+		rl = 65
 	}
-	// Layout not recognized; drop and re-probe next tick.
-	device.Close()
-	device = nil
-	return 0, false
+
+	buf := make([]byte, rl)
+	buf[0] = selectedReportID
+	n, err := device.GetFeatureReport(buf)
+	if err == nil && n > 0 {
+		if lvl, chg, ok := parseBattery(buf[:n]); ok {
+			linkDown = false
+			return lvl, chg
+		}
+		if likelyNoMouse(buf[:n]) {
+			// mouse not linked to dongle
+			linkDown = true
+			return -1, false
+		}
+	}
+
+	// last-ditch bigger read
+	if rl < 65 {
+		big := make([]byte, 65)
+		big[0] = selectedReportID
+		if n2, err2 := device.GetFeatureReport(big); err2 == nil && n2 > 0 {
+			if lvl, chg, ok := parseBattery(big[:n2]); ok {
+				selectedReportLen = 65
+				linkDown = false
+				return lvl, chg
+			}
+			if likelyNoMouse(big[:n2]) {
+				linkDown = true
+				return -1, false
+			}
+		}
+	}
+
+	// Unknown/garbled frame → don’t immediately drop handle; just mark link unknown.
+	linkDown = true
+	return -1, false
 }
 
 func createBatteryIcon(level int, charging bool, frame int) win.HICON {
