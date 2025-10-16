@@ -402,9 +402,15 @@ func updateBattery() {
 			battery, charging := readBattery()
 			if battery > 0 {
 				// Detect charge completion
-				if wasCharging && !charging && battery >= 95 {
+				if wasCharging && !charging {
 					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
 					lastChargeLevel = battery
+					saveChargeData()
+				}
+
+				if charging && battery == 100 && lastChargeLevel != 100 {
+					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
+					lastChargeLevel = 100
 					saveChargeData()
 				}
 
