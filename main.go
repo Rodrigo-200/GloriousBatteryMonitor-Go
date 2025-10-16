@@ -141,6 +141,8 @@ var (
 	consecutiveReadFails int
 	linkDown             bool
 	probeRIDs            = []byte{0x00, 0x02, 0x04, 0x03, 0x05, 0x06, 0x07, 0x08}
+	useInputReports      bool
+	inputFrames          chan []byte
 )
 
 func main() {
@@ -228,6 +230,34 @@ func main() {
 	}
 
 	w.Run()
+}
+
+func ensureInputReader(d *hid.Device) {
+	if inputFrames != nil {
+		return
+	}
+	inputFrames = make(chan []byte, 16)
+	go func(dev *hid.Device, out chan []byte) {
+		buf := make([]byte, 65)
+		for {
+			n, err := dev.Read(buf) // blocking
+			if err != nil {
+				close(out)
+				inputFrames = nil
+				return
+			}
+			if n > 0 {
+				frame := make([]byte, n)
+				copy(frame, buf[:n])
+				select {
+				case out <- frame:
+				default: // drop if buffer full
+				}
+			} else {
+				time.Sleep(30 * time.Millisecond)
+			}
+		}
+	}(d, inputFrames)
 }
 
 func startWebServer() {
@@ -434,11 +464,14 @@ func updateBattery() {
 					if device != nil {
 						device.Close()
 					}
-					device = nil // <- allows reconnect() to run next tick
+					device = nil
 					hasPrevCharging = false
 					selectedReportLen = 65
+					selectedReportID = 0x00 // <-- add
 					useGetOnly = false
+					useInputReports = false
 					consecutiveReadFails = 0
+
 				}
 
 				<-ticker.C
@@ -752,6 +785,52 @@ func getBatteryFeatureAnyLen(d *hid.Device, reportID byte) (int, bool, bool, int
 	return 0, false, false, 0
 }
 
+// Try to read battery from INPUT reports (interrupt IN). Optional OUTPUT poke first.
+func getBatteryFromInputReports(d *hid.Device, reportID byte, tryPoke bool) (int, bool, bool) {
+	ensureInputReader(d)
+
+	if tryPoke {
+		bodies := [][]byte{
+			{0x00, 0x02, 0x02, 0x00, 0x83},
+			{0x00, 0x02, 0x02, 0x00, 0x80},
+			{0x00, 0x02, 0x02, 0x00, 0x81},
+			{0x00, 0x02, 0x02, 0x00, 0x84},
+		}
+		for _, body := range bodies {
+			buf := make([]byte, 1+len(body))
+			buf[0] = reportID
+			copy(buf[1:], body)
+			_, _ = d.Write(buf)
+			time.Sleep(40 * time.Millisecond)
+		}
+	}
+
+	deadline := time.Now().Add(700 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if inputFrames == nil {
+			return 0, false, false
+		}
+		select {
+		case frame, ok := <-inputFrames:
+			if !ok {
+				inputFrames = nil
+				return 0, false, false
+			}
+			if len(frame) > 0 {
+				if lvl, chg, ok := parseBattery(frame); ok {
+					return lvl, chg, true
+				}
+				if likelyNoMouse(frame) {
+					return 0, false, false
+				}
+			}
+		case <-time.After(60 * time.Millisecond):
+			// keep looping until deadline
+		}
+	}
+	return 0, false, false
+}
+
 func sendBatteryCommandWithReportID(d *hid.Device, reportID byte) error {
 	bodies := [][]byte{
 		{0x00, 0x02, 0x02, 0x00, 0x83},
@@ -781,26 +860,43 @@ func sendBatteryCommand(d *hid.Device) error {
 
 func tryProbeDevice(d *hid.Device) (int, bool, bool, byte) {
 	for _, rid := range probeRIDs {
-		// A) GET-only
-		if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
+		// C) INPUT only (no poke) — FAST PATH
+		if lvl, chg, ok := getBatteryFromInputReports(d, rid, false); ok {
+			selectedReportID = rid
+			selectedReportLen = 65
+			useGetOnly = true
+			useInputReports = true
+			return lvl, chg, true, rid
+		}
+		// C2) INPUT with OUTPUT poke
+		if lvl, chg, ok := getBatteryFromInputReports(d, rid, true); ok {
 			if logger != nil {
-				logger.Printf("Probe OK via GET-only (rid=0x%02x) usedLen=%d lvl=%d chg=%v", rid, usedLen, lvl, chg)
+				logger.Printf("Probe OK via INPUT+OUTPUT poke (rid=0x%02x)", rid)
 			}
+			selectedReportID = rid
+			selectedReportLen = 65
+			useGetOnly = true
+			useInputReports = true
+			return lvl, chg, true, rid
+		}
+
+		// A) GET-only (Feature) — only try if INPUT failed
+		if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
 			selectedReportID = rid
 			selectedReportLen = usedLen
 			useGetOnly = true
+			useInputReports = false
 			return lvl, chg, true, rid
 		}
-		// B) SET->GET
+
+		// B) SET->GET (Feature)
 		if err := sendBatteryCommandWithReportID(d, rid); err == nil {
-			time.Sleep(250 * time.Millisecond) // a little longer
+			time.Sleep(120 * time.Millisecond)
 			if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
-				if logger != nil {
-					logger.Printf("Probe OK (rid=0x%02x) usedLen=%d lvl=%d chg=%v", rid, usedLen, lvl, chg)
-				}
 				selectedReportID = rid
 				selectedReportLen = usedLen
 				useGetOnly = false
+				useInputReports = false
 				return lvl, chg, true, rid
 			}
 		}
@@ -909,8 +1005,11 @@ func reconnect() {
 	// Try each interface until one responds to the battery probe
 	for _, ci := range candidates {
 		if logger != nil {
-			logger.Printf("Probing: VID=0x%04x PID=0x%04x UsagePage=0x%04x If#=%d Path=%s",
-				ci.VendorID, ci.ProductID, ci.UsagePage, ci.InterfaceNbr, ci.Path)
+			mode := "FEATURE"
+			if useInputReports {
+				mode = "INPUT"
+			}
+			logger.Printf("Connected on %s (RID=0x%02x, mode=%s, len=%d)", ci.Path, selectedReportID, mode, selectedReportLen)
 		}
 		d, err := hid.OpenPath(ci.Path)
 		if err != nil {
@@ -991,19 +1090,32 @@ func readBattery() (int, bool) {
 		return -1, false
 	}
 
-	// Only send SET when we know the device supports it
+	// Fast path: if this session is input-based, just read input frames.
+	if useInputReports {
+		if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, false); ok {
+			linkDown = false
+			return lvl, chg
+		}
+		if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, true); ok {
+			linkDown = false
+			return lvl, chg
+		}
+		linkDown = true
+		return -1, false
+	}
+
+	// Feature-based path (current behavior) -------------------------------
 	if !useGetOnly {
 		if err := sendBatteryCommandWithReportID(device, selectedReportID); err != nil {
 			if logger != nil {
 				logger.Printf("SendFeatureReport(read) failed (rid=0x%02x): %v (switching to GET-only for this session)", selectedReportID, err)
 			}
-			useGetOnly = true // permanently flip to GET-only for this handle
+			useGetOnly = true
 		} else {
 			time.Sleep(150 * time.Millisecond)
 		}
 	}
 
-	// Robust GET with a few retries before giving up
 	rl := selectedReportLen
 	if rl < 2 || rl > 65 {
 		rl = 65
@@ -1018,14 +1130,13 @@ func readBattery() (int, bool) {
 			return lvl, chg
 		}
 		if likelyNoMouse(buf[:n]) {
-			// mouse not linked to dongle
 			linkDown = true
 			return -1, false
 		}
 	}
 
-	// last-ditch bigger read
-	if rl < 65 {
+	// Second attempt with 65 bytes regardless of selected len
+	if rl != 65 {
 		big := make([]byte, 65)
 		big[0] = selectedReportID
 		if n2, err2 := device.GetFeatureReport(big); err2 == nil && n2 > 0 {
@@ -1041,7 +1152,18 @@ func readBattery() (int, bool) {
 		}
 	}
 
-	// Unknown/garbled frame → don’t immediately drop handle; just mark link unknown.
+	// **New**: unconditional INPUT fallback when Feature path failed
+	if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, false); ok {
+		useInputReports = true // flip session to input mode from now on
+		linkDown = false
+		return lvl, chg
+	}
+	if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, true); ok {
+		useInputReports = true
+		linkDown = false
+		return lvl, chg
+	}
+
 	linkDown = true
 	return -1, false
 }
