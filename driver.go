@@ -248,6 +248,7 @@ func getBatteryFeatureAnyLen(d *hid.Device, reportID byte) (int, bool, bool, int
 		}
 		if n > 0 {
 			if lvl, chg, ok := parseBattery(buf[:n]); ok {
+				setLastRawReport(buf[:n])
 				return lvl, chg, true, sz
 			}
 			return 0, false, false, 0
@@ -274,6 +275,7 @@ func getBatteryFromInputReportsQuick(d *hid.Device) (int, bool, bool) {
 			}
 			if len(frame) > 0 {
 				if lvl, chg, ok := parseBattery(frame); ok {
+					setLastRawReport(frame)
 					return lvl, chg, true
 				}
 				if likelyNoMouse(frame) {
@@ -334,6 +336,7 @@ func getBatteryFromInputReports(d *hid.Device, reportID byte, tryPoke bool) (int
 			}
 			if len(frame) > 0 {
 				if lvl, chg, ok := parseBattery(frame); ok {
+					setLastRawReport(frame)
 					return lvl, chg, true
 				}
 				if likelyNoMouse(frame) {
@@ -849,6 +852,7 @@ func readBattery() (int, bool) {
 		big[0] = selectedReportID
 		if n2, err2 := device.GetFeatureReport(big); err2 == nil && n2 > 0 {
 			if lvl, chg, ok := parseBattery(big[:n2]); ok {
+				setLastRawReport(big[:n2])
 				selectedReportLen = 65
 				linkDown = false
 				recordedUnplug = false
