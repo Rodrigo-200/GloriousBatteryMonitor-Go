@@ -304,7 +304,16 @@ func getBatteryFromInputReports(d *hid.Device, reportID byte, tryPoke bool) (int
 			buf := make([]byte, 1+len(body))
 			buf[0] = reportID
 			copy(buf[1:], body)
-			_, _ = d.Write(buf)
+			// Try SendFeatureReport (SetFeature) first — some dongles expect a
+			// SetFeature to trigger a response rather than a plain output write.
+			if err := sendBatteryFeatureAnyLen(d, reportID, body); err != nil {
+				// fall back to a raw write if SetFeature failed or is unsupported
+				if _, werr := d.Write(buf); werr != nil {
+					if logger != nil {
+						logger.Printf("poke: SetFeature failed=%v write failed=%v (rid=0x%02x)", err, werr, reportID)
+					}
+				}
+			}
 			time.Sleep(40 * time.Millisecond)
 		}
 	}
@@ -700,23 +709,64 @@ func allProbeRIDsIncorrect(d *hid.Device) bool {
 	if d == nil {
 		return false
 	}
-	incorrect := 0
+	sawOnlyIncorrect := true
+
+	sizes := []int{65, 33, 16, 9}
+
+	// First, try GET FEATURE on a variety of sizes. If any call returns data
+	// that parses as a battery, the interface is valid. If any call fails with
+	// an error other than "Incorrect function" we treat it as inconclusive
+	// and avoid aggressive blacklisting.
 	for _, rid := range probeRIDs {
-		buf := make([]byte, 9)
-		buf[0] = rid
-		if _, err := d.GetFeatureReport(buf); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "incorrect function") {
-				incorrect++
-				continue
+		for _, sz := range sizes {
+			buf := make([]byte, sz)
+			buf[0] = rid
+			if n, err := d.GetFeatureReport(buf); err != nil {
+				if strings.Contains(strings.ToLower(err.Error()), "incorrect function") {
+					// keep scanning; this particular size reported incorrect function
+					continue
+				}
+				// Some other error (timeout/param) — don't aggressively blacklist
+				sawOnlyIncorrect = false
+				break
+			} else {
+				if n > 0 {
+					if lvl, chg, ok := parseBattery(buf[:n]); ok {
+						// We actually got battery info from a feature report — not a dead path
+						_ = lvl
+						_ = chg
+						return false
+					}
+					// Got a report but couldn't parse it — treat as inconclusive
+					sawOnlyIncorrect = false
+					break
+				}
 			}
-			// Some other error; treat as not-conclusive
-			return false
-		} else {
-			// got something; this interface supports feature reports
-			return false
+		}
+		if !sawOnlyIncorrect {
+			break
 		}
 	}
-	return incorrect == len(probeRIDs)
+
+	// If GET FEATURE was entirely unhelpful (only 'Incorrect function' seen),
+	// attempt a conservative poke using INPUT/OUTPUT probing — some devices do
+	// not support GET FEATURE but will reply to an output poke on the same
+	// interface via an input report. If any poke yields a parseable battery
+	// frame, then this interface is usable and should not be blacklisted.
+	if sawOnlyIncorrect {
+		for _, rid := range probeRIDs {
+			if lvl, chg, ok := getBatteryFromInputReports(d, rid, true); ok {
+				if logger != nil {
+					logger.Printf("[RECONNECT] poke succeeded on rid=0x%02x -> lvl=%d chg=%v", rid, lvl, chg)
+				}
+				return false
+			}
+		}
+	}
+
+	// Blacklist only when GET FEATURE calls were uniformly "Incorrect function"
+	// and no poke produced a usable input response.
+	return sawOnlyIncorrect
 }
 
 func readBattery() (int, bool) {
