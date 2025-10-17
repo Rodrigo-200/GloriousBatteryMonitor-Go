@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sstallion/go-hid"
@@ -39,6 +40,13 @@ var deviceNames = map[uint16]string{
 	0x824d: "Model D2 Wireless (PixArt Dongle)",
 	0x2014: "Model I2", 0x2016: "Model I2",
 }
+
+// skippedPaths is a short-lived cache of HID paths that returned
+// "Incorrect function" for GetFeatureReport. We avoid reprobing them
+// for a short duration to reduce noisy DeviceIoControl calls and
+// reduce the chance of hitting odd driver behavior on unrelated devices.
+var skippedPathsMu sync.Mutex
+var skippedPaths = map[string]time.Time{}
 
 type DeviceProfile struct {
 	Path            string `json:"path"`
@@ -432,6 +440,19 @@ func reconnect() {
 	seen := make(map[string]bool)
 	for _, vid := range gloriousVendorIDs {
 		hid.Enumerate(vid, 0, func(info *hid.DeviceInfo) error {
+			// Skip short-term blacklisted paths
+			skippedPathsMu.Lock()
+			if until, ok := skippedPaths[info.Path]; ok {
+				if time.Now().Before(until) {
+					skippedPathsMu.Unlock()
+					if logger != nil {
+						logger.Printf("[FILTER] skip %s due to recent invalid feature report (until %v)", info.Path, until)
+					}
+					return nil
+				}
+				delete(skippedPaths, info.Path)
+			}
+			skippedPathsMu.Unlock()
 			if shouldSkipCandidate(info) {
 				return nil
 			}
@@ -445,6 +466,19 @@ func reconnect() {
 
 	if len(candidates) == 0 {
 		hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
+			// Skip short-term blacklisted paths
+			skippedPathsMu.Lock()
+			if until, ok := skippedPaths[info.Path]; ok {
+				if time.Now().Before(until) {
+					skippedPathsMu.Unlock()
+					if logger != nil {
+						logger.Printf("[FILTER] skip %s due to recent invalid feature report (until %v)", info.Path, until)
+					}
+					return nil
+				}
+				delete(skippedPaths, info.Path)
+			}
+			skippedPathsMu.Unlock()
 			if seen[info.Path] {
 				return nil
 			}
@@ -505,6 +539,19 @@ func reconnect() {
 	for _, ci := range candidates {
 		d, err := hid.OpenPath(ci.Path)
 		if err != nil {
+			continue
+		}
+
+		// Quick check: if every probe RID returns "Incorrect function",
+		// mark this path as temporarily bad and skip it for a while.
+		if allProbeRIDsIncorrect(d) {
+			if logger != nil {
+				logger.Printf("[RECONNECT] path=%s appears to not support feature reports — skipping for 90s", ci.Path)
+			}
+			skippedPathsMu.Lock()
+			skippedPaths[ci.Path] = time.Now().Add(90 * time.Second)
+			skippedPathsMu.Unlock()
+			d.Close()
 			continue
 		}
 
@@ -644,6 +691,32 @@ func testBattery(d *hid.Device) (int, bool) {
 		return lvl, chg
 	}
 	return 0, false
+}
+
+// allProbeRIDsIncorrect returns true if a quick test of each probe RID
+// produced only "Incorrect function" errors, suggesting this interface
+// does not support feature reports.
+func allProbeRIDsIncorrect(d *hid.Device) bool {
+	if d == nil {
+		return false
+	}
+	incorrect := 0
+	for _, rid := range probeRIDs {
+		buf := make([]byte, 9)
+		buf[0] = rid
+		if _, err := d.GetFeatureReport(buf); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "incorrect function") {
+				incorrect++
+				continue
+			}
+			// Some other error; treat as not-conclusive
+			return false
+		} else {
+			// got something; this interface supports feature reports
+			return false
+		}
+	}
+	return incorrect == len(probeRIDs)
 }
 
 func readBattery() (int, bool) {
