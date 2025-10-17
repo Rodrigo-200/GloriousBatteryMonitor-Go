@@ -88,6 +88,7 @@ var (
 	clientsMu            sync.RWMutex // ← add
 	w                    webview2.WebView
 	serverPort           string = "8765"
+	dataDir              string
 	dataFile             string
 	settingsFile         string
 	logFile              string
@@ -156,7 +157,7 @@ func main() {
 	if appData == "" {
 		appData = "."
 	}
-	dataDir := filepath.Join(appData, "GloriousBatteryMonitor")
+	dataDir = filepath.Join(appData, "GloriousBatteryMonitor")
 	os.MkdirAll(dataDir, 0755)
 	dataFile = filepath.Join(dataDir, "charge_data.json")
 	settingsFile = filepath.Join(dataDir, "settings.json")
@@ -256,6 +257,7 @@ func startWebServer() {
 	http.HandleFunc("/api/settings", handleSettings)
 	http.HandleFunc("/api/update", handleUpdate)
 	http.HandleFunc("/api/resize", handleResize)
+	http.HandleFunc("/api/devtools/hid-report", handleHIDCapture)
 	addr := fmt.Sprintf(":%s", serverPort)
 	log.Printf("starting web server on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
@@ -1204,6 +1206,47 @@ func handleResize(w http.ResponseWriter, r *http.Request) {
 	win.SetWindowPos(webviewHwnd, 0, 0, 0, rect.Right-rect.Left, int32(req.Height), win.SWP_NOMOVE|win.SWP_NOZORDER)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func handleHIDCapture(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	report, err := captureHIDReport()
+	usedCache := false
+	if err != nil {
+		if cached, ok := getLastRawReport(); ok {
+			report = cached
+			usedCache = true
+		} else {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
+
+	if len(report) == 0 {
+		http.Error(w, "No report available", http.StatusServiceUnavailable)
+		return
+	}
+
+	path, err := saveHIDReport(report)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"path":      path,
+		"length":    len(report),
+		"hex":       hexString(report),
+		"hexDump":   hexDump(report),
+		"fromCache": usedCache,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // ---------- Startup shortcut helpers (Startup folder .lnk) ----------
