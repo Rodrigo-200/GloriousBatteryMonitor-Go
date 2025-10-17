@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -25,41 +28,32 @@ import (
 var content embed.FS
 
 const (
-	VendorID    = 0x258a
-	WM_USER     = 0x0400
-	WM_TRAYICON = WM_USER + 1
-	WM_APP_HIDE = WM_USER + 2
-	ID_SHOW     = 1001
-	ID_QUIT     = 1002
-	ID_UPDATE   = 1003
+	WM_APP           = 0x8000
+	WM_APP_TRAY_MSG  = WM_APP + 10 // callback from Shell_NotifyIcon
+	WM_APP_TRAY_DO   = WM_APP + 1
+	WM_APP_ICON_REAP = WM_APP + 2
+
+	ID_SHOW   = 1001
+	ID_QUIT   = 1002
+	ID_UPDATE = 1003
+
+	WM_MOUSEMOVE     = 0x0200
+	WM_LBUTTONUP     = 0x0202
+	WM_LBUTTONDBLCLK = 0x0203
+	WM_RBUTTONUP     = 0x0205
+	WM_CONTEXTMENU   = 0x007B
+
+	NIN_SELECT       = win.WM_USER + 0 // left-click (NotifyIcon v4)
+	NIN_KEYSELECT    = win.WM_USER + 1
+	NIN_BALLOONCLICK = win.WM_USER + 5
+	NIN_POPUPOPEN    = win.WM_USER + 0x006
+	NIN_POPUPCLOSE   = win.WM_USER + 0x007
 )
 
 var gloriousVendorIDs = []uint16{
 	0x258a, // older Glorious
 	0x342d, // newer Glorious (keyboards, some mice)
 	0x093a, // PixArt (wireless dongles for many Glorious mice)
-}
-
-// Supported Glorious mice product IDs
-var supportedDevices = []uint16{
-	0x2011, // Model O Wired
-	0x2013, // Model O Wireless (Dongle)
-	0x2012, // Model D Wired
-	0x2023, // Model D Wireless (Dongle)
-	0x2019, // Model O- Wired
-	0x2024, // Model O- Wireless (Dongle)
-	0x2015, // Model D- Wired
-	0x2025, // Model D- Wireless (Dongle)
-	0x2036, // Model I Wired
-	0x2046, // Model I Wireless (Dongle)
-	0x2017, // Model O Pro Wired
-	0x2018, // Model O Pro Wireless (Dongle)
-	0x2031, // Model D2 Wired
-	0x2033, // Model D2 Wireless (Dongle)
-	0x2009, // Model O2 Wired
-	0x200b, // Model O2 Wireless (Dongle)
-	0x2014, // Model I2 Wired
-	0x2016, // Model I2 Wireless (Dongle)
 }
 
 var deviceNames = map[uint16]string{
@@ -92,7 +86,15 @@ type Settings struct {
 	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
 }
 
-const currentVersion = "2.2.15"
+type DeviceProfile struct {
+	Path            string `json:"path"`
+	ReportID        byte   `json:"reportId"`
+	ReportLen       int    `json:"reportLen"`
+	UseGetOnly      bool   `json:"useGetOnly"`
+	UseInputReports bool   `json:"useInputReports"`
+}
+
+const currentVersion = "2.3.0"
 
 var (
 	device               *hid.Device
@@ -105,13 +107,13 @@ var (
 	isCharging           bool
 	wasCharging          bool
 	hasPrevCharging      bool
-	lastChargeTime       string = "Never"
-	lastChargeLevel      int    = 0
-	user32                      = syscall.NewLazyDLL("user32.dll")
-	appendMenuW                 = user32.NewProc("AppendMenuW")
-	setWindowLong               = user32.NewProc("SetWindowLongPtrW")
-	showWindow                  = user32.NewProc("ShowWindow")
-	clients                     = make(map[chan string]bool)
+	lastChargeTime       string       = "Never"
+	lastChargeLevel      int          = 0
+	user32                            = syscall.NewLazyDLL("user32.dll")
+	appendMenuW                       = user32.NewProc("AppendMenuW")
+	showWindow                        = user32.NewProc("ShowWindow")
+	clients                           = make(map[chan string]bool)
+	clientsMu            sync.RWMutex // ← add
 	w                    webview2.WebView
 	serverPort           string = "8765"
 	dataFile             string
@@ -140,12 +142,43 @@ var (
 	useGetOnly           bool
 	consecutiveReadFails int
 	linkDown             bool
-	probeRIDs            = []byte{0x00, 0x02, 0x04, 0x03, 0x05, 0x06, 0x07, 0x08}
+	probeRIDs            = []byte{0x00, 0x02, 0x04, 0x03}
 	useInputReports      bool
 	inputFrames          chan []byte
+	cacheFile            string
+	cachedProfile        *DeviceProfile
+	softLinkDownCount    int
+	currentHIDPath       string
+	fileMu               sync.Mutex
+	safeForInput         bool
+	inputDev             *hid.Device
+	inputMu              sync.Mutex
+	recordedUnplug       bool
+	trayMu               sync.Mutex
+	trayOps              = make(chan func(), 64)
+	iconReap             = make(chan win.HICON, 64)
+	readerDone           chan struct{}
+	taskbarCreated       = win.RegisterWindowMessage(syscall.StringToUTF16Ptr("TaskbarCreated"))
 )
 
+func safeDefer(where string) {
+	if r := recover(); r != nil {
+		if logger != nil {
+			logger.Printf("[RECOVER] %s: %v", where, r)
+		}
+	}
+}
+
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			if logger != nil {
+				logger.Printf("[FATAL RECOVER] %v\n%s", r, debug.Stack())
+			} else {
+				log.Printf("[FATAL RECOVER] %v\n%s", r, debug.Stack())
+			}
+		}
+	}()
 	// Set up data file paths
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
@@ -156,6 +189,7 @@ func main() {
 	dataFile = filepath.Join(dataDir, "charge_data.json")
 	settingsFile = filepath.Join(dataDir, "settings.json")
 	logFile = filepath.Join(dataDir, "debug.log")
+	cacheFile = filepath.Join(dataDir, "conn_profile.json")
 
 	// Set up logging
 	setupLogging()
@@ -163,6 +197,7 @@ func main() {
 	// Load saved data
 	loadChargeData()
 	loadSettings()
+	loadConnProfile()
 
 	// Fix startup registry path if needed
 	if settings.StartWithWindows {
@@ -233,17 +268,53 @@ func main() {
 }
 
 func ensureInputReader(d *hid.Device) {
-	if inputFrames != nil {
+	if !safeForInput || d == nil {
 		return
 	}
-	inputFrames = make(chan []byte, 16)
+
+	// Already running for this device?
+	inputMu.Lock()
+	if inputFrames != nil && inputDev == d {
+		inputMu.Unlock()
+		return
+	}
+
+	// Replace the channel/owner
+	ch := make(chan []byte, 16)
+	done := make(chan struct{})
+	inputFrames = ch
+	inputDev = d
+	readerDone = done
+	inputMu.Unlock()
+
 	go func(dev *hid.Device, out chan []byte) {
+		defer func() {
+			if r := recover(); r != nil {
+				if logger != nil {
+					logger.Printf("input reader recovered: %v", r)
+				}
+			}
+			close(out)
+
+			inputMu.Lock()
+			if inputFrames == out {
+				inputFrames = nil
+				inputDev = nil
+			}
+			// always signal completion
+			if readerDone != nil {
+				close(done)
+				if readerDone == done {
+					readerDone = nil
+				}
+			}
+			inputMu.Unlock()
+		}()
+
 		buf := make([]byte, 65)
 		for {
 			n, err := dev.Read(buf) // blocking
 			if err != nil {
-				close(out)
-				inputFrames = nil
 				return
 			}
 			if n > 0 {
@@ -251,13 +322,24 @@ func ensureInputReader(d *hid.Device) {
 				copy(frame, buf[:n])
 				select {
 				case out <- frame:
-				default: // drop if buffer full
+				default:
 				}
 			} else {
 				time.Sleep(30 * time.Millisecond)
 			}
 		}
-	}(d, inputFrames)
+	}(d, ch)
+}
+
+func trayInvoke(fn func()) {
+	// drop if completely flooded; we don't want to block battery loop
+	select {
+	case trayOps <- fn:
+	default:
+	}
+	if hwnd != 0 {
+		win.PostMessage(hwnd, WM_APP_TRAY_DO, 0, 0)
+	}
 }
 
 func startWebServer() {
@@ -282,27 +364,75 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	messageChan := make(chan string)
-	clients[messageChan] = true
-	defer func() { delete(clients, messageChan) }()
+	if f, ok := w.(http.Flusher); ok {
+		fmt.Fprint(w, ":ok\n\n")
+		f.Flush()
+	}
 
-	for msg := range messageChan {
-		fmt.Fprintf(w, "data: %s\n\n", msg)
-		w.(http.Flusher).Flush()
+	messageChan := make(chan string, 8)
+
+	clientsMu.Lock()
+	clients[messageChan] = true
+	clientsMu.Unlock()
+
+	// Clean up this client safely
+	defer func() {
+		clientsMu.Lock()
+		delete(clients, messageChan)
+		// IMPORTANT: close WHILE holding the write lock so broadcasters can't be reading/sending
+		close(messageChan)
+		clientsMu.Unlock()
+	}()
+
+	flusher, _ := w.(http.Flusher)
+
+	// Exit when the client goes away so we don’t leak goroutines
+	ctxDone := r.Context().Done()
+
+	for {
+		select {
+		case <-ctxDone:
+			return
+		case msg, ok := <-messageChan:
+			if !ok {
+				return
+			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
 	}
 }
 
 func broadcast(data map[string]interface{}) {
 	jsonData, _ := json.Marshal(data)
+	payload := string(jsonData)
+
+	clientsMu.RLock()
 	for client := range clients {
-		select {
-		case client <- string(jsonData):
-		default:
-		}
+		func(ch chan string, m string) {
+			defer func() {
+				if r := recover(); r != nil {
+					if logger != nil {
+						logger.Printf("[SSE] dropped send to closed channel: %v", r)
+					}
+				}
+			}()
+			select {
+			case ch <- m:
+			default:
+				// buffer full; drop rather than blocking
+			}
+		}(client, payload)
 	}
+	clientsMu.RUnlock()
 }
 
 func startTray() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	hInst := win.GetModuleHandle(nil)
 	className, _ := syscall.UTF16PtrFromString("GloriousTrayClass")
 
@@ -317,18 +447,35 @@ func startTray() {
 	windowName, _ := syscall.UTF16PtrFromString("Glorious Tray")
 	hwnd = win.CreateWindowEx(0, className, windowName, 0, 0, 0, 0, 0, 0, 0, hInst, nil)
 
+	// --- tray icon init ---
+	nid = win.NOTIFYICONDATA{}
 	nid.CbSize = uint32(unsafe.Sizeof(nid))
 	nid.HWnd = hwnd
 	nid.UID = 1
-	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
-	nid.UCallbackMessage = WM_TRAYICON
-	// Create battery icon
-	nid.HIcon = createBatteryIcon(0, false, 0)
 
+	// Add a fixed GUID so Explorer treats the icon as persistent across restarts
+	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+
+	nid.UCallbackMessage = WM_APP_TRAY_MSG
+	nid.HIcon = createBatteryIcon(0, false, 0)
 	tip, _ := syscall.UTF16FromString("Glorious Battery")
 	copy(nid.SzTip[:], tip)
 
+	// now add the icon
 	win.Shell_NotifyIcon(win.NIM_ADD, &nid)
+	nid.UVersion = win.NOTIFYICON_VERSION_4
+	win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
+	updateTrayTooltip("Glorious Battery")
+	// Reap old HICONs periodically
+	go func() {
+		t := time.NewTicker(1500 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
+			if hwnd != 0 {
+				win.PostMessage(hwnd, WM_APP_ICON_REAP, 0, 0)
+			}
+		}
+	}()
 
 	var msg win.MSG
 	for win.GetMessage(&msg, 0, 0, 0) > 0 {
@@ -350,20 +497,72 @@ func webviewWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 }
 
 func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
+	if msg == taskbarCreated {
+		win.Shell_NotifyIcon(win.NIM_ADD, &nid)
+		nid.UVersion = win.NOTIFYICON_VERSION_4
+		win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
+		updateTrayTooltip(batteryText) // refresh current text
+		return 0
+	}
+
 	switch msg {
-	case WM_TRAYICON:
-		switch lParam {
-		case win.WM_LBUTTONUP:
-			showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
+	case WM_APP_TRAY_MSG:
+		// LOWORD(lParam) is the actual message code
+		code := uint32(lParam) & 0xFFFF
+		log.Printf("TRAY: wParam=%d lParam=0x%X (code=0x%X)", wParam, lParam, code)
+
+		switch code {
+		// Left click / select
+		case NIN_SELECT, NIN_KEYSELECT, WM_LBUTTONUP, WM_LBUTTONDBLCLK:
+			// restore if minimized/hidden, then foreground
+			win.ShowWindow(webviewHwnd, win.SW_RESTORE)
 			win.SetForegroundWindow(webviewHwnd)
-		case win.WM_RBUTTONUP:
+			return 0
+
+		// Right click / context menu
+		case WM_RBUTTONUP, WM_CONTEXTMENU:
 			showMenu()
-		case win.WM_LBUTTONDBLCLK:
-			showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
-			win.SetForegroundWindow(webviewHwnd)
+			return 0
+
+		// Optional: overflow flyout open/close if you care
+		case NIN_POPUPOPEN, NIN_POPUPCLOSE:
+			return 0
 		}
 		return 0
 
+	case win.WM_CONTEXTMENU:
+		showMenu()
+		return 0
+
+	case WM_APP_TRAY_DO:
+		for {
+			select {
+			case fn := <-trayOps:
+				func() {
+					defer func() {
+						if r := recover(); r != nil && logger != nil {
+							logger.Printf("[TRAY_OP RECOVER] %v", r)
+						}
+					}()
+					fn()
+				}()
+			default:
+				return 0
+			}
+		}
+
+	case WM_APP_ICON_REAP:
+		for i := 0; i < 8; i++ {
+			select {
+			case h := <-iconReap:
+				if h != 0 {
+					win.DestroyIcon(h)
+				}
+			default:
+				return 0
+			}
+		}
+		return 0
 	}
 	return win.DefWindowProc(hwnd, msg, wParam, lParam)
 }
@@ -406,17 +605,17 @@ func showMenu() {
 		0,
 	)
 
+	postMessage := user32.NewProc("PostMessageW")
+	postMessage.Call(uintptr(hwnd), 0, 0, 0) // WM_NULL
+
 	win.DestroyMenu(hMenu)
 
-	// Handle command immediately
-	if cmd == ID_SHOW {
+	switch cmd {
+	case ID_SHOW, ID_UPDATE:
 		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
 		win.SetForegroundWindow(webviewHwnd)
-	} else if cmd == ID_UPDATE {
-		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
-		win.SetForegroundWindow(webviewHwnd)
-	} else if cmd == ID_QUIT {
-		win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
+	case ID_QUIT:
+		trayInvoke(func() { win.Shell_NotifyIcon(win.NIM_DELETE, &nid) })
 		if device != nil {
 			device.Close()
 		}
@@ -429,6 +628,18 @@ func showMenu() {
 }
 
 func updateBattery() {
+	defer safeDefer("updateBattery")
+	defer func() {
+		if r := recover(); r != nil {
+			if logger != nil {
+				logger.Printf("updateBattery recovered from panic: %v", r)
+			}
+			// Small backoff then restart the loop by calling updateBattery again.
+			// NOTE: this returns from the current goroutine; the caller started it with `go updateBattery()`.
+			go updateBattery()
+		}
+	}()
+
 	hid.Init()
 	defer hid.Exit()
 
@@ -446,41 +657,90 @@ func updateBattery() {
 			battery, charging := readBattery()
 
 			if linkDown {
-				batteryLvl = 0
-				isCharging = false
-				batteryText = "Mouse Not Found"
-				updateTrayTooltip("Mouse Not Found")
-				updateTrayIcon(0, false)
-				broadcast(map[string]interface{}{
-					"level": 0, "charging": false,
-					"status":          "disconnected",
-					"statusText":      "Disconnected",
-					"deviceModel":     deviceModel,
-					"updateAvailable": updateAvailable, "updateVersion": updateVersion,
-				})
-
-				consecutiveReadFails++
-				if consecutiveReadFails >= 3 {
-					if device != nil {
-						device.Close()
+				softLinkDownCount++
+				if wasCharging && softLinkDownCount == 1 && !recordedUnplug {
+					// choose a sensible last-known level:
+					// 1) current on-screen level if >0, else
+					// 2) last charging track level if we have one, else
+					// 3) keep previous lastChargeLevel
+					lvl := batteryLvl
+					if lvl <= 0 && lastChargeLevel2 > 0 {
+						lvl = lastChargeLevel2
 					}
-					device = nil
-					hasPrevCharging = false
-					selectedReportLen = 65
-					selectedReportID = 0x00 // <-- add
-					useGetOnly = false
-					useInputReports = false
-					consecutiveReadFails = 0
-
+					if lvl > 0 {
+						lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
+						lastChargeLevel = lvl
+						saveChargeData()
+						recordedUnplug = true
+					}
 				}
+				if softLinkDownCount == 1 {
+					// transient
+					updateTrayTooltip("Reconnecting…")
+					broadcast(map[string]interface{}{"status": "connecting", "statusText": "Connecting"})
+				} else {
+					batteryLvl = 0
+					isCharging = false
+					batteryText = "Mouse Not Found"
+					updateTrayTooltip("Mouse Not Found")
+					updateTrayIcon(0, false)
+					broadcast(map[string]interface{}{
+						"level": 0, "charging": false,
+						"status":          "disconnected",
+						"statusText":      "Disconnected",
+						"deviceModel":     deviceModel,
+						"updateAvailable": updateAvailable, "updateVersion": updateVersion,
+					})
 
+					consecutiveReadFails++
+
+					if consecutiveReadFails >= 3 {
+						if logger != nil {
+							logger.Printf("[WARN] consecutiveReadFails=%d → closing device (path=%s)", consecutiveReadFails, currentHIDPath)
+						}
+
+						// --- graceful reader shutdown ---
+						inputMu.Lock()
+						done := readerDone // snapshot
+						inputMu.Unlock()
+
+						if device != nil {
+							device.Close() // this unblocks the reader's dev.Read and lets its defer run
+						}
+
+						if done != nil {
+							select {
+							case <-done: // reader signalled it has cleaned up (it will nil globals itself)
+							case <-time.After(800 * time.Millisecond):
+								// last resort: if it didn't exit in time, clear state
+								inputMu.Lock()
+								inputFrames = nil
+								inputDev = nil
+								readerDone = nil
+								inputMu.Unlock()
+							}
+						}
+
+						// now clear device state
+						device = nil
+						hasPrevCharging = false
+						selectedReportLen = 65
+						selectedReportID = 0x00
+						useGetOnly = false
+						useInputReports = false
+						consecutiveReadFails = 0
+					}
+				}
 				<-ticker.C
 				continue
+			} else {
+				softLinkDownCount = 0
 			}
 
 			// battery == -1 means "invalid/no data"
 			if battery >= 0 {
 				consecutiveReadFails = 0
+				recordedUnplug = false
 
 				if !hasPrevCharging {
 					wasCharging = charging
@@ -489,14 +749,12 @@ func updateBattery() {
 
 				// Detect charge completion (skip when battery==0 to avoid noise)
 				if wasCharging && !charging && battery > 0 {
-					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
-					lastChargeLevel = battery
-					saveChargeData()
-				}
-				if charging && battery == 100 && lastChargeLevel != 100 {
-					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
-					lastChargeLevel = 100
-					saveChargeData()
+					// avoid recording an obviously bogus "last charged at 1–2%" blip
+					if battery >= lastChargeLevel || battery >= 10 {
+						lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
+						lastChargeLevel = battery
+						saveChargeData()
+					}
 				}
 
 				// Reset flags when charging
@@ -667,8 +925,36 @@ func updateBattery() {
 
 func updateTrayTooltip(text string) {
 	tip, _ := syscall.UTF16FromString(text)
-	copy(nid.SzTip[:], tip)
-	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+
+	trayInvoke(func() {
+		trayMu.Lock()
+		defer trayMu.Unlock()
+
+		// Clear + bounded copy into SzTip
+		for i := range nid.SzTip {
+			nid.SzTip[i] = 0
+		}
+		n := len(tip)
+		if n > len(nid.SzTip) {
+			n = len(nid.SzTip)
+		}
+		copy(nid.SzTip[:n], tip[:n])
+
+		// 1) Focus the icon (helps some shells)
+		win.Shell_NotifyIcon(win.NIM_SETFOCUS, &nid)
+
+		// 2) Apply the new tooltip AND ask Explorer to show it now
+		//    NOTE: 0x00000080 is NIF_SHOWTIP (not defined in lxn/win)
+		nid.UFlags = win.NIF_TIP | 0x00000080
+		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+
+		// 3) (Re)assert v4 behavior—harmless if already set
+		nid.UVersion = win.NOTIFYICON_VERSION_4
+		win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
+
+		// 4) Restore baseline flags for future updates
+		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+	})
 }
 
 /* ---------------------- */
@@ -747,47 +1033,73 @@ func sendBatteryFeatureAnyLen(d *hid.Device, reportID byte, body []byte) error {
 }
 
 func getBatteryFeatureAnyLen(d *hid.Device, reportID byte) (int, bool, bool, int) {
-	sizes := []int{65, 33, 16, 9}
+	sizes := []int{65, 33, 16, 9} // try 65, then one smaller; skip 16/9 to stay snappy
 	for _, sz := range sizes {
-		if sz < 1 {
-			continue
-		}
 		buf := make([]byte, sz)
 		buf[0] = reportID
 		n, err := d.GetFeatureReport(buf)
 		if err != nil {
+			// Fast-bail if driver says "Incorrect function"
+			if strings.Contains(strings.ToLower(err.Error()), "incorrect function") {
+				if logger != nil {
+					logger.Printf("GetFeatureReport invalid on this path (rid=0x%02x, len=%d): %v", reportID, sz, err)
+				}
+				return 0, false, false, 0
+			}
 			if logger != nil {
 				logger.Printf("GetFeatureReport err (rid=0x%02x, len=%d): %v", reportID, sz, err)
 			}
 			continue
 		}
-		if n == 0 {
-			if logger != nil {
-				logger.Printf("GetFeatureReport returned 0 bytes (rid=0x%02x, len=%d)", reportID, sz)
+		if n > 0 {
+			if lvl, chg, ok := parseBattery(buf[:n]); ok {
+				return lvl, chg, true, sz
 			}
-			continue
-		}
-		if lvl, chg, ok := parseBattery(buf[:n]); ok {
-			return lvl, chg, true, sz
-		}
-		if logger != nil {
-			max := n
-			if max > 16 {
-				max = 16
-			}
-			hb := make([]string, 0, max)
-			for i := 0; i < max; i++ {
-				hb = append(hb, fmt.Sprintf("%02x", buf[i]))
-			}
-			logger.Printf("Unparsed feature (rid=0x%02x, len=%d): %s", reportID, n, strings.Join(hb, " "))
+			// Not battery; don’t keep burning time here.
+			return 0, false, false, 0
 		}
 	}
 	return 0, false, false, 0
 }
 
+func getBatteryFromInputReportsQuick(d *hid.Device) (int, bool, bool) {
+	ensureInputReader(d)
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if inputFrames == nil {
+			return 0, false, false
+		}
+		select {
+		case frame, ok := <-inputFrames:
+			if !ok {
+				inputMu.Lock()
+				inputFrames = nil
+				inputDev = nil
+				inputMu.Unlock()
+				return 0, false, false
+			}
+			if len(frame) > 0 {
+				if lvl, chg, ok := parseBattery(frame); ok {
+					return lvl, chg, true
+				}
+				if likelyNoMouse(frame) {
+					return 0, false, false
+				}
+			}
+		case <-time.After(40 * time.Millisecond):
+		}
+	}
+	return 0, false, false
+}
+
 // Try to read battery from INPUT reports (interrupt IN). Optional OUTPUT poke first.
 func getBatteryFromInputReports(d *hid.Device, reportID byte, tryPoke bool) (int, bool, bool) {
 	ensureInputReader(d)
+
+	if !safeForInput && tryPoke {
+		// Never send OUTPUT pokes on non-vendor pages
+		tryPoke = false
+	}
 
 	if tryPoke {
 		bodies := [][]byte{
@@ -813,7 +1125,10 @@ func getBatteryFromInputReports(d *hid.Device, reportID byte, tryPoke bool) (int
 		select {
 		case frame, ok := <-inputFrames:
 			if !ok {
+				inputMu.Lock()
 				inputFrames = nil
+				inputDev = nil
+				inputMu.Unlock()
 				return 0, false, false
 			}
 			if len(frame) > 0 {
@@ -860,44 +1175,70 @@ func sendBatteryCommand(d *hid.Device) error {
 
 func tryProbeDevice(d *hid.Device) (int, bool, bool, byte) {
 	for _, rid := range probeRIDs {
-		// C) INPUT only (no poke) — FAST PATH
-		if lvl, chg, ok := getBatteryFromInputReports(d, rid, false); ok {
-			selectedReportID = rid
-			selectedReportLen = 65
-			useGetOnly = true
-			useInputReports = true
-			return lvl, chg, true, rid
-		}
-		// C2) INPUT with OUTPUT poke
-		if lvl, chg, ok := getBatteryFromInputReports(d, rid, true); ok {
-			if logger != nil {
-				logger.Printf("Probe OK via INPUT+OUTPUT poke (rid=0x%02x)", rid)
+
+		// A) INPUT quick (no poke)
+		if safeForInput { // ← guard
+			if lvl, chg, ok := getBatteryFromInputReportsQuick(d); ok {
+				selectedReportID = rid
+				selectedReportLen = 65
+				useGetOnly = true
+				useInputReports = true
+
+				if logger != nil {
+					logger.Printf("[PROBE] mode=%s rid=0x%02x",
+						map[bool]string{true: "INPUT", false: "FEATURE"}[useInputReports], rid)
+				}
+				return lvl, chg, true, rid
 			}
-			selectedReportID = rid
-			selectedReportLen = 65
-			useGetOnly = true
-			useInputReports = true
-			return lvl, chg, true, rid
+			// A2) INPUT with minimal OUTPUT poke
+			if lvl, chg, ok := getBatteryFromInputReports(d, rid, true); ok {
+				if logger != nil {
+					logger.Printf("Probe OK via INPUT+OUTPUT poke (rid=0x%02x)", rid)
+				}
+				selectedReportID = rid
+				selectedReportLen = 65
+				useGetOnly = true
+				useInputReports = true
+
+				if logger != nil {
+					logger.Printf("[PROBE] mode=%s rid=0x%02x",
+						map[bool]string{true: "INPUT", false: "FEATURE"}[useInputReports], rid)
+				}
+				return lvl, chg, true, rid
+			}
 		}
 
-		// A) GET-only (Feature) — only try if INPUT failed
+		// B) FEATURE GET-only
 		if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
 			selectedReportID = rid
 			selectedReportLen = usedLen
 			useGetOnly = true
 			useInputReports = false
+
+			if logger != nil {
+				logger.Printf("[PROBE] mode=%s rid=0x%02x",
+					map[bool]string{true: "INPUT", false: "FEATURE"}[useInputReports], rid)
+			}
 			return lvl, chg, true, rid
 		}
 
-		// B) SET->GET (Feature)
-		if err := sendBatteryCommandWithReportID(d, rid); err == nil {
-			time.Sleep(120 * time.Millisecond)
-			if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
-				selectedReportID = rid
-				selectedReportLen = usedLen
-				useGetOnly = false
-				useInputReports = false
-				return lvl, chg, true, rid
+		// C) FEATURE SET -> GET (poke then read)
+		if safeForInput { // vendor page (>= 0xFF00)
+			if err := sendBatteryCommandWithReportID(d, rid); err == nil {
+				time.Sleep(120 * time.Millisecond)
+				if lvl, chg, ok, usedLen := getBatteryFeatureAnyLen(d, rid); ok {
+					selectedReportID = rid
+					selectedReportLen = usedLen
+					useGetOnly = false
+					useInputReports = false
+
+					if logger != nil {
+						logger.Printf("[PROBE] mode=%s rid=0x%02x",
+							map[bool]string{true: "INPUT", false: "FEATURE"}[useInputReports], rid)
+					}
+
+					return lvl, chg, true, rid
+				}
 			}
 		}
 	}
@@ -918,6 +1259,9 @@ func reconnect() {
 		hid.Enumerate(vid, 0, func(info *hid.DeviceInfo) error {
 			// Skip obviously unrelated devices
 			lp := strings.ToLower(info.ProductStr)
+			if info.UsagePage == 0x01 && info.Usage == 0x02 {
+				return nil
+			}
 			if strings.Contains(lp, "gmmk") ||
 				strings.Contains(lp, "keyboard") ||
 				strings.Contains(lp, "headset") ||
@@ -949,6 +1293,9 @@ func reconnect() {
 
 			// Skip obviously unrelated devices
 			lp := strings.ToLower(info.ProductStr)
+			if info.UsagePage == 0x01 && info.Usage == 0x02 {
+				return nil
+			}
 			if strings.Contains(lp, "gmmk") ||
 				strings.Contains(lp, "keyboard") ||
 				strings.Contains(lp, "headset") ||
@@ -1002,31 +1349,72 @@ func reconnect() {
 		return false
 	})
 
+	// If we have a cached path, move it to the front if present
+	if cachedProfile != nil {
+		for i := range candidates {
+			if candidates[i].Path == cachedProfile.Path {
+				if i != 0 {
+					c := candidates[i]
+					copy(candidates[1:i+1], candidates[0:i])
+					candidates[0] = c
+				}
+				break
+			}
+		}
+	}
+
 	// Try each interface until one responds to the battery probe
 	for _, ci := range candidates {
-		if logger != nil {
-			mode := "FEATURE"
-			if useInputReports {
-				mode = "INPUT"
-			}
-			logger.Printf("Connected on %s (RID=0x%02x, mode=%s, len=%d)", ci.Path, selectedReportID, mode, selectedReportLen)
-		}
 		d, err := hid.OpenPath(ci.Path)
 		if err != nil {
 			continue
+		}
+
+		// Set this *before* probing so tryProbeDevice() knows if we're on vendor page.
+		prevSafe := safeForInput
+		safeForInput = (ci.UsagePage >= 0xFF00)
+
+		if logger != nil {
+			logger.Printf("[RECONNECT] trying path=%s usagePage=0x%04x iface=%d", ci.Path, ci.UsagePage, ci.InterfaceNbr)
+		}
+
+		// Fast-validate with cached params if this path matches
+		if cachedProfile != nil && ci.Path == cachedProfile.Path {
+			selectedReportID = cachedProfile.ReportID
+			selectedReportLen = cachedProfile.ReportLen
+			useGetOnly = cachedProfile.UseGetOnly
+			useInputReports = cachedProfile.UseInputReports
+
+			// Single quick read to confirm
+			if lvl, chg, ok := quickValidate(d); ok {
+				device = d
+				deviceModel = pickModel(ci)
+				currentHIDPath = ci.Path
+				safeForInput = (ci.UsagePage >= 0xFF00)
+				logConn(ci.Path, "CACHED")
+				finishConnect(ci.Path, lvl, chg)
+				return
+			}
+
+			// fall through to full probe if quick check failed
 		}
 
 		lvl, chg, ok, rid := tryProbeDevice(d)
 		if ok {
 			device = d
 			selectedReportID = rid
-
-			deviceModel = "Unknown"
-			if ci.ProductStr != "" {
-				deviceModel = ci.ProductStr
-			} else if name, ok := deviceNames[ci.ProductID]; ok {
-				deviceModel = name
-			}
+			deviceModel = pickModel(ci)
+			currentHIDPath = ci.Path
+			safeForInput = (ci.UsagePage >= 0xFF00)
+			logConn(ci.Path, "PROBED")
+			// persist profile for this exact path
+			saveConnProfile(DeviceProfile{
+				Path:            ci.Path, // <- the path you actually opened
+				ReportID:        selectedReportID,
+				ReportLen:       selectedReportLen,
+				UseGetOnly:      useGetOnly,      // <- preserve actual mode
+				UseInputReports: useInputReports, // <- preserve actual mode
+			})
 
 			batteryLvl = lvl
 			isCharging = chg
@@ -1041,12 +1429,59 @@ func reconnect() {
 			updateTrayIcon(lvl, chg)
 			return
 		}
-
+		currentHIDPath = ci.Path
+		safeForInput = prevSafe
 		d.Close()
+
 	}
 }
 
+func quickValidate(d *hid.Device) (int, bool, bool) {
+	// If cached mode was INPUT, try a single short read without poke
+	if useInputReports && safeForInput {
+		ensureInputReader(d)
+		deadline := time.Now().Add(250 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if inputFrames == nil {
+				break
+			}
+			select {
+			case frame, ok := <-inputFrames:
+				if !ok {
+					inputMu.Lock()
+					inputFrames = nil
+					inputDev = nil
+					inputMu.Unlock()
+					return 0, false, false
+				}
+				if len(frame) > 0 {
+					if lvl, chg, ok := parseBattery(frame); ok {
+						return lvl, chg, true
+					}
+				}
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		return 0, false, false
+	}
+
+	// FEATURE quick read: 65 only, one shot
+	buf := make([]byte, 65)
+	buf[0] = selectedReportID
+	if n, err := d.GetFeatureReport(buf); err == nil && n > 0 {
+		if lvl, chg, ok := parseBattery(buf[:n]); ok {
+			return lvl, chg, true
+		}
+	}
+	return 0, false, false
+}
+
 func likelyNoMouse(buf []byte) bool {
+	// Very short “nothing here” frames
+	if len(buf) <= 5 {
+		return true
+	}
+
 	// If first up to 16 bytes are all 0x00/0xFF → likely no link
 	max := len(buf)
 	if max > 16 {
@@ -1061,6 +1496,7 @@ func likelyNoMouse(buf []byte) bool {
 	if nonTrivial == 0 {
 		return true
 	}
+
 	// Common idle: reportID + ~8 zeros
 	if len(buf) >= 9 {
 		zeros := 0
@@ -1087,24 +1523,46 @@ func testBattery(d *hid.Device) (int, bool) {
 func readBattery() (int, bool) {
 	if device == nil {
 		linkDown = true
+		if logger != nil {
+			logger.Printf("[LINK] down on path=%s", currentHIDPath)
+		}
 		return -1, false
 	}
 
-	// Fast path: if this session is input-based, just read input frames.
-	if useInputReports {
+	// Fast path: input reports
+	if useInputReports && safeForInput {
 		if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, false); ok {
 			linkDown = false
+			recordedUnplug = false
+
+			if logger != nil {
+				logger.Printf("[READ] linkDown=%v lvl=%d chg=%v (path=%s, rid=0x%02x, mode=%s len=%d)",
+					linkDown, lvl, chg, currentHIDPath, selectedReportID,
+					map[bool]string{true: "INPUT", false: "FEATURE"}[useInputReports], selectedReportLen)
+			}
+
 			return lvl, chg
 		}
 		if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, true); ok {
 			linkDown = false
+			recordedUnplug = false
+
+			if logger != nil {
+				logger.Printf("[READ] linkDown=%v lvl=%d chg=%v (path=%s, rid=0x%02x, mode=%s len=%d)",
+					linkDown, lvl, chg, currentHIDPath, selectedReportID,
+					map[bool]string{true: "INPUT", false: "FEATURE"}[useInputReports], selectedReportLen)
+			}
+
 			return lvl, chg
 		}
 		linkDown = true
+		if logger != nil {
+			logger.Printf("[LINK] down on path=%s", currentHIDPath)
+		}
 		return -1, false
 	}
 
-	// Feature-based path (current behavior) -------------------------------
+	// FEATURE path (for 0x258A etc.)
 	if !useGetOnly {
 		if err := sendBatteryCommandWithReportID(device, selectedReportID); err != nil {
 			if logger != nil {
@@ -1127,15 +1585,19 @@ func readBattery() (int, bool) {
 	if err == nil && n > 0 {
 		if lvl, chg, ok := parseBattery(buf[:n]); ok {
 			linkDown = false
+			recordedUnplug = false
 			return lvl, chg
 		}
 		if likelyNoMouse(buf[:n]) {
 			linkDown = true
+			if logger != nil {
+				logger.Printf("[LINK] down on path=%s", currentHIDPath)
+			}
 			return -1, false
 		}
 	}
 
-	// Second attempt with 65 bytes regardless of selected len
+	// Retry with 65 bytes
 	if rl != 65 {
 		big := make([]byte, 65)
 		big[0] = selectedReportID
@@ -1143,46 +1605,69 @@ func readBattery() (int, bool) {
 			if lvl, chg, ok := parseBattery(big[:n2]); ok {
 				selectedReportLen = 65
 				linkDown = false
+				recordedUnplug = false
 				return lvl, chg
 			}
 			if likelyNoMouse(big[:n2]) {
 				linkDown = true
+				if logger != nil {
+					logger.Printf("[LINK] down on path=%s", currentHIDPath)
+				}
 				return -1, false
 			}
 		}
 	}
 
-	// **New**: unconditional INPUT fallback when Feature path failed
-	if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, false); ok {
-		useInputReports = true // flip session to input mode from now on
-		linkDown = false
-		return lvl, chg
-	}
-	if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, true); ok {
-		useInputReports = true
-		linkDown = false
-		return lvl, chg
+	// Last-ditch: try INPUT in case the device actually talks there
+	if safeForInput {
+		if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, false); ok {
+			useInputReports = true
+			linkDown = false
+			recordedUnplug = false
+			p := currentHIDPath
+			if p == "" && cachedProfile != nil {
+				p = cachedProfile.Path
+			}
+			saveConnProfile(DeviceProfile{
+				Path:            p,
+				ReportID:        selectedReportID,
+				ReportLen:       selectedReportLen,
+				UseGetOnly:      true,
+				UseInputReports: true,
+			})
+			return lvl, chg
+		}
+		if lvl, chg, ok := getBatteryFromInputReports(device, selectedReportID, true); ok {
+			useInputReports = true
+			linkDown = false
+			recordedUnplug = false
+			return lvl, chg
+		}
 	}
 
 	linkDown = true
+	if logger != nil {
+		logger.Printf("[LINK] down on path=%s", currentHIDPath)
+	}
 	return -1, false
 }
 
 func createBatteryIcon(level int, charging bool, frame int) win.HICON {
-	// Get system metrics for icon size
+	defer safeDefer("createBatteryIcon")
+
 	getSystemMetrics := user32.NewProc("GetSystemMetrics")
 	smCxIcon, _, _ := getSystemMetrics.Call(uintptr(11)) // SM_CXICON
 	smCyIcon, _, _ := getSystemMetrics.Call(uintptr(12)) // SM_CYICON
 
-	// Use larger size for better visibility (2x the system icon size)
 	width := int32(smCxIcon) * 2
 	height := int32(smCyIcon) * 2
 	if width < 64 {
 		width = 64
+	}
+	if height < 64 {
 		height = 64
 	}
 
-	// Create BITMAPV5HEADER for 32-bit ARGB
 	type BITMAPV5HEADER struct {
 		Size          uint32
 		Width         int32
@@ -1213,17 +1698,24 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 	bi := BITMAPV5HEADER{
 		Size:        uint32(unsafe.Sizeof(BITMAPV5HEADER{})),
 		Width:       width,
-		Height:      -height, // Negative for top-down
+		Height:      -height, // top-down is fine
 		Planes:      1,
 		BitCount:    32,
-		Compression: 3, // BI_BITFIELDS
-		RedMask:     0x00FF0000,
-		GreenMask:   0x0000FF00,
-		BlueMask:    0x000000FF,
-		AlphaMask:   0xFF000000,
+		Compression: 0, // BI_RGB instead of BI_BITFIELDS
+		// leave masks as 0 when BI_RGB
+		RedMask:   0,
+		GreenMask: 0,
+		BlueMask:  0,
+		AlphaMask: 0,
 	}
 
 	hdc := win.GetDC(0)
+	if hdc == 0 {
+		if logger != nil {
+			logger.Printf("[ICON] GetDC failed")
+		}
+		return nid.HIcon // keep old icon
+	}
 	defer win.ReleaseDC(0, hdc)
 
 	var pBits unsafe.Pointer
@@ -1238,108 +1730,189 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 		0,
 		0,
 	)
-
 	if hBitmap == 0 || pBits == nil {
-		return 0
+		if logger != nil {
+			logger.Printf("[ICON] CreateDIBSection failed")
+		}
+		return nid.HIcon
 	}
 
-	// Draw battery icon in ARGB buffer
-	size := width * height
-	pixelSlice := unsafe.Slice((*uint32)(pBits), size)
+	// Use int for length to satisfy unsafe.Slice
+	total := int(width) * int(height)
+	pixelSlice := unsafe.Slice((*uint32)(pBits), total)
 
-	// Clear to transparent
+	inBounds := func(x, y int32) bool { return x >= 0 && y >= 0 && x < width && y < height }
+	set := func(x, y int32, c uint32) {
+		if inBounds(x, y) {
+			pixelSlice[int(y)*int(width)+int(x)] = c
+		}
+	}
+
 	for i := range pixelSlice {
 		pixelSlice[i] = 0x00000000
 	}
 
-	// Determine fill color
 	var fillColor uint32
 	if charging {
-		fillColor = 0xFF0078D4 // Blue
+		fillColor = 0xFF0078D4
 	} else if level >= 50 {
-		fillColor = 0xFF107C10 // Green
+		fillColor = 0xFF107C10
 	} else if level >= 20 {
-		fillColor = 0xFFF7630C // Orange
+		fillColor = 0xFFF7630C
 	} else {
-		fillColor = 0xFFC42B1C // Red
+		fillColor = 0xFFC42B1C
 	}
-
 	black := uint32(0xFF000000)
 	white := uint32(0xFFFFFFFF)
 
-	// Scale coordinates based on icon size
 	scale := float32(width) / 64.0
+	if scale <= 0 {
+		scale = 1
+	}
 
-	// Battery body coordinates (scaled)
 	bodyLeft := int32(float32(10) * scale)
 	bodyTop := int32(float32(20) * scale)
 	bodyRight := int32(float32(50) * scale)
 	bodyBottom := int32(float32(44) * scale)
+	if bodyRight <= bodyLeft+2 {
+		bodyRight = bodyLeft + 2
+	}
+	if bodyBottom <= bodyTop+2 {
+		bodyBottom = bodyTop + 2
+	}
+	if bodyRight >= width {
+		bodyRight = width - 1
+	}
+	if bodyBottom >= height {
+		bodyBottom = height - 1
+	}
 
-	// Draw battery body
 	for y := bodyTop; y <= bodyBottom; y++ {
 		for x := bodyLeft; x <= bodyRight; x++ {
 			if y == bodyTop || y == bodyBottom || x == bodyLeft || x == bodyRight {
-				pixelSlice[y*width+x] = black // Outline
+				set(x, y, black)
 			} else {
-				pixelSlice[y*width+x] = white // Inside
+				set(x, y, white)
 			}
 		}
 	}
 
-	// Draw battery tip
 	tipLeft := bodyRight + 1
 	tipRight := int32(float32(56) * scale)
 	tipTop := int32(float32(27) * scale)
 	tipBottom := int32(float32(37) * scale)
+	if tipRight < tipLeft {
+		tipRight = tipLeft
+	}
+	if tipBottom < tipTop {
+		tipBottom = tipTop
+	}
+	if tipRight >= width {
+		tipRight = width - 1
+	}
+	if tipBottom >= height {
+		tipBottom = height - 1
+	}
 	for y := tipTop; y <= tipBottom; y++ {
 		for x := tipLeft; x <= tipRight; x++ {
-			pixelSlice[y*width+x] = black
+			set(x, y, black)
 		}
 	}
 
-	// Fill battery based on level with animation for charging
 	if level > 0 {
 		displayLevel := level
 		if charging {
-			// Pulsing animation: cycle through +0%, +10%, +20%
 			displayLevel = level + (frame * 10)
 			if displayLevel > 100 {
 				displayLevel = 100
 			}
 		}
-		fillWidth := int32(float32(38) * scale * float32(displayLevel) / 100.0)
+		maxFillPixels := (bodyRight - (bodyLeft + 1))
+		if maxFillPixels < 0 {
+			maxFillPixels = 0
+		}
+		fw := int32(float32(38) * scale * float32(displayLevel) / 100.0)
+		if fw < 0 {
+			fw = 0
+		}
+		if fw > maxFillPixels {
+			fw = maxFillPixels
+		}
 		for y := bodyTop + 1; y < bodyBottom; y++ {
-			for x := bodyLeft + 1; x < bodyLeft+1+fillWidth; x++ {
-				if x < bodyRight {
-					pixelSlice[y*width+x] = fillColor
-				}
+			for x := bodyLeft + 1; x < bodyLeft+1+fw; x++ {
+				set(x, y, fillColor)
 			}
 		}
 	}
 
-	// Create icon from bitmap
+	hMask := win.CreateBitmap(width, height, 1, 1, nil) // or unsafe.Pointer(nil)
+	if hMask == 0 {
+		if logger != nil {
+			logger.Printf("[ICON] CreateBitmap(mask) failed")
+		}
+		win.DeleteObject(win.HGDIOBJ(hBitmap))
+		return nid.HIcon
+	}
+
 	var iconInfo win.ICONINFO
 	iconInfo.FIcon = 1
 	iconInfo.HbmColor = win.HBITMAP(hBitmap)
-	iconInfo.HbmMask = win.HBITMAP(hBitmap)
+	iconInfo.HbmMask = hMask // ← give a real mask
 
 	hIcon := win.CreateIconIndirect(&iconInfo)
+	if hIcon == 0 {
+		if logger != nil {
+			logger.Printf("[ICON] CreateIconIndirect failed")
+		}
+		win.DeleteObject(win.HGDIOBJ(hBitmap))
+		win.DeleteObject(win.HGDIOBJ(hMask))
+		return nid.HIcon
+	}
+
+	// We no longer need the source bitmaps after the HICON is created.
 	win.DeleteObject(win.HGDIOBJ(hBitmap))
+	win.DeleteObject(win.HGDIOBJ(hMask))
 
 	return hIcon
 }
 
 func updateTrayIcon(level int, charging bool) {
-	oldIcon := nid.HIcon
-	nid.HIcon = createBatteryIcon(level, charging, animationFrame)
-	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
-	if oldIcon != 0 {
-		win.DestroyIcon(oldIcon)
+	newIcon := createBatteryIcon(level, charging, animationFrame)
+	if newIcon == 0 {
+		return
 	}
+	trayInvoke(func() {
+		trayMu.Lock()
+		oldIcon := nid.HIcon
+		nid.HIcon = newIcon
+
+		// IMPORTANT: include NIF_TIP and SHOWTIP so we don't stomp tooltip updates.
+		// 0x00000080 == NIF_SHOWTIP (not defined in lxn/win)
+		nid.UFlags = win.NIF_ICON | win.NIF_TIP | 0x00000080
+		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+
+		// Keep baseline flags consistent
+		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+		trayMu.Unlock()
+
+		if oldIcon != 0 && oldIcon != newIcon {
+			select {
+			case iconReap <- oldIcon:
+			default:
+			}
+		}
+	})
 }
 
 func animateChargingIcon() {
+	defer safeDefer("animateChargingIcon")
+	defer func() {
+		if r := recover(); r != nil {
+			if logger != nil {
+				logger.Printf("animateChargingIcon recovered: %v", r)
+			}
+		}
+	}()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1391,7 +1964,9 @@ func saveChargeData() {
 	if err != nil {
 		return
 	}
-	os.WriteFile(dataFile, data, 0644)
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	_ = os.WriteFile(dataFile, data, 0644)
 }
 
 func loadSettings() {
@@ -1416,7 +1991,9 @@ func saveSettings() {
 	if err != nil {
 		return
 	}
-	os.WriteFile(settingsFile, data, 0644)
+	fileMu.Lock()
+	_ = os.WriteFile(settingsFile, data, 0644)
+	fileMu.Unlock()
 
 	// Apply startup setting (always updates path to current location)
 	if settings.StartWithWindows {
@@ -1440,10 +2017,36 @@ func handleSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if newSettings.RefreshInterval < 1 {
+			newSettings.RefreshInterval = 5
+		}
 		settings = newSettings
 		saveSettings()
 		json.NewEncoder(w).Encode(map[string]bool{"success": true})
 	}
+}
+
+func loadConnProfile() {
+	b, err := os.ReadFile(cacheFile)
+	if err != nil || len(b) == 0 {
+		return
+	}
+	var p DeviceProfile
+	if json.Unmarshal(b, &p) == nil && p.Path != "" {
+		cachedProfile = &p
+	}
+}
+func saveConnProfile(p DeviceProfile) {
+	cachedProfile = &p
+	b := mustJSON(p)
+	fileMu.Lock()
+	_ = os.WriteFile(cacheFile, b, 0644)
+	fileMu.Unlock()
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	return b
 }
 
 func handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1598,27 +2201,26 @@ func calculateEMA(rates []float64) float64 {
 }
 
 func sendNotification(title, message string, critical bool) {
-	log.Printf("Sending notification: %s - %s", title, message)
-
-	// Send Windows notification via system tray
-	nid.UFlags = win.NIF_INFO
-	nid.DwInfoFlags = win.NIIF_INFO
-	if critical {
-		nid.DwInfoFlags = win.NIIF_WARNING
-	}
-
 	infoTitle, _ := syscall.UTF16FromString(title)
-	copy(nid.SzInfoTitle[:], infoTitle)
-
 	infoText, _ := syscall.UTF16FromString(message)
-	copy(nid.SzInfo[:], infoText)
 
-	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+	trayInvoke(func() {
+		trayMu.Lock()
+		nid.UFlags = win.NIF_INFO
+		if critical {
+			nid.DwInfoFlags = win.NIIF_WARNING
+		} else {
+			nid.DwInfoFlags = win.NIIF_INFO
+		}
+		copy(nid.SzInfoTitle[:], infoTitle)
+		copy(nid.SzInfo[:], infoText)
+		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 
-	// Reset flags
-	time.Sleep(100 * time.Millisecond)
-	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
-	win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+		// reset flags
+		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+		trayMu.Unlock()
+	})
 }
 
 type GitHubRelease struct {
@@ -1736,6 +2338,47 @@ func downloadAndInstallUpdate(downloadURL string) error {
 	terminateProcess.Call(handle, 0)
 
 	return nil
+}
+
+func pickModel(ci hid.DeviceInfo) string {
+	if ci.ProductStr != "" {
+		return ci.ProductStr
+	}
+	if name, ok := deviceNames[ci.ProductID]; ok {
+		return name
+	}
+	return "Unknown"
+}
+
+func logConn(path string, mode string) {
+	if logger != nil {
+		m := "FEATURE"
+		if useInputReports {
+			m = "INPUT"
+		}
+		logger.Printf("Connected on %s (RID=0x%02x, mode=%s, len=%d) [%s]", path, selectedReportID, m, selectedReportLen, mode)
+	}
+}
+
+func finishConnect(path string, lvl int, chg bool) {
+	recordedUnplug = false
+	saveConnProfile(DeviceProfile{
+		Path:            path,
+		ReportID:        selectedReportID,
+		ReportLen:       selectedReportLen,
+		UseGetOnly:      useGetOnly,
+		UseInputReports: useInputReports,
+	})
+	batteryLvl = lvl
+	isCharging = chg
+	status := "Discharging"
+	icon := "🔋"
+	if chg {
+		status, icon = "Charging", "⚡"
+	}
+	batteryText = fmt.Sprintf("%s %d%% (%s)", icon, lvl, status)
+	updateTrayTooltip(fmt.Sprintf("Battery: %d%%", lvl))
+	updateTrayIcon(lvl, chg)
 }
 
 func setupLogging() {
