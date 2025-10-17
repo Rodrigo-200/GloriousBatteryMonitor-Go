@@ -15,6 +15,15 @@ var gloriousVendorIDs = []uint16{
 	0x093a, // PixArt (wireless dongles for many Glorious mice)
 }
 
+func isGloriousVendor(vid uint16) bool {
+	for _, known := range gloriousVendorIDs {
+		if vid == known {
+			return true
+		}
+	}
+	return false
+}
+
 var deviceNames = map[uint16]string{
 	0x002f: "Model O Wireless Receiver (Legacy)", // VID 0x258A dongle (older batches)
 	0x0036: "Model O Wireless (Legacy)",          // early Model O wireless per vendor USB ID listings
@@ -451,7 +460,8 @@ func reconnect() {
 				strings.Contains(lowProd, "model i")
 			isVendorPage := info.UsagePage >= 0xFF00
 			_, pidKnown := deviceNames[info.ProductID]
-			if looksGlorious || isVendorPage || pidKnown {
+			vendorMatches := isGloriousVendor(info.VendorID)
+			if looksGlorious || pidKnown || (isVendorPage && vendorMatches) {
 				candidates = append(candidates, *info)
 				seen[info.Path] = true
 			}
