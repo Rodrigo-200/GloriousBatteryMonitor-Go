@@ -160,7 +160,7 @@ The WebView2 runtime adds 50–100MB (standard for Chromium-based UIs).
 
 ## 🙏 Acknowledgments
 
-* [Cruxial0/GloriousBatteryMonitor (C#)](https://github.com/Cruxial0/GloriousBatteryMonitor) – Reference for HID protocol implementation.
+* [AwesomeTy18/GloriousBatteryMonitor (C#)](https://github.com/AwesomeTy18/GloriousBatteryMonitor) – Reference for HID protocol implementation.
 
 ---
 
