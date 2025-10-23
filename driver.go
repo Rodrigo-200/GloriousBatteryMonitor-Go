@@ -29,15 +29,12 @@ var (
 	failCount    int
 )
 
-func initDriver() {
-	hid.Init()
-}
+func initDriver() { hid.Init() }
 
 func parseBattery(data []byte) (int, bool, bool) {
 	if len(data) < 9 {
 		return -1, false, false
 	}
-	// Check multiple possible response formats
 	if data[6] == 0x83 {
 		level := int(data[8])
 		charging := data[7] == 0x01
@@ -45,7 +42,6 @@ func parseBattery(data []byte) (int, bool, bool) {
 			return level, charging, true
 		}
 	}
-	// Try alternate format (some devices report at different offsets)
 	for i := 0; i < len(data)-2; i++ {
 		if data[i] == 0x83 && i+2 < len(data) {
 			level := int(data[i+2])
@@ -67,7 +63,6 @@ func isWirelessInterface(path string) bool {
 
 func findAndConnectMouse() (*MouseDevice, error) {
 	var candidates []hid.DeviceInfo
-
 	hid.Enumerate(0x258a, 0, func(info *hid.DeviceInfo) error {
 		if info.UsagePage == 0x0001 && info.Usage == 0x06 {
 			return nil
@@ -75,7 +70,6 @@ func findAndConnectMouse() (*MouseDevice, error) {
 		candidates = append(candidates, *info)
 		return nil
 	})
-
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no mouse found")
 	}
@@ -94,10 +88,10 @@ func findAndConnectMouse() (*MouseDevice, error) {
 		buf := make([]byte, 65)
 		n, _ := dev.GetFeatureReport(buf)
 		if n <= 0 {
+			dev.Close()
 			continue
 		}
 		level, charging, valid := parseBattery(buf[:n])
-
 		if valid {
 			mouse := &MouseDevice{
 				handle:     dev,
@@ -105,16 +99,13 @@ func findAndConnectMouse() (*MouseDevice, error) {
 				modelName:  knownDevices[0x258a][info.ProductID],
 				isWireless: isWirelessInterface(info.Path),
 			}
-
 			if logger != nil {
-				logger.Printf("[DRIVER] Connected: %s (wireless:%v) %d%% charging:%v",
-					mouse.modelName, mouse.isWireless, level, charging)
+				logger.Printf("[DRIVER] Connected: %s (wireless:%v) %d%% charging:%v", mouse.modelName, mouse.isWireless, level, charging)
 			}
 			return mouse, nil
 		}
 		dev.Close()
 	}
-
 	return nil, fmt.Errorf("no working mouse")
 }
 
@@ -131,7 +122,6 @@ func (m *MouseDevice) ReadBattery() (int, bool, error) {
 		}
 		return -1, false, err
 	}
-
 	time.Sleep(50 * time.Millisecond)
 
 	buf := make([]byte, 65)
@@ -142,7 +132,6 @@ func (m *MouseDevice) ReadBattery() (int, bool, error) {
 		}
 		return -1, false, fmt.Errorf("read failed")
 	}
-
 	if logger != nil {
 		if n > 0 {
 			logger.Printf("[READ] Received %d bytes: %02x", n, buf[:min(n, 16)])
@@ -150,7 +139,6 @@ func (m *MouseDevice) ReadBattery() (int, bool, error) {
 			logger.Printf("[READ] Received %d bytes (invalid)", n)
 		}
 	}
-
 	if n <= 0 {
 		return 0, false, fmt.Errorf("invalid byte count: %d", n)
 	}
@@ -162,11 +150,9 @@ func (m *MouseDevice) ReadBattery() (int, bool, error) {
 		}
 		return -1, false, fmt.Errorf("invalid")
 	}
-
 	if logger != nil {
 		logger.Printf("[READ] Battery: %d%% charging=%v", level, charging)
 	}
-
 	return level, charging, nil
 }
 
@@ -182,13 +168,11 @@ func reconnect() {
 	defer mouseMutex.Unlock()
 
 	mouse := currentMouse
-
 	if mouse != nil {
 		level, charging, err := mouse.ReadBattery()
 		if err == nil {
 			failCount = 0
-			
-			// Detect charge completion: wasCharging was true, now charging is false
+
 			if wasCharging && !charging && level > 0 {
 				if level >= lastChargeLevel || level >= 10 {
 					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
@@ -199,12 +183,70 @@ func reconnect() {
 					}
 				}
 			}
-			
+
+			if charging {
+				if lastChargeLevel2 < 0 {
+					lastChargeLevel2 = level
+					lastChargeTime2 = time.Now()
+					if logger != nil {
+						logger.Printf("[RATE] Initialized charge tracking: level=%d", level)
+					}
+				} else if level > lastChargeLevel2 {
+					if (level - lastChargeLevel2) >= 1 {
+						elapsed := time.Since(lastChargeTime2).Hours()
+						if elapsed > 0.01 {
+							newRate := float64(level-lastChargeLevel2) / elapsed
+							chargeRateHistory = append(chargeRateHistory, newRate)
+							if len(chargeRateHistory) > 10 {
+								chargeRateHistory = chargeRateHistory[1:]
+							}
+							chargeRate = calculateEMA(chargeRateHistory)
+							if logger != nil {
+								logger.Printf("[RATE] Charge rate updated: delta=%d%%, elapsed=%.2fh, newRate=%.2f%%/h, EMA=%.2f%%/h, samples=%d", level-lastChargeLevel2, elapsed, newRate, chargeRate, len(chargeRateHistory))
+							}
+							lastChargeLevel2 = level
+							lastChargeTime2 = time.Now()
+							if len(chargeRateHistory) >= 3 {
+								saveChargeData()
+							}
+						}
+					}
+				}
+			} else {
+				if lastBatteryLevel < 0 {
+					lastBatteryLevel = level
+					lastBatteryTime = time.Now()
+					if logger != nil {
+						logger.Printf("[RATE] Initialized discharge tracking: level=%d", level)
+					}
+				} else if lastBatteryLevel > level {
+					if (lastBatteryLevel - level) >= 1 {
+						elapsed := time.Since(lastBatteryTime).Hours()
+						if elapsed > 0.01 {
+							newRate := float64(lastBatteryLevel-level) / elapsed
+							rateHistory = append(rateHistory, newRate)
+							if len(rateHistory) > 10 {
+								rateHistory = rateHistory[1:]
+							}
+							dischargeRate = calculateEMA(rateHistory)
+							if logger != nil {
+								logger.Printf("[RATE] Discharge rate updated: delta=%d%%, elapsed=%.2fh, newRate=%.2f%%/h, EMA=%.2f%%/h, samples=%d", lastBatteryLevel-level, elapsed, newRate, dischargeRate, len(rateHistory))
+							}
+							lastBatteryLevel = level
+							lastBatteryTime = time.Now()
+							if len(rateHistory) >= 3 {
+								saveChargeData()
+							}
+						}
+					}
+				}
+			}
+
 			batteryLvl = level
 			isCharging = charging
-			wasCharging = charging
 			deviceModel = mouse.modelName
 			linkDown = false
+			wasCharging = charging
 
 			lastKnownMu.Lock()
 			showLastKnown = false
@@ -216,9 +258,78 @@ func reconnect() {
 				updateTrayTooltip(fmt.Sprintf("Battery: %d%%", level))
 				updateTrayIcon(level, charging, false)
 			})
-			broadcast(map[string]interface{}{
+
+			timeRemaining := ""
+			if !charging && dischargeRate > 0.5 && level > 0 {
+				hoursLeft := float64(level) / dischargeRate
+				if logger != nil {
+					logger.Printf("[TIME] Discharge: level=%d, rate=%.2f, hoursLeft=%.2f", level, dischargeRate, hoursLeft)
+				}
+				if hoursLeft < 100 && hoursLeft > 0 {
+					hours := int(hoursLeft)
+					minutes := int((hoursLeft - float64(hours)) * 60)
+					if hours >= 24 {
+						days := hours / 24
+						remainingHours := hours % 24
+						if remainingHours > 0 {
+							timeRemaining = fmt.Sprintf("%dd %dh", days, remainingHours)
+						} else {
+							timeRemaining = fmt.Sprintf("%dd", days)
+						}
+					} else if hours > 0 {
+						timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
+					} else if minutes > 0 {
+						timeRemaining = fmt.Sprintf("%dm", minutes)
+					}
+					if logger != nil {
+						logger.Printf("[TIME] Discharge result: timeRemaining='%s'", timeRemaining)
+					}
+				}
+			} else if charging && chargeRate > 0.5 && level < 100 {
+				hoursLeft := float64(100-level) / chargeRate
+				if logger != nil {
+					logger.Printf("[TIME] Charge: level=%d, rate=%.2f, hoursLeft=%.2f", level, chargeRate, hoursLeft)
+				}
+				if hoursLeft < 100 && hoursLeft > 0 {
+					hours := int(hoursLeft)
+					minutes := int((hoursLeft - float64(hours)) * 60)
+					if hours >= 24 {
+						days := hours / 24
+						remainingHours := hours % 24
+						if remainingHours > 0 {
+							timeRemaining = fmt.Sprintf("%dd %dh", days, remainingHours)
+						} else {
+							timeRemaining = fmt.Sprintf("%dd", days)
+						}
+					} else if hours > 0 {
+						timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
+					} else if minutes > 0 {
+						timeRemaining = fmt.Sprintf("%dm", minutes)
+					}
+					if logger != nil {
+						logger.Printf("[TIME] Charge result: timeRemaining='%s'", timeRemaining)
+					}
+				}
+			} else {
+				if logger != nil {
+					logger.Printf("[TIME] No calculation: charging=%v, dischargeRate=%.2f, chargeRate=%.2f, level=%d", charging, dischargeRate, chargeRate, level)
+				}
+			}
+
+			payload := map[string]interface{}{
 				"status": "connected", "level": level, "charging": charging, "lastKnown": false,
-			})
+			}
+			if timeRemaining != "" {
+				payload["timeRemaining"] = timeRemaining
+				if logger != nil {
+					logger.Printf("[TIME] Including timeRemaining in broadcast: '%s'", timeRemaining)
+				}
+			} else {
+				if logger != nil {
+					logger.Printf("[TIME] NOT including timeRemaining in broadcast (empty string)")
+				}
+			}
+			broadcast(payload)
 			return
 		}
 
@@ -247,8 +358,7 @@ func reconnect() {
 	if err != nil {
 		if !linkDown {
 			linkDown = true
-			
-			// Save charge data when unplugging while charging
+
 			if wasCharging && batteryLvl > 0 {
 				if batteryLvl >= lastChargeLevel || batteryLvl >= 10 {
 					lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
@@ -259,7 +369,7 @@ func reconnect() {
 					}
 				}
 			}
-			
+
 			lastKnownMu.Lock()
 			lk := lastKnownLevel
 			lkchg := lastKnownCharging
@@ -273,9 +383,7 @@ func reconnect() {
 					updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
 					updateTrayIcon(lk, lkchg, true)
 				})
-				broadcast(map[string]interface{}{
-					"status": "disconnected", "level": lk, "charging": lkchg, "lastKnown": true,
-				})
+				broadcast(map[string]interface{}{"status": "disconnected", "level": lk, "charging": lkchg, "lastKnown": true})
 			} else {
 				batteryLvl = 0
 				isCharging = false
@@ -283,9 +391,7 @@ func reconnect() {
 					updateTrayTooltip("Mouse Not Found")
 					updateTrayIcon(0, false, false)
 				})
-				broadcast(map[string]interface{}{
-					"status": "disconnected", "level": 0, "charging": false, "lastKnown": false,
-				})
+				broadcast(map[string]interface{}{"status": "disconnected", "level": 0, "charging": false, "lastKnown": false})
 			}
 		}
 		return
@@ -307,9 +413,7 @@ func reconnect() {
 			updateTrayTooltip(fmt.Sprintf("Battery: %d%%", batteryLvl))
 			updateTrayIcon(batteryLvl, isCharging, false)
 		})
-		broadcast(map[string]interface{}{
-			"status": "connected", "level": batteryLvl, "charging": isCharging, "lastKnown": false,
-		})
+		broadcast(map[string]interface{}{"status": "connected", "level": batteryLvl, "charging": isCharging, "lastKnown": false})
 	}
 }
 
@@ -317,11 +421,9 @@ func readBattery() (int, bool) {
 	mouseMutex.Lock()
 	mouse := currentMouse
 	mouseMutex.Unlock()
-
 	if mouse == nil {
 		return -1, false
 	}
-
 	level, charging, err := mouse.ReadBattery()
 	if err != nil {
 		return -1, false
@@ -339,7 +441,6 @@ func safeCloseDevice() {
 	device = nil
 }
 
-// Stubs
 func isGloriousVendor(vid uint16) bool { _, ok := knownDevices[vid]; return ok }
 func min(a, b int) int {
 	if a < b {
@@ -347,6 +448,8 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// Stubs
 func tryImmediateWorkerQuickProbe() bool                            { return false }
 func findDeviceInfoByPath(path string) *hid.DeviceInfo              { return nil }
 func scheduleForceCloseIfStale(path string)                         {}

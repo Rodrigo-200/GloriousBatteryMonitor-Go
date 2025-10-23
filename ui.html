@@ -854,6 +854,7 @@
         let lastHidDump = '';
         let lastHidHex = '';
         let lastHidPath = '';
+        let lastTimeRemaining = null; // Cache last valid time remaining
 
         function parseTime(timeStr) {
             if (!timeStr || timeStr === 'Calculating...') return null;
@@ -1362,22 +1363,26 @@
             const timeRemainingCard = document.getElementById('timeRemainingCard');
             const timeRemaining = document.getElementById('timeRemaining');
             const timeLabel = timeRemainingCard.querySelector('.info-label');
-            if (data.timeRemaining && data.timeRemaining !== '') {
-                timeRemaining.textContent = smoothTime(data.timeRemaining);
+            
+            // Update time remaining if provided, otherwise keep showing last valid value
+            if (data.timeRemaining) {
+                const smoothed = smoothTime(data.timeRemaining);
+                if (smoothed && smoothed !== '' && smoothed !== 'Calculating...') {
+                    lastTimeRemaining = smoothed;
+                }
+            }
+            
+            // Always show the card if we have a valid time remaining
+            if (lastTimeRemaining) {
+                timeRemaining.textContent = lastTimeRemaining;
                 if (data.charging) {
                     timeLabel.childNodes[0].textContent = 'Time to Full ';
                 } else {
                     timeLabel.childNodes[0].textContent = 'Time Remaining ';
                 }
                 timeRemainingCard.style.display = 'block';
-            } else if (data.charging) {
-                timeRemaining.textContent = 'Calculating...';
-                timeLabel.childNodes[0].textContent = 'Time to Full ';
-                timeRemainingCard.style.display = 'block';
-            } else if (!data.charging) {
-                timeRemaining.textContent = 'Calculating...';
-                timeLabel.childNodes[0].textContent = 'Time Remaining ';
-                timeRemainingCard.style.display = 'block';
+            } else {
+                timeRemainingCard.style.display = 'none';
             }
 
             const level = Math.max(0, Math.min(100, parseInt(data.level, 10) || 0));

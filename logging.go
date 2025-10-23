@@ -11,9 +11,7 @@ import (
 )
 
 func setupLogging() {
-	if err := os.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
-	}
-
+	_ = os.MkdirAll(filepath.Dir(logFile), 0755)
 	logFileHandle, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
 		logFileHandle, err = os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -22,15 +20,11 @@ func setupLogging() {
 			return
 		}
 	}
-
 	log.SetOutput(logFileHandle)
 	log.SetFlags(log.LstdFlags)
-
 	logger = log.New(logFileHandle, "", log.LstdFlags)
-
 	logger.Printf("=== Glorious Battery Monitor v%s Started ===", currentVersion)
 	logger.Printf("Log file location: %s", logFile)
-
 	scanAllDevices()
 }
 
@@ -38,7 +32,6 @@ func scanAllDevices() {
 	if logger == nil {
 		return
 	}
-
 	logger.Printf("=== Scanning for HID devices ===")
 	for _, vid := range gloriousVendorIDs {
 		logger.Printf("Scanning for Glorious VID: 0x%04x", vid)
@@ -56,7 +49,6 @@ func scanAllDevices() {
 			logger.Printf("No devices found for VID: 0x%04x", vid)
 		}
 	}
-
 	logger.Printf("Fallback probe for suspicious-but-possible Glorious interfaces…")
 	count := 0
 	hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
@@ -110,15 +102,11 @@ type HIDScanResult struct {
 	GloriousCount   int             `json:"gloriousCount"`
 }
 
-// scanAllHIDDevices performs a comprehensive scan of all HID devices
-// regardless of whether a Glorious mouse is currently detected
 func scanAllHIDDevices() *HIDScanResult {
 	result := &HIDScanResult{
 		GloriousDevices: []HIDDeviceInfo{},
 		AllDevices:      []HIDDeviceInfo{},
 	}
-
-	// Scan all HID devices (VID=0, PID=0 means enumerate all)
 	hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
 		devInfo := HIDDeviceInfo{
 			Path:         info.Path,
@@ -132,8 +120,6 @@ func scanAllHIDDevices() *HIDScanResult {
 			InterfaceNbr: info.InterfaceNbr,
 			ReleaseNbr:   int(info.ReleaseNbr),
 		}
-
-		// Check if this is a Glorious device
 		isGlorious := false
 		for _, vid := range gloriousVendorIDs {
 			if info.VendorID == vid {
@@ -141,14 +127,10 @@ func scanAllHIDDevices() *HIDScanResult {
 				break
 			}
 		}
-		// Also check product string
 		if !isGlorious && strings.Contains(strings.ToLower(info.ProductStr), "glorious") {
 			isGlorious = true
 		}
-
 		devInfo.IsGlorious = isGlorious
-
-		// Try to get model name
 		if isGlorious {
 			if name, ok := deviceNames[info.ProductID]; ok {
 				devInfo.ModelName = name
@@ -160,25 +142,20 @@ func scanAllHIDDevices() *HIDScanResult {
 			result.GloriousDevices = append(result.GloriousDevices, devInfo)
 			result.GloriousCount++
 		}
-
 		result.AllDevices = append(result.AllDevices, devInfo)
 		result.TotalCount++
 		return nil
 	})
-
 	return result
 }
 
-// logHIDScanResults logs the scan results to the debug log
 func logHIDScanResults(result *HIDScanResult) {
 	if logger == nil {
 		return
 	}
-
 	logger.Printf("=== HID Device Scan Results ===")
 	logger.Printf("Total devices found: %d", result.TotalCount)
 	logger.Printf("Glorious devices found: %d", result.GloriousCount)
-
 	if result.GloriousCount > 0 {
 		logger.Printf("\n--- Glorious Devices ---")
 		for i, dev := range result.GloriousDevices {
@@ -192,7 +169,6 @@ func logHIDScanResults(result *HIDScanResult) {
 			logger.Printf("    Path: %s", dev.Path)
 		}
 	}
-
 	logger.Printf("\n--- All HID Devices ---")
 	for i, dev := range result.AllDevices {
 		logger.Printf("[%d] VID: %s, PID: %s - %s", i+1, dev.VendorID, dev.ProductID, dev.ProductStr)
