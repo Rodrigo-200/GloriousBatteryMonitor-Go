@@ -14,6 +14,9 @@ var knownDevices = map[uint16]map[uint16]string{
 		0x2023: "Model D Wireless",
 		0x2012: "Model D Wired",
 	},
+	0x093A: {
+		0x824D: "Model D 2 Wireless",
+	},
 }
 
 type MouseDevice struct {
@@ -495,7 +498,7 @@ var (
 	cachedProfile       *DeviceProfile
 	workerManagedDevice bool
 	deviceMu            sync.Mutex
-	gloriousVendorIDs   = []uint16{0x258a}
+	gloriousVendorIDs   = []uint16{0x258a, 0x093A}
 	deviceNames         = map[uint16]string{}
 )
 
