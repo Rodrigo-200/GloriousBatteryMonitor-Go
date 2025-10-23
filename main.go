@@ -1,3 +1,6 @@
+//go:build windows
+// +build windows
+
 package main
 
 import (
@@ -12,6 +15,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -28,13 +32,15 @@ var content embed.FS
 
 const (
 	WM_APP           = 0x8000
-	WM_APP_TRAY_MSG  = WM_APP + 10 // callback from Shell_NotifyIcon
+	WM_APP_TRAY_MSG  = WM_APP + 10
 	WM_APP_TRAY_DO   = WM_APP + 1
 	WM_APP_ICON_REAP = WM_APP + 2
+	WM_APP_TRAY_PING = WM_APP + 20
 
 	ID_SHOW   = 1001
 	ID_QUIT   = 1002
 	ID_UPDATE = 1003
+	ID_RESCAN = 1004
 
 	WM_MOUSEMOVE     = 0x0200
 	WM_LBUTTONUP     = 0x0202
@@ -42,11 +48,12 @@ const (
 	WM_RBUTTONUP     = 0x0205
 	WM_CONTEXTMENU   = 0x007B
 
-	NIN_SELECT       = win.WM_USER + 0 // left-click (NotifyIcon v4)
+	NIN_SELECT       = win.WM_USER + 0
 	NIN_KEYSELECT    = win.WM_USER + 1
 	NIN_BALLOONCLICK = win.WM_USER + 5
 	NIN_POPUPOPEN    = win.WM_USER + 0x006
 	NIN_POPUPCLOSE   = win.WM_USER + 0x007
+	WM_DEVICECHANGE  = 0x0219
 )
 
 type ChargeData struct {
@@ -55,83 +62,111 @@ type ChargeData struct {
 	DischargeRate   float64 `json:"dischargeRate"`
 	ChargeRate      float64 `json:"chargeRate"`
 	Timestamp       string  `json:"timestamp"`
+	LastLevel       int     `json:"lastLevel"`
+	LastLevelTime   string  `json:"lastLevelTime"`
+	LastCharging    bool    `json:"lastCharging"`
 }
 
 type Settings struct {
 	StartWithWindows         bool `json:"startWithWindows"`
 	StartMinimized           bool `json:"startMinimized"`
-	RefreshInterval          int  `json:"refreshInterval"` // in seconds
+	RefreshInterval          int  `json:"refreshInterval"`
 	NotificationsEnabled     bool `json:"notificationsEnabled"`
-	LowBatteryThreshold      int  `json:"lowBatteryThreshold"`      // percentage
-	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"` // percentage
+	NonIntrusiveMode         bool `json:"nonIntrusiveMode"`
+	PreferWorkerForWireless  bool `json:"preferWorkerForWireless"`
+	LowBatteryThreshold      int  `json:"lowBatteryThreshold"`
+	CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"`
 }
 
-const currentVersion = "2.3.4"
+const currentVersion = "2.4.0"
 
 var (
-	device               *hid.Device
-	deviceModel          string = "Unknown"
-	hwnd                 win.HWND
-	webviewHwnd          win.HWND
-	nid                  win.NOTIFYICONDATA
-	batteryText          string = "Connecting..."
-	batteryLvl           int
-	isCharging           bool
-	wasCharging          bool
-	hasPrevCharging      bool
-	lastChargeTime       string       = "Never"
-	lastChargeLevel      int          = 0
-	user32                            = syscall.NewLazyDLL("user32.dll")
-	appendMenuW                       = user32.NewProc("AppendMenuW")
-	showWindow                        = user32.NewProc("ShowWindow")
-	clients                           = make(map[chan string]bool)
-	clientsMu            sync.RWMutex // ← add
-	w                    webview2.WebView
-	serverPort           string = "8765"
-	dataDir              string
-	dataFile             string
-	settingsFile         string
-	logFile              string
-	logger               *log.Logger
-	settings             Settings
-	notifiedLow          bool
-	notifiedCritical     bool
-	notifiedFull         bool
-	lastBatteryLevel     int = -1
-	lastBatteryTime      time.Time
-	dischargeRate        float64 = 0
-	lastChargeLevel2     int     = -1
-	lastChargeTime2      time.Time
-	chargeRate           float64 = 0
-	rateHistory          []float64
-	chargeRateHistory    []float64
-	animationFrame       int = 0
-	stopAnimation        chan bool
-	updateAvailable      bool
-	updateVersion        string
-	updateURL            string
-	selectedReportID     byte = 0x00
-	selectedReportLen    int  = 65
-	useGetOnly           bool
-	consecutiveReadFails int
-	linkDown             bool
-	probeRIDs            = []byte{0x00, 0x02, 0x04, 0x03}
-	useInputReports      bool
-	inputFrames          chan []byte
-	cacheFile            string
-	cachedProfile        *DeviceProfile
-	softLinkDownCount    int
-	currentHIDPath       string
-	fileMu               sync.Mutex
-	safeForInput         bool
-	inputDev             *hid.Device
-	inputMu              sync.Mutex
-	recordedUnplug       bool
-	trayMu               sync.Mutex
-	trayOps              = make(chan func(), 64)
-	iconReap             = make(chan win.HICON, 64)
-	readerDone           chan struct{}
-	taskbarCreated       = win.RegisterWindowMessage(syscall.StringToUTF16Ptr("TaskbarCreated"))
+	device                 *hid.Device
+	deviceModel            = "Unknown"
+	hwnd                   win.HWND
+	webviewHwnd            win.HWND
+	nid                    win.NOTIFYICONDATA
+	batteryText            = "Connecting..."
+	batteryLvl             int
+	isCharging             bool
+	wasCharging            bool
+	hasPrevCharging        bool
+	lastChargeTime         = "Never"
+	lastChargeLevel        = 0
+	user32                 = syscall.NewLazyDLL("user32.dll")
+	appendMenuW            = user32.NewProc("AppendMenuW")
+	showWindow             = user32.NewProc("ShowWindow")
+	clients                = make(map[chan string]bool)
+	clientsMu              sync.RWMutex
+	w                      webview2.WebView
+	serverPort             = "8765"
+	dataDir                string
+	dataFile               string
+	settingsFile           string
+	logFile                string
+	logger                 *log.Logger
+	settings               Settings
+	notifiedLow            bool
+	notifiedCritical       bool
+	notifiedFull           bool
+	lastBatteryLevel       = -1
+	lastBatteryTime        time.Time
+	dischargeRate          float64
+	lastChargeLevel2       = -1
+	lastChargeTime2        time.Time
+	lastKnownLevel         = -1
+	lastKnownCharging      bool
+	lastKnownMu            sync.Mutex
+	showLastKnown          bool
+	chargeRate             float64
+	rateHistory            []float64
+	chargeRateHistory      []float64
+	animationFrame         int
+	stopAnimation          chan bool
+	updateAvailable        bool
+	updateVersion          string
+	updateURL              string
+	selectedReportID       byte = 0x00
+	selectedReportLen      int  = 65
+	useGetOnly             bool
+	consecutiveReadFails   int
+	linkDown               bool
+	probeRIDs              = []byte{0x04, 0x03, 0x02, 0x01, 0x00}
+	useInputReports        bool
+	inputFrames            chan []byte
+	cacheFile              string
+	cachedProfiles         []DeviceProfile
+	softLinkDownCount      int
+	currentHIDPath         string
+	fileMu                 sync.Mutex
+	safeForInput           bool
+	inputDev               *hid.Device
+	inputMu                sync.Mutex
+	recordedUnplug         bool
+	dropConfirmMu          sync.Mutex
+	dropConfirmActive      bool
+	trayMu                 sync.Mutex
+	trayOps                = make(chan func(), 64)
+	iconReap               = make(chan win.HICON, 64)
+	iconCache              = make(map[string]win.HICON)
+	iconCacheMu            sync.Mutex
+	cachedDisconnectedIcon win.HICON
+	cachedIconMu           sync.Mutex
+	readerDone             chan struct{}
+	taskbarCreated         = win.RegisterWindowMessage(syscall.StringToUTF16Ptr("TaskbarCreated"))
+	readingUntil           time.Time
+	readingMu              sync.Mutex
+	lastTrayPing           time.Time
+	lastTrayPong           time.Time
+	lastTrayPongMu         sync.Mutex
+	lastTrayPingMu         sync.Mutex
+	watchdogNoPongCount    int
+	lastDevChangeUnix      int64
+	devChangeScheduledInt  int32
+	forceFreshProbeOnceInt int32
+	lastGoodReadUnix       int64
+	forceLiveUntilInt64    int64
+	forceWorkerMode        bool
 )
 
 func safeDefer(where string) {
@@ -140,6 +175,13 @@ func safeDefer(where string) {
 			logger.Printf("[RECOVER] %s: %v", where, r)
 		}
 	}
+}
+
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 func main() {
@@ -152,7 +194,14 @@ func main() {
 			}
 		}
 	}()
-	// Set up data file paths
+
+	for _, a := range os.Args[1:] {
+		if a == "--hid-worker" {
+			workerMain()
+			return
+		}
+	}
+
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
 		appData = "."
@@ -164,25 +213,49 @@ func main() {
 	logFile = filepath.Join(dataDir, "debug.log")
 	cacheFile = filepath.Join(dataDir, "conn_profile.json")
 
-	// Set up logging
 	setupLogging()
-
-	// Load saved data
 	loadChargeData()
 	loadSettings()
 	loadConnProfile()
 
-	// Fix startup registry path if needed
+	if os.Getenv("GLORIOUS_FORCE_WORKER") == "1" {
+		forceWorkerMode = true
+		if logger != nil {
+			logger.Printf("[STARTUP] forceWorkerMode enabled via GLORIOUS_FORCE_WORKER")
+		}
+	}
+
+	if lastChargeLevel > 0 {
+		lastKnownMu.Lock()
+		lastKnownLevel = lastChargeLevel
+		lastKnownCharging = false
+		showLastKnown = true
+		lastKnownMu.Unlock()
+	}
+
 	if settings.StartWithWindows {
 		enableStartup()
 	}
 
-	// Check for updates in background
 	go checkForUpdates()
 
-	// Allow overriding the embedded web server port via PORT env var (useful for debugging or port conflicts)
 	if p := os.Getenv("PORT"); p != "" {
 		serverPort = p
+	}
+
+	if os.Getenv("GLORIOUS_NO_UI") == "1" {
+		if logger != nil {
+			logger.Printf("[STARTUP] GLORIOUS_NO_UI set; running headless (server + updater only)")
+		}
+		go startWebServer()
+		if os.Getenv("GLORIOUS_NO_HID") == "1" {
+			if logger != nil {
+				logger.Printf("[STARTUP] GLORIOUS_NO_HID set; skipping HID/init/updateBattery")
+			}
+		} else {
+			go updateBattery()
+		}
+		select {}
 	}
 
 	stopAnimation = make(chan bool)
@@ -191,11 +264,39 @@ func main() {
 	go updateBattery()
 	go animateChargingIcon()
 
+	go func() {
+		if err := StartProbeWorker(); err != nil {
+			if logger != nil {
+				logger.Printf("[WORKER] background StartProbeWorker failed: %v", err)
+			}
+			return
+		}
+		if logger != nil {
+			logger.Printf("[WORKER] background helper started")
+		}
+	}()
+
+	if len(cachedProfiles) == 0 {
+		if logger != nil {
+			logger.Printf("[STARTUP] no cached profile — running quick startup probe")
+		}
+		go quickRefreshOnDeviceChange()
+	}
+
 	time.Sleep(500 * time.Millisecond)
 
-	// Memory optimization: Set WebView2 browser arguments via environment variable
-	// Reduces memory usage by ~40-50MB with minimal performance impact
 	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu --disable-software-rasterizer --disable-extensions --disable-background-networking --disk-cache-size=1 --media-cache-size=1 --disable-features=AudioServiceOutOfProcess")
+
+	if logger != nil {
+		logger.Printf("[STARTUP] creating WebView2 instance")
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			if logger != nil {
+				logger.Printf("[STARTUP] panic during WebView2 creation: %v\n%s", r, debug.Stack())
+			}
+		}
+	}()
 
 	w = webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
@@ -208,65 +309,88 @@ func main() {
 		},
 	})
 	if w == nil {
+		if logger != nil {
+			logger.Printf("[STARTUP] WebView2 returned nil")
+		}
 		return
+	}
+	if logger != nil {
+		logger.Printf("[STARTUP] WebView2 created successfully")
 	}
 	defer w.Destroy()
 
 	webviewHwnd = win.HWND(w.Window())
+	if logger != nil {
+		logger.Printf("[STARTUP] webview HWND = 0x%X", uintptr(webviewHwnd))
+	}
 
-	// Load and set window icon
 	hInst := win.GetModuleHandle(nil)
 	hIcon := win.LoadIcon(hInst, win.MAKEINTRESOURCE(1))
 	if hIcon != 0 {
-		win.SendMessage(webviewHwnd, win.WM_SETICON, 0, uintptr(hIcon)) // Small icon
-		win.SendMessage(webviewHwnd, win.WM_SETICON, 1, uintptr(hIcon)) // Large icon
+		if logger != nil {
+			logger.Printf("[STARTUP] loaded icon: 0x%X", uintptr(hIcon))
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					if logger != nil {
+						logger.Printf("[STARTUP] panic while setting window icon: %v\n%s", r, debug.Stack())
+					}
+				}
+			}()
+			win.SendMessage(webviewHwnd, win.WM_SETICON, 0, uintptr(hIcon))
+		}()
 	}
-
-	// Disable window resizing
-	style := win.GetWindowLongPtr(webviewHwnd, win.GWL_STYLE)
-	style &^= win.WS_THICKFRAME | win.WS_MAXIMIZEBOX
-	win.SetWindowLongPtr(webviewHwnd, win.GWL_STYLE, style)
 
 	oldProc := win.SetWindowLongPtr(webviewHwnd, win.GWLP_WNDPROC, syscall.NewCallback(webviewWndProc))
 	win.SetWindowLongPtr(webviewHwnd, win.GWLP_USERDATA, oldProc)
 
-	w.Navigate(fmt.Sprintf("http://localhost:%s", serverPort))
+	url := fmt.Sprintf("http://localhost:%s", serverPort)
+	if logger != nil {
+		logger.Printf("[STARTUP] webview navigating to %s", url)
+	}
+	w.Navigate(url)
 
-	// Start minimized if setting is enabled
 	if settings.StartMinimized {
 		showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_HIDE))
 	}
 
+	if logger != nil {
+		logger.Printf("[STARTUP] entering webview run loop")
+	}
 	w.Run()
-}
-
-func trayInvoke(fn func()) {
-	// drop if completely flooded; we don't want to block battery loop
-	select {
-	case trayOps <- fn:
-	default:
+	if logger != nil {
+		logger.Printf("[STARTUP] webview run loop exited")
 	}
-	if hwnd != 0 {
-		win.PostMessage(hwnd, WM_APP_TRAY_DO, 0, 0)
-	}
-}
-
-func startWebServer() {
-	http.HandleFunc("/", serveHTML)
-	http.HandleFunc("/events", handleSSE)
-	http.HandleFunc("/api/settings", handleSettings)
-	http.HandleFunc("/api/update", handleUpdate)
-	http.HandleFunc("/api/resize", handleResize)
-	http.HandleFunc("/api/devtools/hid-report", handleHIDCapture)
-	addr := fmt.Sprintf(":%s", serverPort)
-	log.Printf("starting web server on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 func serveHTML(w http.ResponseWriter, r *http.Request) {
 	data, _ := content.ReadFile("ui.html")
 	w.Header().Set("Content-Type", "text/html")
 	w.Write(data)
+}
+
+func startWebServer() {
+	http.HandleFunc("/", serveHTML)
+	http.HandleFunc("/api/status", handleStatus)
+	http.HandleFunc("/events", handleSSE)
+	http.HandleFunc("/api/settings", handleSettings)
+	http.HandleFunc("/api/update", handleUpdate)
+	http.HandleFunc("/api/rescan", handleRescan)
+	http.HandleFunc("/api/resize", handleResize)
+	http.HandleFunc("/api/scan-hid", handleScanHID)
+
+	addr := ":" + serverPort
+	if logger != nil {
+		logger.Printf("[HTTP] listening on %s", addr)
+	}
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		if logger != nil {
+			logger.Printf("[HTTP] server error: %v", err)
+		} else {
+			log.Printf("[HTTP] server error: %v", err)
+		}
+	}
 }
 
 func handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -276,6 +400,34 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	if f, ok := w.(http.Flusher); ok {
 		fmt.Fprint(w, ":ok\n\n")
+		lastKnownMu.Lock()
+		showLK := showLastKnown
+		lastKnownMu.Unlock()
+
+		deviceMu.Lock()
+		present := (device != nil || isWorkerManagedDevice())
+		deviceMu.Unlock()
+
+		initState := map[string]interface{}{
+			"level":           batteryLvl,
+			"charging":        isCharging,
+			"status":          "disconnected",
+			"statusText":      "Not Connected",
+			"deviceModel":     deviceModel,
+			"updateAvailable": updateAvailable,
+			"updateVersion":   updateVersion,
+		}
+		initState["reading"] = isReading()
+		initState["lastKnown"] = showLK
+		if present {
+			initState["status"] = "connected"
+			initState["statusText"] = "Connected"
+			initState["lastChargeTime"] = lastChargeTime
+			initState["lastChargeLevel"] = lastChargeLevel
+		}
+		if j, err := json.Marshal(initState); err == nil {
+			fmt.Fprintf(w, "data: %s\n\n", j)
+		}
 		f.Flush()
 	}
 
@@ -285,18 +437,14 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 	clients[messageChan] = true
 	clientsMu.Unlock()
 
-	// Clean up this client safely
 	defer func() {
 		clientsMu.Lock()
 		delete(clients, messageChan)
-		// IMPORTANT: close WHILE holding the write lock so broadcasters can't be reading/sending
 		close(messageChan)
 		clientsMu.Unlock()
 	}()
 
 	flusher, _ := w.(http.Flusher)
-
-	// Exit when the client goes away so we don’t leak goroutines
 	ctxDone := r.Context().Done()
 
 	for {
@@ -316,7 +464,26 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func broadcast(data map[string]interface{}) {
-	jsonData, _ := json.Marshal(data)
+	lastKnownMu.Lock()
+	showLK := showLastKnown
+	lastKnownMu.Unlock()
+
+	out := make(map[string]interface{}, len(data)+2)
+	for k, v := range data {
+		out[k] = v
+	}
+	if _, ok := out["lastKnown"]; !ok {
+		out["lastKnown"] = showLK
+	}
+	if _, ok := out["reading"]; !ok {
+		out["reading"] = isReading()
+	}
+
+	if logger != nil {
+		logger.Printf("[SSE] broadcast lastKnown=%v reading=%v status=%v level=%v",
+			out["lastKnown"], out["reading"], out["status"], out["level"])
+	}
+	jsonData, _ := json.Marshal(out)
 	payload := string(jsonData)
 
 	clientsMu.RLock()
@@ -332,14 +499,48 @@ func broadcast(data map[string]interface{}) {
 			select {
 			case ch <- m:
 			default:
-				// buffer full; drop rather than blocking
 			}
 		}(client, payload)
 	}
 	clientsMu.RUnlock()
 }
 
+func setReading(d time.Duration) {
+	readingMu.Lock()
+	readingUntil = time.Now().Add(d)
+	readingMu.Unlock()
+}
+
+func clearReading() {
+	readingMu.Lock()
+	readingUntil = time.Time{}
+	readingMu.Unlock()
+}
+
+func isReading() bool {
+	readingMu.Lock()
+	until := readingUntil
+	readingMu.Unlock()
+	if until.IsZero() {
+		return false
+	}
+	return time.Now().Before(until)
+}
+
+func setForceLive(d time.Duration) {
+	atomic.StoreInt64(&forceLiveUntilInt64, time.Now().Add(d).UnixNano())
+}
+
+func isForceLive() bool {
+	v := atomic.LoadInt64(&forceLiveUntilInt64)
+	if v == 0 {
+		return false
+	}
+	return time.Now().UnixNano() < v
+}
+
 func startTray() {
+	defer safeDefer("startTray")
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -357,32 +558,82 @@ func startTray() {
 	windowName, _ := syscall.UTF16PtrFromString("Glorious Tray")
 	hwnd = win.CreateWindowEx(0, className, windowName, 0, 0, 0, 0, 0, 0, 0, hInst, nil)
 
-	// --- tray icon init ---
 	nid = win.NOTIFYICONDATA{}
 	nid.CbSize = uint32(unsafe.Sizeof(nid))
 	nid.HWnd = hwnd
 	nid.UID = 1
-
-	// Add a fixed GUID so Explorer treats the icon as persistent across restarts
 	nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
-
 	nid.UCallbackMessage = WM_APP_TRAY_MSG
-	nid.HIcon = createBatteryIcon(0, false, 0)
+	nid.HIcon = createBatteryIcon(0, false, false, 0)
 	tip, _ := syscall.UTF16FromString("Glorious Battery")
 	copy(nid.SzTip[:], tip)
 
-	// now add the icon
 	win.Shell_NotifyIcon(win.NIM_ADD, &nid)
 	nid.UVersion = win.NOTIFYICON_VERSION_4
 	win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
 	updateTrayTooltip("Glorious Battery")
-	// Reap old HICONs periodically
+
 	go func() {
 		t := time.NewTicker(1500 * time.Millisecond)
 		defer t.Stop()
 		for range t.C {
 			if hwnd != 0 {
 				win.PostMessage(hwnd, WM_APP_ICON_REAP, 0, 0)
+			}
+		}
+	}()
+
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			if hwnd == 0 {
+				continue
+			}
+			lastTrayPingMu.Lock()
+			lastTrayPing = time.Now()
+			lastTrayPingMu.Unlock()
+			postMessage := user32.NewProc("PostMessageW")
+			postMessage.Call(uintptr(hwnd), WM_APP_TRAY_PING, 0, 0)
+
+			time.Sleep(2 * time.Second)
+
+			lastTrayPongMu.Lock()
+			lp := lastTrayPong
+			lastTrayPongMu.Unlock()
+
+			lastTrayPingMu.Lock()
+			lq := lastTrayPing
+			lastTrayPingMu.Unlock()
+
+			if lp.Before(lq) {
+				watchdogNoPongCount++
+				if logger != nil {
+					logger.Printf("[TRAY_WATCHDOG] miss#%d: no pong within 2s (ping=%s lastPong=%s)", watchdogNoPongCount, lq.Format(time.RFC3339), lp.Format(time.RFC3339))
+				}
+
+				if watchdogNoPongCount == 1 {
+					if logger != nil {
+						buf := make([]byte, 1<<20)
+						n := runtime.Stack(buf, true)
+						logger.Printf("[TRAY_WATCHDOG] goroutine stack dump (%d bytes):\n%s", n, string(buf[:n]))
+					}
+				}
+
+				if watchdogNoPongCount >= 2 {
+					if logger != nil {
+						logger.Printf("[TRAY_WATCHDOG] attempting icon refresh (delete+add) to recover tray interactivity")
+					}
+					if hwnd != 0 {
+						win.Shell_NotifyIcon(win.NIM_DELETE, &nid)
+						time.Sleep(150 * time.Millisecond)
+						win.Shell_NotifyIcon(win.NIM_ADD, &nid)
+						nid.UVersion = win.NOTIFYICON_VERSION_4
+						win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
+					}
+				}
+			} else {
+				watchdogNoPongCount = 0
 			}
 		}
 	}()
@@ -411,31 +662,171 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		win.Shell_NotifyIcon(win.NIM_ADD, &nid)
 		nid.UVersion = win.NOTIFYICON_VERSION_4
 		win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
-		updateTrayTooltip(batteryText) // refresh current text
+		updateTrayTooltip(batteryText)
 		return 0
 	}
 
 	switch msg {
+	case WM_DEVICECHANGE:
+		if logger != nil {
+			logger.Printf("[DEVCHANGE] WM_DEVICECHANGE wParam=0x%X lParam=0x%X", wParam, lParam)
+		}
+		go scheduleDebouncedReconnect()
+		go func() {
+			time.Sleep(120 * time.Millisecond)
+			deviceMu.Lock()
+			p := currentHIDPath
+			hadDevice := (device != nil || workerManagedDevice)
+			deviceMu.Unlock()
+
+			if strings.TrimSpace(p) == "" {
+				if tryImmediateWorkerQuickProbe() {
+					return
+				}
+				lastKnownMu.Lock()
+				lk := lastKnownLevel
+				lkchg := lastKnownCharging
+				lastKnownMu.Unlock()
+				if !hadDevice && lk < 0 {
+					return
+				}
+				if lk >= 0 {
+					lastKnownMu.Lock()
+					lastKnownLevel = lk
+					lastKnownCharging = lkchg
+					showLastKnown = true
+					lastKnownMu.Unlock()
+					if logger != nil {
+						logger.Printf("[DEVCHANGE] immediate: no current path but showing last-known=%d%% (optimistic)", lk)
+					}
+					trayInvoke(func() {
+						batteryLvl = lk
+						isCharging = lkchg
+						batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
+						updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+						updateTrayIcon(lk, lkchg, true)
+					})
+					broadcast(map[string]interface{}{
+						"level":           lk,
+						"charging":        lkchg,
+						"status":          "disconnected",
+						"statusText":      "Last known",
+						"lastKnown":       true,
+						"lastChargeTime":  lastChargeTime,
+						"lastChargeLevel": lastChargeLevel,
+						"deviceModel":     deviceModel,
+						"updateAvailable": updateAvailable,
+						"updateVersion":   updateVersion,
+					})
+				}
+				safeCloseDevice()
+				return
+			}
+			if logger != nil {
+				logger.Printf("[DEVCHANGE] immediate check scheduled for path %s", p)
+			}
+			lastKnownMu.Lock()
+			lk := lastKnownLevel
+			lkchg := lastKnownCharging
+			lastKnownMu.Unlock()
+			if lk >= 0 {
+				lastKnownMu.Lock()
+				lastKnownLevel = lk
+				lastKnownCharging = lkchg
+				showLastKnown = true
+				lastKnownMu.Unlock()
+				if logger != nil {
+					logger.Printf("[DEVCHANGE] immediate: showing last-known=%d%% (optimistic) for path %s", lk, p)
+				}
+				trayInvoke(func() {
+					batteryLvl = lk
+					isCharging = lkchg
+					batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
+					updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+					updateTrayIcon(lk, lkchg, true)
+				})
+				broadcast(map[string]interface{}{
+					"level":           lk,
+					"charging":        lkchg,
+					"status":          "disconnected",
+					"statusText":      "Last known",
+					"lastKnown":       true,
+					"lastChargeTime":  lastChargeTime,
+					"lastChargeLevel": lastChargeLevel,
+					"deviceModel":     deviceModel,
+					"updateAvailable": updateAvailable,
+					"updateVersion":   updateVersion,
+				})
+			}
+			maxAttempts := 6
+			for i := 0; i < maxAttempts; i++ {
+				if findDeviceInfoByPath(p) == nil {
+					if logger != nil {
+						logger.Printf("[DEVCHANGE] immediate: path %s no longer present (attempt=%d) — forcing safeCloseDevice", p, i)
+					}
+					lastKnownMu.Lock()
+					lk := lastKnownLevel
+					lkchg := lastKnownCharging
+					lastKnownMu.Unlock()
+
+					if lk >= 0 {
+						trayInvoke(func() {
+							batteryLvl = lk
+							isCharging = lkchg
+							batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
+							updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+							updateTrayIcon(lk, lkchg, true)
+						})
+						broadcast(map[string]interface{}{
+							"level":           lk,
+							"charging":        lkchg,
+							"status":          "disconnected",
+							"statusText":      "Last known",
+							"lastKnown":       true,
+							"lastChargeTime":  lastChargeTime,
+							"lastChargeLevel": lastChargeLevel,
+							"deviceModel":     deviceModel,
+							"updateAvailable": updateAvailable,
+							"updateVersion":   updateVersion,
+						})
+					} else {
+						trayInvoke(func() {
+							batteryLvl = 0
+							isCharging = false
+							batteryText = "Mouse Not Found"
+							updateTrayTooltip("Mouse Not Found")
+							updateTrayIcon(0, false, false)
+						})
+						broadcast(map[string]interface{}{
+							"level":           0,
+							"charging":        false,
+							"status":          "disconnected",
+							"statusText":      "Disconnected",
+							"deviceModel":     deviceModel,
+							"updateAvailable": updateAvailable,
+							"updateVersion":   updateVersion,
+						})
+					}
+					safeCloseDevice()
+					return
+				}
+				time.Sleep(150 * time.Millisecond)
+			}
+			if logger != nil {
+				logger.Printf("[DEVCHANGE] immediate check: path %s still present after %d checks", p, maxAttempts)
+			}
+		}()
+		return 0
+
 	case WM_APP_TRAY_MSG:
-		// LOWORD(lParam) is the actual message code
 		code := uint32(lParam) & 0xFFFF
-		log.Printf("TRAY: wParam=%d lParam=0x%X (code=0x%X)", wParam, lParam, code)
-
-		switch code {
-		// Left click / select
-		case NIN_SELECT, NIN_KEYSELECT, WM_LBUTTONUP, WM_LBUTTONDBLCLK:
-			// restore if minimized/hidden, then foreground
-			win.ShowWindow(webviewHwnd, win.SW_RESTORE)
-			win.SetForegroundWindow(webviewHwnd)
-			return 0
-
-		// Right click / context menu
-		case WM_RBUTTONUP, WM_CONTEXTMENU:
+		if code == win.WM_RBUTTONUP || code == WM_CONTEXTMENU {
 			showMenu()
 			return 0
-
-		// Optional: overflow flyout open/close if you care
-		case NIN_POPUPOPEN, NIN_POPUPCLOSE:
+		}
+		if code == win.WM_LBUTTONUP || code == NIN_SELECT || code == NIN_KEYSELECT {
+			showWindow.Call(uintptr(webviewHwnd), uintptr(win.SW_SHOW))
+			win.SetForegroundWindow(webviewHwnd)
 			return 0
 		}
 		return 0
@@ -449,9 +840,18 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			select {
 			case fn := <-trayOps:
 				func() {
+					start := time.Now()
 					defer func() {
-						if r := recover(); r != nil && logger != nil {
-							logger.Printf("[TRAY_OP RECOVER] %v", r)
+						if r := recover(); r != nil {
+							if logger != nil {
+								logger.Printf("[TRAY_OP] op recovered: %v\n%s", r, debug.Stack())
+							}
+						}
+						if logger != nil {
+							dur := time.Since(start)
+							if dur > 200*time.Millisecond {
+								logger.Printf("[TRAY_OP] long-running op: %s", dur)
+							}
 						}
 					}()
 					fn()
@@ -460,6 +860,15 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 				return 0
 			}
 		}
+
+	case WM_APP_TRAY_PING:
+		lastTrayPongMu.Lock()
+		lastTrayPong = time.Now()
+		lastTrayPongMu.Unlock()
+		if logger != nil {
+			logger.Printf("[TRAY_PONG] %s", lastTrayPong.Format(time.RFC3339))
+		}
+		return 0
 
 	case WM_APP_ICON_REAP:
 		for i := 0; i < 8; i++ {
@@ -494,6 +903,9 @@ func showMenu() {
 
 	appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_SEPARATOR), 0, 0)
 
+	rescanItem, _ := syscall.UTF16PtrFromString("Rescan")
+	appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_STRING), ID_RESCAN, uintptr(unsafe.Pointer(rescanItem)))
+
 	showItem, _ := syscall.UTF16PtrFromString("Show Window")
 	appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_STRING), ID_SHOW, uintptr(unsafe.Pointer(showItem)))
 
@@ -516,7 +928,7 @@ func showMenu() {
 	)
 
 	postMessage := user32.NewProc("PostMessageW")
-	postMessage.Call(uintptr(hwnd), 0, 0, 0) // WM_NULL
+	postMessage.Call(uintptr(hwnd), 0, 0, 0)
 
 	win.DestroyMenu(hMenu)
 
@@ -526,14 +938,24 @@ func showMenu() {
 		win.SetForegroundWindow(webviewHwnd)
 	case ID_QUIT:
 		trayInvoke(func() { win.Shell_NotifyIcon(win.NIM_DELETE, &nid) })
-		if device != nil {
-			device.Close()
-		}
+		safeCloseDevice()
 		kernel32 := syscall.NewLazyDLL("kernel32.dll")
 		terminateProcess := kernel32.NewProc("TerminateProcess")
 		getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
 		handle, _, _ := getCurrentProcess.Call()
 		terminateProcess.Call(handle, 0)
+	}
+}
+
+func trayInvoke(fn func()) {
+	select {
+	case trayOps <- fn:
+	default:
+		go func() { trayOps <- fn }()
+	}
+	if hwnd != 0 {
+		postMessage := user32.NewProc("PostMessageW")
+		postMessage.Call(uintptr(hwnd), WM_APP_TRAY_DO, 0, 0)
 	}
 }
 
@@ -544,8 +966,6 @@ func updateBattery() {
 			if logger != nil {
 				logger.Printf("updateBattery recovered from panic: %v", r)
 			}
-			// Small backoff then restart the loop by calling updateBattery again.
-			// NOTE: this returns from the current goroutine; the caller started it with `go updateBattery()`.
 			go updateBattery()
 		}
 	}()
@@ -562,273 +982,6 @@ func updateBattery() {
 
 	for {
 		reconnect()
-
-		if device != nil {
-			battery, charging := readBattery()
-
-			if linkDown {
-				softLinkDownCount++
-				if wasCharging && softLinkDownCount == 1 && !recordedUnplug {
-					// choose a sensible last-known level:
-					// 1) current on-screen level if >0, else
-					// 2) last charging track level if we have one, else
-					// 3) keep previous lastChargeLevel
-					lvl := batteryLvl
-					if lvl <= 0 && lastChargeLevel2 > 0 {
-						lvl = lastChargeLevel2
-					}
-					if lvl > 0 {
-						lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
-						lastChargeLevel = lvl
-						saveChargeData()
-						recordedUnplug = true
-					}
-				}
-				if softLinkDownCount == 1 {
-					// transient
-					updateTrayTooltip("Reconnecting…")
-					broadcast(map[string]interface{}{"status": "connecting", "statusText": "Connecting"})
-				} else {
-					batteryLvl = 0
-					isCharging = false
-					batteryText = "Mouse Not Found"
-					updateTrayTooltip("Mouse Not Found")
-					updateTrayIcon(0, false)
-					broadcast(map[string]interface{}{
-						"level": 0, "charging": false,
-						"status":          "disconnected",
-						"statusText":      "Disconnected",
-						"deviceModel":     deviceModel,
-						"updateAvailable": updateAvailable, "updateVersion": updateVersion,
-					})
-
-					consecutiveReadFails++
-
-					if consecutiveReadFails >= 3 {
-						if logger != nil {
-							logger.Printf("[WARN] consecutiveReadFails=%d → closing device (path=%s)", consecutiveReadFails, currentHIDPath)
-						}
-
-						// --- graceful reader shutdown ---
-						inputMu.Lock()
-						done := readerDone // snapshot
-						inputMu.Unlock()
-
-						if device != nil {
-							device.Close() // this unblocks the reader's dev.Read and lets its defer run
-						}
-
-						if done != nil {
-							select {
-							case <-done: // reader signalled it has cleaned up (it will nil globals itself)
-							case <-time.After(800 * time.Millisecond):
-								// last resort: if it didn't exit in time, clear state
-								inputMu.Lock()
-								inputFrames = nil
-								inputDev = nil
-								readerDone = nil
-								inputMu.Unlock()
-							}
-						}
-
-						// now clear device state
-						device = nil
-						hasPrevCharging = false
-						selectedReportLen = 65
-						selectedReportID = 0x00
-						useGetOnly = false
-						useInputReports = false
-						consecutiveReadFails = 0
-					}
-				}
-				<-ticker.C
-				continue
-			} else {
-				softLinkDownCount = 0
-			}
-
-			// battery == -1 means "invalid/no data"
-			if battery >= 0 {
-				consecutiveReadFails = 0
-				recordedUnplug = false
-
-				if !hasPrevCharging {
-					wasCharging = charging
-					hasPrevCharging = true
-				}
-
-				// Detect charge completion (skip when battery==0 to avoid noise)
-				if wasCharging && !charging && battery > 0 {
-					// avoid recording an obviously bogus "last charged at 1–2%" blip
-					if battery >= lastChargeLevel || battery >= 10 {
-						lastChargeTime = time.Now().Format("Jan 2, 3:04 PM")
-						lastChargeLevel = battery
-						saveChargeData()
-					}
-				}
-
-				// Reset flags when charging
-				if charging {
-					notifiedLow = false
-					notifiedCritical = false
-					if battery == 100 && !notifiedFull {
-						sendNotification("Battery Fully Charged", "Your mouse is now at 100% battery", false)
-						notifiedFull = true
-					}
-					// Initialize tracking on first charge reading
-					if lastChargeLevel2 < 0 {
-						lastChargeLevel2 = battery
-						lastChargeTime2 = time.Now()
-					} else if battery > lastChargeLevel2 {
-						// Only update rate if we have at least 3% of data for accuracy
-						if (battery - lastChargeLevel2) >= 3 {
-							elapsed := time.Since(lastChargeTime2).Hours()
-							if elapsed > 0 {
-								newRate := float64(battery-lastChargeLevel2) / elapsed
-								chargeRateHistory = append(chargeRateHistory, newRate)
-								if len(chargeRateHistory) > 5 {
-									chargeRateHistory = chargeRateHistory[1:]
-								}
-								chargeRate = calculateEMA(chargeRateHistory)
-								lastChargeLevel2 = battery
-								lastChargeTime2 = time.Now()
-								saveChargeData() // Save rates after update
-							}
-						}
-					}
-				} else {
-					notifiedFull = false
-					// Initialize tracking on first discharge reading
-					if lastBatteryLevel < 0 {
-						lastBatteryLevel = battery
-						lastBatteryTime = time.Now()
-					} else if lastBatteryLevel > battery {
-						// Only update rate if we have at least 3% of data for accuracy
-						if (lastBatteryLevel - battery) >= 3 {
-							elapsed := time.Since(lastBatteryTime).Hours()
-							if elapsed > 0 {
-								newRate := float64(lastBatteryLevel-battery) / elapsed
-								rateHistory = append(rateHistory, newRate)
-								if len(rateHistory) > 5 {
-									rateHistory = rateHistory[1:]
-								}
-								dischargeRate = calculateEMA(rateHistory)
-								lastBatteryLevel = battery
-								lastBatteryTime = time.Now()
-								saveChargeData() // Save rates after update
-							}
-						}
-					}
-				}
-
-				// Notifications only when we have a real level (>=0), and not charging
-				if settings.NotificationsEnabled && !charging && battery >= 0 {
-					if battery <= settings.CriticalBatteryThreshold && !notifiedCritical {
-						notifiedCritical = true
-						sendNotification("Critical Battery", fmt.Sprintf("Battery at %d%%. Please charge soon!", battery), true)
-					} else if battery <= settings.LowBatteryThreshold && !notifiedLow {
-						notifiedLow = true
-						sendNotification("Low Battery", fmt.Sprintf("Battery at %d%%. Consider charging.", battery), false)
-					}
-				}
-
-				batteryLvl = battery
-				wasCharging = charging
-				isCharging = charging
-
-				status := "Discharging"
-				icon := "🔋"
-				if charging {
-					status = "Charging"
-					icon = "⚡"
-				}
-				// Show 0% correctly
-				batteryText = fmt.Sprintf("%s %d%% (%s)", icon, battery, status)
-				updateTrayTooltip(fmt.Sprintf("Battery: %d%%", battery))
-				updateTrayIcon(battery, charging)
-
-				// ETA only when we have rate and a sensible level
-				timeRemaining := ""
-				if !charging && dischargeRate > 0 && battery > 0 {
-					hoursLeft := float64(battery) / dischargeRate
-					if hoursLeft < 100 && hoursLeft > 0 {
-						hours := int(hoursLeft)
-						minutes := int((hoursLeft - float64(hours)) * 60)
-						if hours >= 24 {
-							days := hours / 24
-							remainingHours := hours % 24
-							if remainingHours > 0 {
-								timeRemaining = fmt.Sprintf("%dd %dh", days, remainingHours)
-							} else {
-								timeRemaining = fmt.Sprintf("%dd", days)
-							}
-						} else if hours > 0 {
-							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
-						} else if minutes > 0 {
-							timeRemaining = fmt.Sprintf("%dm", minutes)
-						}
-					}
-				} else if charging && chargeRate > 0 && battery < 100 {
-					hoursLeft := float64(100-battery) / chargeRate
-					if hoursLeft < 100 && hoursLeft > 0 {
-						hours := int(hoursLeft)
-						minutes := int((hoursLeft - float64(hours)) * 60)
-						if hours >= 24 {
-							days := hours / 24
-							remainingHours := hours % 24
-							if remainingHours > 0 {
-								timeRemaining = fmt.Sprintf("%dd %dh", days, remainingHours)
-							} else {
-								timeRemaining = fmt.Sprintf("%dd", days)
-							}
-						} else if hours > 0 {
-							timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
-						} else if minutes > 0 {
-							timeRemaining = fmt.Sprintf("%dm", minutes)
-						}
-					}
-				}
-				broadcast(map[string]interface{}{
-					"status":          "connected", // connection state
-					"mode":            status,      // "Charging"/"Discharging"
-					"statusText":      status,      // ← back-compat for old UI
-					"level":           battery,
-					"charging":        charging,
-					"lastChargeTime":  lastChargeTime,
-					"lastChargeLevel": lastChargeLevel,
-					"deviceModel":     deviceModel,
-					"timeRemaining":   timeRemaining,
-					"updateAvailable": updateAvailable,
-					"updateVersion":   updateVersion,
-				})
-			} else {
-				// invalid read → force reconnect next tick
-				batteryLvl = 0
-				isCharging = false
-				batteryText = "Connecting..."
-				updateTrayTooltip("Connecting…")
-				updateTrayIcon(0, false)
-				broadcast(map[string]interface{}{
-					"level":      0,
-					"charging":   false,
-					"status":     "connecting",
-					"statusText": "Connecting",
-				})
-			}
-		} else {
-			batteryLvl = 0
-			isCharging = false
-			batteryText = "Mouse Not Found"
-			updateTrayTooltip("Mouse Not Found")
-			updateTrayIcon(0, false)
-			broadcast(map[string]interface{}{
-				"level":      0,
-				"charging":   false,
-				"status":     "disconnected",
-				"statusText": "Disconnected",
-			})
-		}
-
 		<-ticker.C
 	}
 }
@@ -840,7 +993,6 @@ func updateTrayTooltip(text string) {
 		trayMu.Lock()
 		defer trayMu.Unlock()
 
-		// Clear + bounded copy into SzTip
 		for i := range nid.SzTip {
 			nid.SzTip[i] = 0
 		}
@@ -850,29 +1002,21 @@ func updateTrayTooltip(text string) {
 		}
 		copy(nid.SzTip[:n], tip[:n])
 
-		// 1) Focus the icon (helps some shells)
 		win.Shell_NotifyIcon(win.NIM_SETFOCUS, &nid)
-
-		// 2) Apply the new tooltip AND ask Explorer to show it now
-		//    NOTE: 0x00000080 is NIF_SHOWTIP (not defined in lxn/win)
 		nid.UFlags = win.NIF_TIP | 0x00000080
 		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
-
-		// 3) (Re)assert v4 behavior—harmless if already set
 		nid.UVersion = win.NOTIFYICON_VERSION_4
 		win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
-
-		// 4) Restore baseline flags for future updates
 		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 	})
 }
 
-func createBatteryIcon(level int, charging bool, frame int) win.HICON {
+func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON {
 	defer safeDefer("createBatteryIcon")
 
 	getSystemMetrics := user32.NewProc("GetSystemMetrics")
-	smCxIcon, _, _ := getSystemMetrics.Call(uintptr(11)) // SM_CXICON
-	smCyIcon, _, _ := getSystemMetrics.Call(uintptr(12)) // SM_CYICON
+	smCxIcon, _, _ := getSystemMetrics.Call(uintptr(11))
+	smCyIcon, _, _ := getSystemMetrics.Call(uintptr(12))
 
 	width := int32(smCxIcon) * 2
 	height := int32(smCyIcon) * 2
@@ -913,15 +1057,14 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 	bi := BITMAPV5HEADER{
 		Size:        uint32(unsafe.Sizeof(BITMAPV5HEADER{})),
 		Width:       width,
-		Height:      -height, // top-down is fine
+		Height:      -height,
 		Planes:      1,
 		BitCount:    32,
-		Compression: 0, // BI_RGB instead of BI_BITFIELDS
-		// leave masks as 0 when BI_RGB
-		RedMask:   0,
-		GreenMask: 0,
-		BlueMask:  0,
-		AlphaMask: 0,
+		Compression: 0,
+		RedMask:     0,
+		GreenMask:   0,
+		BlueMask:    0,
+		AlphaMask:   0,
 	}
 
 	hdc := win.GetDC(0)
@@ -929,7 +1072,7 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 		if logger != nil {
 			logger.Printf("[ICON] GetDC failed")
 		}
-		return nid.HIcon // keep old icon
+		return nid.HIcon
 	}
 	defer win.ReleaseDC(0, hdc)
 
@@ -940,7 +1083,7 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 	hBitmap, _, _ := createDIBSection.Call(
 		uintptr(hdc),
 		uintptr(unsafe.Pointer(&bi)),
-		0, // DIB_RGB_COLORS
+		0,
 		uintptr(unsafe.Pointer(&pBits)),
 		0,
 		0,
@@ -952,7 +1095,6 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 		return nid.HIcon
 	}
 
-	// Use int for length to satisfy unsafe.Slice
 	total := int(width) * int(height)
 	pixelSlice := unsafe.Slice((*uint32)(pBits), total)
 
@@ -968,7 +1110,9 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 	}
 
 	var fillColor uint32
-	if charging {
+	if dim {
+		fillColor = 0xFF6E7681
+	} else if charging {
 		fillColor = 0xFF0078D4
 	} else if level >= 50 {
 		fillColor = 0xFF107C10
@@ -1060,7 +1204,7 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 		}
 	}
 
-	hMask := win.CreateBitmap(width, height, 1, 1, nil) // or unsafe.Pointer(nil)
+	hMask := win.CreateBitmap(width, height, 1, 1, nil)
 	if hMask == 0 {
 		if logger != nil {
 			logger.Printf("[ICON] CreateBitmap(mask) failed")
@@ -1072,7 +1216,7 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 	var iconInfo win.ICONINFO
 	iconInfo.FIcon = 1
 	iconInfo.HbmColor = win.HBITMAP(hBitmap)
-	iconInfo.HbmMask = hMask // ← give a real mask
+	iconInfo.HbmMask = hMask
 
 	hIcon := win.CreateIconIndirect(&iconInfo)
 	if hIcon == 0 {
@@ -1084,36 +1228,98 @@ func createBatteryIcon(level int, charging bool, frame int) win.HICON {
 		return nid.HIcon
 	}
 
-	// We no longer need the source bitmaps after the HICON is created.
 	win.DeleteObject(win.HGDIOBJ(hBitmap))
 	win.DeleteObject(win.HGDIOBJ(hMask))
 
 	return hIcon
 }
 
-func updateTrayIcon(level int, charging bool) {
-	newIcon := createBatteryIcon(level, charging, animationFrame)
-	if newIcon == 0 {
-		return
-	}
+func updateTrayIcon(level int, charging bool, dim bool) {
 	trayInvoke(func() {
+		if dim {
+			cachedIconMu.Lock()
+			ci := cachedDisconnectedIcon
+			cachedIconMu.Unlock()
+
+			if ci == 0 {
+				newCi := createBatteryIcon(0, false, true, 0)
+				if newCi != 0 {
+					cachedIconMu.Lock()
+					if cachedDisconnectedIcon == 0 {
+						cachedDisconnectedIcon = newCi
+						ci = newCi
+					} else {
+						select {
+						case iconReap <- newCi:
+						default:
+						}
+						ci = cachedDisconnectedIcon
+					}
+					cachedIconMu.Unlock()
+				}
+			}
+
+			if ci != 0 {
+				trayMu.Lock()
+				oldIcon := nid.HIcon
+				nid.HIcon = ci
+				nid.UFlags = win.NIF_ICON | win.NIF_TIP | 0x00000080
+				win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+				nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+				trayMu.Unlock()
+
+				if oldIcon != 0 && oldIcon != ci {
+					select {
+					case iconReap <- oldIcon:
+					default:
+					}
+				}
+				return
+			}
+		}
+
+		key := fmt.Sprintf("%03d:%t:%d", level, charging, animationFrame)
+		iconCacheMu.Lock()
+		cachedIcon, ok := iconCache[key]
+		iconCacheMu.Unlock()
+		var newIcon win.HICON
+		if ok && cachedIcon != 0 {
+			newIcon = cachedIcon
+		} else {
+			newIcon = createBatteryIcon(level, charging, dim, animationFrame)
+			if newIcon == 0 {
+				return
+			}
+			iconCacheMu.Lock()
+			iconCache[key] = newIcon
+			iconCacheMu.Unlock()
+		}
 		trayMu.Lock()
 		oldIcon := nid.HIcon
 		nid.HIcon = newIcon
-
-		// IMPORTANT: include NIF_TIP and SHOWTIP so we don't stomp tooltip updates.
-		// 0x00000080 == NIF_SHOWTIP (not defined in lxn/win)
 		nid.UFlags = win.NIF_ICON | win.NIF_TIP | 0x00000080
 		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
-
-		// Keep baseline flags consistent
 		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 		trayMu.Unlock()
 
-		if oldIcon != 0 && oldIcon != newIcon {
-			select {
-			case iconReap <- oldIcon:
-			default:
+		cachedIconMu.Lock()
+		cached := cachedDisconnectedIcon
+		cachedIconMu.Unlock()
+		if oldIcon != 0 && oldIcon != newIcon && oldIcon != cached {
+			keepon := false
+			iconCacheMu.Lock()
+			for _, v := range iconCache {
+				if v == oldIcon {
+					keepon = true
+					break
+				}
+			}
+			iconCacheMu.Unlock()
+			if !keepon {
+				select {
+				case iconReap <- oldIcon:
+				default:
+				}
 			}
 		}
 	})
@@ -1128,14 +1334,14 @@ func animateChargingIcon() {
 			}
 		}
 	}()
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(1000 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			if isCharging {
 				animationFrame = (animationFrame + 1) % 3
-				updateTrayIcon(batteryLvl, isCharging)
+				updateTrayIcon(batteryLvl, isCharging, false)
 			} else {
 				animationFrame = 0
 			}
@@ -1208,51 +1414,500 @@ func handleResize(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func handleHIDCapture(w http.ResponseWriter, r *http.Request) {
+func handleRescan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if logger != nil {
+		logger.Printf("[HTTP] manual rescan requested")
+	}
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		clearBackoffsForCandidates()
+		_ = StartProbeWorker()
+		reconnect()
+		_ = tryImmediateWorkerQuickProbe()
+	}()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"started": true})
+}
 
-	report, err := captureHIDReport()
-	usedCache := false
-	if err != nil {
-		if cached, ok := getLastRawReport(); ok {
-			report = cached
-			usedCache = true
-		} else {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			return
+func handleScanHID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if logger != nil {
+		logger.Printf("[HTTP] HID device scan requested")
+	}
+
+	result := scanAllHIDDevices()
+	logHIDScanResults(result)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		if logger != nil {
+			logger.Printf("[HTTP] Failed to encode HID scan results: %v", err)
 		}
-	}
-
-	if len(report) == 0 {
-		http.Error(w, "No report available", http.StatusServiceUnavailable)
+		http.Error(w, "Failed to encode results", http.StatusInternalServerError)
 		return
 	}
 
-	path, err := saveHIDReport(report)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if logger != nil {
+		logger.Printf("[HTTP] HID scan completed: %d total devices, %d Glorious devices", result.TotalCount, result.GloriousCount)
+	}
+}
+
+func handleStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	lastKnownMu.Lock()
+	showLK := showLastKnown
+	lastKnownMu.Unlock()
+
+	deviceMu.Lock()
+	devPresent := (device != nil || isWorkerManagedDevice())
+	curPath := currentHIDPath
+	deviceMu.Unlock()
+
+	status := "disconnected"
+	statusText := "Not Connected"
+	if devPresent {
+		status = "connected"
+		statusText = "Connected"
 	}
 
 	resp := map[string]interface{}{
-		"path":      path,
-		"length":    len(report),
-		"hex":       hexString(report),
-		"hexDump":   hexDump(report),
-		"fromCache": usedCache,
+		"status":          status,
+		"statusText":      statusText,
+		"level":           batteryLvl,
+		"charging":        isCharging,
+		"reading":         isReading(),
+		"lastKnown":       showLK,
+		"lastChargeTime":  lastChargeTime,
+		"lastChargeLevel": lastChargeLevel,
+		"deviceModel":     deviceModel,
+		"updateAvailable": updateAvailable,
+		"updateVersion":   updateVersion,
+		"path":            curPath,
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// ---------- Startup shortcut helpers (Startup folder .lnk) ----------
+func quickRefreshOnDeviceChange() {
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		deviceMu.Lock()
+		path := currentHIDPath
+		deviceMu.Unlock()
+		if path != "" {
+			if findDeviceInfoByPath(path) == nil {
+				if logger != nil {
+					logger.Printf("[DEVCHANGE] cached currentHIDPath %s no longer enumerates — forcing candidate scan", path)
+				}
+				path = ""
+				if tryImmediateWorkerQuickProbe() {
+					return
+				}
+			}
+		}
+		if path == "" && len(cachedProfiles) > 0 {
+			path = cachedProfiles[0].Path
+		}
+		if path == "" {
+			if getProbeWorker() == nil {
+				if err := StartProbeWorker(); err != nil || getProbeWorker() == nil {
+					return
+				}
+			}
+			tried := make(map[string]bool)
+			var candidates []string
+			lowModel := strings.ToLower(deviceModel)
+			for _, vid := range gloriousVendorIDs {
+				hid.Enumerate(vid, 0, func(info *hid.DeviceInfo) error {
+					if shouldSkipCandidate(info) {
+						return nil
+					}
+					if tried[info.Path] {
+						return nil
+					}
+					if lowModel != "" && strings.Contains(strings.ToLower(info.ProductStr), lowModel) {
+						candidates = append([]string{info.Path}, candidates...)
+						tried[info.Path] = true
+						return nil
+					}
+					if qualifiesForWorkerManaged(info) {
+						candidates = append(candidates, info.Path)
+						tried[info.Path] = true
+					}
+					return nil
+				})
+			}
+			if len(candidates) == 0 {
+				hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
+					if shouldSkipCandidate(info) {
+						return nil
+					}
+					if tried[info.Path] {
+						return nil
+					}
+					if qualifiesForWorkerManaged(info) {
+						candidates = append(candidates, info.Path)
+						tried[info.Path] = true
+					}
+					return nil
+				})
+			}
+			for _, p := range candidates {
+				if w := getProbeWorker(); w != nil {
+					if wlvl, wchg, wok, wrid, wlen, werr := w.ProbePathAll(p); werr == nil && wok {
+						lastKnownMu.Lock()
+						lk := lastKnownLevel
+						lastKnownMu.Unlock()
+
+						displayed := batteryLvl
+						displayedChg := isCharging
+						suspect := false
+						hold := 0
+						holdchg := false
+						if displayed >= 15 && (displayed-wlvl) >= 20 {
+							suspect = true
+							hold = displayed
+							holdchg = displayedChg
+						} else if lk >= 15 && (lk-wlvl) >= 20 {
+							suspect = true
+							hold = lk
+							holdchg = lastKnownCharging
+						}
+						if suspect {
+							if logger != nil {
+								logger.Printf("[DEVCHANGE] quick probe on %s returned low lvl=%d while recent=%d — deferring acceptance and verifying", p, wlvl, hold)
+							}
+							setReading(3 * time.Second)
+							trayInvoke(func() {
+								batteryLvl = hold
+								isCharging = holdchg
+								batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", hold)
+								updateTrayTooltip(fmt.Sprintf("Last known: %d%%", hold))
+								updateTrayIcon(hold, holdchg, true)
+							})
+							broadcast(map[string]interface{}{
+								"status":          "connected",
+								"mode":            map[bool]string{true: "Charging", false: "Discharging"}[holdchg],
+								"statusText":      "Verifying…",
+								"level":           hold,
+								"charging":        holdchg,
+								"lastKnown":       true,
+								"lastChargeTime":  lastChargeTime,
+								"lastChargeLevel": lastChargeLevel,
+								"deviceModel":     deviceModel,
+								"updateAvailable": updateAvailable,
+								"updateVersion":   updateVersion,
+								"reading":         true,
+							})
+							go func(path string, expected int, w *WorkerClient, rid byte, rlen int, chg bool, hold int, holdchg bool) {
+								defer safeDefer("quickProbeConfirm")
+								confirm := 0
+								attempts := 3
+								for i := 0; i < attempts; i++ {
+									time.Sleep(220 * time.Millisecond)
+									if wlvl2, _, wok2, _, _, werr2 := w.ProbePathAll(path); werr2 == nil && wok2 {
+										if absInt(wlvl2-expected) <= 3 {
+											confirm++
+										}
+										if confirm >= 2 {
+											selectedReportID = rid
+											selectedReportLen = rlen
+											useGetOnly = true
+											useInputReports = false
+											batteryLvl = expected
+											isCharging = chg
+											lastKnownMu.Lock()
+											showLastKnown = false
+											lastKnownLevel = expected
+											lastKnownCharging = chg
+											lastKnownMu.Unlock()
+											updateTrayTooltip(fmt.Sprintf("Battery: %d%%", expected))
+											updateTrayIcon(expected, chg, false)
+											if logger != nil {
+												logger.Printf("[DEVCHANGE] quick probe on %s confirmed lvl=%d chg=%v", path, expected, chg)
+											}
+											clearReading()
+											broadcast(map[string]interface{}{
+												"status":          "connected",
+												"mode":            map[bool]string{true: "Charging", false: "Discharging"}[chg],
+												"statusText":      map[bool]string{true: "Charging", false: "Discharging"}[chg],
+												"level":           batteryLvl,
+												"charging":        isCharging,
+												"lastKnown":       false,
+												"lastChargeTime":  lastChargeTime,
+												"lastChargeLevel": lastChargeLevel,
+												"deviceModel":     deviceModel,
+												"updateAvailable": updateAvailable,
+												"updateVersion":   updateVersion,
+												"reading":         false,
+											})
+											return
+										}
+									}
+								}
+								if logger != nil {
+									logger.Printf("[DEVCHANGE] quick probe on %s failed confirmation; keeping hold=%d", path, hold)
+								}
+								clearReading()
+								broadcast(map[string]interface{}{
+									"status":     "connected",
+									"mode":       map[bool]string{true: "Charging", false: "Discharging"}[holdchg],
+									"statusText": "Verifying failed",
+									"level":      hold,
+									"charging":   holdchg,
+									"lastKnown":  true,
+									"reading":    false,
+								})
+							}(p, wlvl, w, wrid, wlen, wchg, hold, holdchg)
+							return
+						}
+
+						selectedReportID = wrid
+						selectedReportLen = wlen
+						useGetOnly = true
+						useInputReports = false
+						saveConnProfile(DeviceProfile{
+							Path:            p,
+							ReportID:        selectedReportID,
+							ReportLen:       selectedReportLen,
+							UseGetOnly:      useGetOnly,
+							UseInputReports: useInputReports,
+						})
+						batteryLvl = wlvl
+						isCharging = wchg
+						clearWriteFailures(p)
+						saveConnProfile(DeviceProfile{
+							Path:            p,
+							ReportID:        selectedReportID,
+							ReportLen:       selectedReportLen,
+							UseGetOnly:      useGetOnly,
+							UseInputReports: useInputReports,
+						})
+						if logger != nil {
+							logger.Printf("[DEVCHANGE] quick worker probe succeeded on %s lvl=%d chg=%v", p, wlvl, wchg)
+						}
+
+						status := map[bool]string{true: "Charging", false: "Discharging"}[wchg]
+						icon := "🔋"
+						if wchg {
+							icon = "⚡"
+						}
+						batteryText = fmt.Sprintf("%s %d%% (%s)", icon, wlvl, status)
+						updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+						updateTrayIcon(wlvl, wchg, false)
+						broadcast(map[string]interface{}{
+							"status":          "connected",
+							"mode":            status,
+							"statusText":      status,
+							"level":           wlvl,
+							"charging":        wchg,
+							"lastChargeTime":  lastChargeTime,
+							"lastChargeLevel": lastChargeLevel,
+							"deviceModel":     deviceModel,
+							"updateAvailable": updateAvailable,
+							"updateVersion":   updateVersion,
+							"reading":         false,
+						})
+						return
+					}
+				}
+			}
+			return
+		}
+		if getProbeWorker() == nil {
+			if err := StartProbeWorker(); err != nil || getProbeWorker() == nil {
+				return
+			}
+		}
+		if w := getProbeWorker(); w != nil {
+			if wlvl, wchg, wok, wrid, wlen, werr := w.ProbePathAll(path); werr == nil && wok {
+				lastKnownMu.Lock()
+				lk := lastKnownLevel
+				lastKnownMu.Unlock()
+
+				displayed := batteryLvl
+				displayedChg := isCharging
+				suspect := false
+				hold := 0
+				holdchg := false
+				if displayed >= 15 && (displayed-wlvl) >= 20 {
+					suspect = true
+					hold = displayed
+					holdchg = displayedChg
+				} else if lk >= 15 && (lk-wlvl) >= 20 {
+					suspect = true
+					hold = lk
+					holdchg = lastKnownCharging
+				}
+				if suspect {
+					if logger != nil {
+						logger.Printf("[DEVCHANGE] quick probe on %s returned low lvl=%d while recent=%d — deferring acceptance and verifying", path, wlvl, hold)
+					}
+					setReading(3 * time.Second)
+					trayInvoke(func() {
+						batteryLvl = hold
+						isCharging = holdchg
+						batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", hold)
+						updateTrayTooltip(fmt.Sprintf("Last known: %d%%", hold))
+						updateTrayIcon(hold, holdchg, true)
+					})
+					broadcast(map[string]interface{}{
+						"status":          "connected",
+						"mode":            map[bool]string{true: "Charging", false: "Discharging"}[holdchg],
+						"statusText":      "Verifying…",
+						"level":           hold,
+						"charging":        holdchg,
+						"lastKnown":       true,
+						"lastChargeTime":  lastChargeTime,
+						"lastChargeLevel": lastChargeLevel,
+						"deviceModel":     deviceModel,
+						"updateAvailable": updateAvailable,
+						"updateVersion":   updateVersion,
+						"reading":         true,
+					})
+
+					go func(path string, expected int, w *WorkerClient, rid byte, rlen int, chg bool, hold int, holdchg bool) {
+						defer safeDefer("quickProbeConfirm")
+						confirm := 0
+						attempts := 3
+						for i := 0; i < attempts; i++ {
+							time.Sleep(220 * time.Millisecond)
+							if wlvl2, _, wok2, _, _, werr2 := w.ProbePathAll(path); werr2 == nil && wok2 {
+								if absInt(wlvl2-expected) <= 3 {
+									confirm++
+								}
+								if confirm >= 2 {
+									selectedReportID = rid
+									selectedReportLen = rlen
+									useGetOnly = true
+									useInputReports = false
+									batteryLvl = expected
+									isCharging = chg
+									lastKnownMu.Lock()
+									showLastKnown = false
+									lastKnownLevel = expected
+									lastKnownCharging = chg
+									lastKnownMu.Unlock()
+									updateTrayTooltip(fmt.Sprintf("Battery: %d%%", expected))
+									updateTrayIcon(expected, chg, false)
+									if logger != nil {
+										logger.Printf("[DEVCHANGE] quick probe on %s confirmed lvl=%d chg=%v", path, expected, chg)
+									}
+									clearReading()
+									broadcast(map[string]interface{}{
+										"status":          "connected",
+										"mode":            map[bool]string{true: "Charging", false: "Discharging"}[chg],
+										"statusText":      map[bool]string{true: "Charging", false: "Discharging"}[chg],
+										"level":           batteryLvl,
+										"charging":        isCharging,
+										"lastKnown":       false,
+										"lastChargeTime":  lastChargeTime,
+										"lastChargeLevel": lastChargeLevel,
+										"deviceModel":     deviceModel,
+										"updateAvailable": updateAvailable,
+										"updateVersion":   updateVersion,
+										"reading":         false,
+									})
+									return
+								}
+							}
+						}
+						if logger != nil {
+							logger.Printf("[DEVCHANGE] quick probe on %s failed confirmation; keeping hold=%d", path, hold)
+						}
+						clearReading()
+						broadcast(map[string]interface{}{
+							"status":     "connected",
+							"mode":       map[bool]string{true: "Charging", false: "Discharging"}[holdchg],
+							"statusText": "Verifying failed",
+							"level":      hold,
+							"charging":   holdchg,
+							"lastKnown":  true,
+							"reading":    false,
+						})
+					}(path, wlvl, w, wrid, wlen, wchg, hold, holdchg)
+					return
+				}
+
+				selectedReportID = wrid
+				selectedReportLen = wlen
+				useGetOnly = true
+				useInputReports = false
+				batteryLvl = wlvl
+				isCharging = wchg
+				clearWriteFailures(path)
+				if logger != nil {
+					logger.Printf("[DEVCHANGE] quick worker probe succeeded on %s lvl=%d chg=%v", path, wlvl, wchg)
+				}
+
+				status := map[bool]string{true: "Charging", false: "Discharging"}[wchg]
+				icon := "🔋"
+				if wchg {
+					icon = "⚡"
+				}
+				batteryText = fmt.Sprintf("%s %d%% (%s)", icon, wlvl, status)
+				lastKnownMu.Lock()
+				showLastKnown = false
+				lastKnownLevel = wlvl
+				lastKnownCharging = wchg
+				lastKnownMu.Unlock()
+				updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+				updateTrayIcon(wlvl, wchg, false)
+				broadcast(map[string]interface{}{
+					"status":          "connected",
+					"mode":            status,
+					"statusText":      status,
+					"level":           wlvl,
+					"charging":        wchg,
+					"lastKnown":       false,
+					"lastChargeTime":  lastChargeTime,
+					"lastChargeLevel": lastChargeLevel,
+					"deviceModel":     deviceModel,
+					"updateAvailable": updateAvailable,
+					"updateVersion":   updateVersion,
+					"reading":         false,
+				})
+				return
+			}
+		}
+	}()
+}
+
+func scheduleDebouncedReconnect() {
+	atomic.StoreInt64(&lastDevChangeUnix, time.Now().UnixNano())
+	if !atomic.CompareAndSwapInt32(&devChangeScheduledInt, 0, 1) {
+		return
+	}
+
+	go func() {
+		for {
+			time.Sleep(300 * time.Millisecond)
+			since := time.Since(time.Unix(0, atomic.LoadInt64(&lastDevChangeUnix)))
+			if since < 900*time.Millisecond {
+				continue
+			}
+			atomic.StoreInt32(&devChangeScheduledInt, 0)
+			atomic.StoreInt32(&forceFreshProbeOnceInt, 1)
+
+			if logger != nil {
+				logger.Printf("[DEVCHANGE] stable — performing reconnect and quick refresh")
+			}
+			clearBackoffsForCandidates()
+			reconnect()
+			quickRefreshOnDeviceChange()
+			return
+		}
+	}()
+}
 
 func startupShortcutPath(appName string) string {
-	// %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\<app>.lnk
 	return filepath.Join(
 		os.Getenv("APPDATA"),
 		`Microsoft\Windows\Start Menu\Programs\Startup`,
@@ -1261,7 +1916,6 @@ func startupShortcutPath(appName string) string {
 }
 
 func createStartupShortcut(appName, exePath, args string) error {
-	// Ensure the Startup folder exists
 	startupDir := filepath.Dir(startupShortcutPath(appName))
 	if err := os.MkdirAll(startupDir, 0755); err != nil {
 		return err
@@ -1269,13 +1923,11 @@ func createStartupShortcut(appName, exePath, args string) error {
 
 	linkPath := startupShortcutPath(appName)
 
-	// Initialize COM (STA)
 	if err := ole.CoInitialize(0); err != nil {
 		return fmt.Errorf("CoInitialize failed: %v", err)
 	}
 	defer ole.CoUninitialize()
 
-	// Use WScript.Shell (automation-friendly) to create the .lnk
 	shellObj, err := oleutil.CreateObject("WScript.Shell")
 	if err != nil {
 		return fmt.Errorf("CreateObject(WScript.Shell) failed: %v", err)
@@ -1288,7 +1940,6 @@ func createStartupShortcut(appName, exePath, args string) error {
 	}
 	defer shellDisp.Release()
 
-	// shortcut = WScript.Shell.CreateShortcut(linkPath)
 	scV, err := oleutil.CallMethod(shellDisp, "CreateShortcut", linkPath)
 	if err != nil {
 		return fmt.Errorf("CreateShortcut failed: %v", err)
@@ -1296,7 +1947,6 @@ func createStartupShortcut(appName, exePath, args string) error {
 	sc := scV.ToIDispatch()
 	defer sc.Release()
 
-	// Set properties
 	if _, err = oleutil.PutProperty(sc, "TargetPath", exePath); err != nil {
 		return fmt.Errorf("Set TargetPath failed: %v", err)
 	}
@@ -1306,11 +1956,9 @@ func createStartupShortcut(appName, exePath, args string) error {
 		}
 	}
 	_, _ = oleutil.PutProperty(sc, "Description", appName)
-	_, _ = oleutil.PutProperty(sc, "IconLocation", exePath) // optional
-	// 7 = SW_SHOWMINNOACTIVE, 1 = SW_NORMAL. Keep normal; you already handle minimize via your own logic.
+	_, _ = oleutil.PutProperty(sc, "IconLocation", exePath)
 	_, _ = oleutil.PutProperty(sc, "WindowStyle", 1)
 
-	// Save the shortcut
 	if _, err = oleutil.CallMethod(sc, "Save"); err != nil {
 		return fmt.Errorf("Shortcut Save failed: %v", err)
 	}
@@ -1325,14 +1973,11 @@ func removeStartupShortcut(appName string) error {
 	return nil
 }
 
-// ---------- Public API used by your settings logic ----------
-
 func enableStartup() {
 	exePath, err := os.Executable()
 	if err != nil {
 		return
 	}
-	// If you want the app to start minimized when launched from Startup:
 	args := ""
 	if settings.StartMinimized {
 		args = "--minimized"
@@ -1351,7 +1996,6 @@ func calculateEMA(rates []float64) float64 {
 	if len(rates) == 1 {
 		return rates[0]
 	}
-	// Use exponential moving average with alpha=0.3 (similar to phones)
 	alpha := 0.3
 	ema := rates[0]
 	for i := 1; i < len(rates); i++ {
@@ -1376,7 +2020,6 @@ func sendNotification(title, message string, critical bool) {
 		copy(nid.SzInfo[:], infoText)
 		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 
-		// reset flags
 		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 		trayMu.Unlock()
@@ -1393,10 +2036,9 @@ type GitHubRelease struct {
 }
 
 func checkForUpdates() {
-	// Wait 5 seconds before checking (let app start first)
 	time.Sleep(5 * time.Second)
 
-	resp, err := http.Get("https://api.github.com/repos/Rodrigo-200/GloriousBatteryMonitor-Go/releases/latest")
+	resp, err := http.Get("https://api.github.com/repos/Rodrigo-200/GloriousBatteryMonitor-Go/releases/latest ")
 	if err != nil {
 		return
 	}
@@ -1407,14 +2049,12 @@ func checkForUpdates() {
 		return
 	}
 
-	// Remove 'v' prefix from tag for comparison
 	latestVersion := release.TagName
 	if len(latestVersion) > 0 && latestVersion[0] == 'v' {
 		latestVersion = latestVersion[1:]
 	}
 
 	if latestVersion != currentVersion {
-		// Find the .exe asset
 		var downloadURL string
 		for _, asset := range release.Assets {
 			if asset.Name == "GloriousBatteryMonitor-Go.exe" {
@@ -1434,11 +2074,9 @@ func promptUpdate(version, downloadURL string) {
 	updateVersion = version
 	updateURL = downloadURL
 
-	// Show notification
 	message := fmt.Sprintf("Version %s is available. Open the app to update.", version)
 	sendNotification("Update Available", message, false)
 
-	// Broadcast to UI clients
 	broadcast(map[string]interface{}{
 		"updateAvailable": true,
 		"updateVersion":   version,
@@ -1469,21 +2107,16 @@ func downloadAndInstallUpdate(downloadURL string) error {
 	}
 	out.Close()
 
-	// Rename old exe to .old
 	oldFile := exePath + ".old"
-	os.Remove(oldFile) // Remove any existing .old file
+	os.Remove(oldFile)
 	if err := os.Rename(exePath, oldFile); err != nil {
 		return err
 	}
-
-	// Rename new exe to current exe
 	if err := os.Rename(tempFile, exePath); err != nil {
-		// Restore old file if rename fails
 		os.Rename(oldFile, exePath)
 		return err
 	}
 
-	// Restart the application
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	shell32 := syscall.NewLazyDLL("shell32.dll")
 	shellExecute := shell32.NewProc("ShellExecuteW")
@@ -1491,7 +2124,6 @@ func downloadAndInstallUpdate(downloadURL string) error {
 	verb, _ := syscall.UTF16PtrFromString("open")
 	shellExecute.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(exePathW)), 0, 0, 1)
 
-	// Exit current process
 	terminateProcess := kernel32.NewProc("TerminateProcess")
 	getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
 	handle, _, _ := getCurrentProcess.Call()
@@ -1499,7 +2131,6 @@ func downloadAndInstallUpdate(downloadURL string) error {
 
 	return nil
 }
-
 func pickModel(ci hid.DeviceInfo) string {
 	if ci.ProductStr != "" {
 		return ci.ProductStr
@@ -1509,9 +2140,10 @@ func pickModel(ci hid.DeviceInfo) string {
 	}
 	return "Unknown"
 }
-
 func finishConnect(path string, lvl int, chg bool) {
 	recordedUnplug = false
+	cancelDelayedReadOnlyLocalFallback(path)
+	cancelScheduledForceClose(path)
 	saveConnProfile(DeviceProfile{
 		Path:            path,
 		ReportID:        selectedReportID,
@@ -1519,14 +2151,360 @@ func finishConnect(path string, lvl int, chg bool) {
 		UseGetOnly:      useGetOnly,
 		UseInputReports: useInputReports,
 	})
-	batteryLvl = lvl
-	isCharging = chg
+	preserveLastKnown := false
+	lastKnownMu.Lock()
+	lk := lastKnownLevel
+	lastKnownMu.Unlock()
+	if lvl == 0 && lk > 0 {
+		batteryLvl = lk
+		isCharging = chg
+		preserveLastKnown = true
+		lastKnownMu.Lock()
+		showLastKnown = true
+		lastKnownMu.Unlock()
+	} else {
+		if lk > 0 && lvl > 0 {
+			if lk >= 15 && (lk-lvl) >= 20 {
+				batteryLvl = lk
+				isCharging = chg
+				preserveLastKnown = true
+				lastKnownMu.Lock()
+				showLastKnown = true
+				lastKnownMu.Unlock()
+			} else {
+				batteryLvl = lvl
+				isCharging = chg
+				lastKnownMu.Lock()
+				showLastKnown = false
+				lastKnownMu.Unlock()
+			}
+		} else {
+			batteryLvl = lvl
+			isCharging = chg
+			lastKnownMu.Lock()
+			showLastKnown = false
+			lastKnownMu.Unlock()
+		}
+	}
 	status := "Discharging"
 	icon := "🔋"
 	if chg {
 		status, icon = "Charging", "⚡"
 	}
-	batteryText = fmt.Sprintf("%s %d%% (%s)", icon, lvl, status)
-	updateTrayTooltip(fmt.Sprintf("Battery: %d%%", lvl))
-	updateTrayIcon(lvl, chg)
+	displayLevel := batteryLvl
+	batteryText = fmt.Sprintf("%s %d%% (%s)", icon, displayLevel, status)
+	updateTrayTooltip(fmt.Sprintf("Battery: %d%%", displayLevel))
+	updateTrayIcon(displayLevel, isCharging, preserveLastKnown)
+
+	if logger != nil {
+		logger.Printf("[CONNECT] finishConnect path=%s lvl=%d chg=%v", path, lvl, chg)
+	}
+	if batteryLvl > 0 {
+		lastKnownMu.Lock()
+		lastKnownLevel = batteryLvl
+		lastKnownCharging = isCharging
+		lastKnownMu.Unlock()
+		atomic.StoreInt64(&lastGoodReadUnix, time.Now().UnixNano())
+	}
+	readingFlag := false
+	if lvl == 0 || preserveLastKnown {
+		setReading(4 * time.Second)
+		readingFlag = true
+	} else {
+		clearReading()
+	}
+	bcast := map[string]interface{}{
+		"status":          "connected",
+		"mode":            status,
+		"statusText":      status,
+		"level":           batteryLvl,
+		"charging":        isCharging,
+		"lastChargeTime":  lastChargeTime,
+		"lastChargeLevel": lastChargeLevel,
+		"deviceModel":     deviceModel,
+		"updateAvailable": updateAvailable,
+		"updateVersion":   updateVersion,
+		"reading":         readingFlag,
+	}
+	if preserveLastKnown {
+		bcast["lastKnown"] = true
+	}
+	broadcast(bcast)
+
+	goSafe("confirmChargingViaWorker:"+path, func() {
+		if err := StartProbeWorker(); err != nil {
+			return
+		}
+		if w := getProbeWorker(); w != nil {
+			if wlvl, wchg, ok, wrid, wlen, werr := w.ProbePathAll(path); werr == nil && ok {
+				if wlvl >= 0 && (wlvl != batteryLvl || wchg != isCharging) {
+					lastKnownMu.Lock()
+					showLastKnown = false
+					lastKnownLevel = wlvl
+					lastKnownCharging = wchg
+					lastKnownMu.Unlock()
+					batteryLvl = wlvl
+					isCharging = wchg
+					selectedReportID = wrid
+					selectedReportLen = wlen
+					useGetOnly = true
+					useInputReports = false
+					updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+					updateTrayIcon(wlvl, wchg, false)
+					if logger != nil {
+						logger.Printf("[CONNECT] worker-confirmed level=%d chg=%v (updated UI)", wlvl, wchg)
+					}
+					broadcast(map[string]interface{}{"status": "connected", "reading": false, "level": batteryLvl, "charging": isCharging})
+				}
+			}
+		}
+	})
+
+	go func() {
+		attempts := 10
+		zeroStreak := 0
+		confirmCount := 0
+		for i := 0; i < attempts; i++ {
+			time.Sleep(200 * time.Millisecond)
+			if device == nil && !isWorkerManagedDevice() {
+				if w := getProbeWorker(); w != nil {
+					if logger != nil {
+						logger.Printf("[CONNECT] device==nil; attempting quick worker confirm for %s", path)
+					}
+					if wlvl, wchg, wok, wrid, wlen, werr := w.ProbePathAll(path); werr == nil && wok {
+						lastKnownMu.Lock()
+						showLastKnown = false
+						lastKnownLevel = wlvl
+						lastKnownCharging = wchg
+						lastKnownMu.Unlock()
+						selectedReportID = wrid
+						selectedReportLen = wlen
+						useGetOnly = true
+						useInputReports = false
+						batteryLvl = wlvl
+						isCharging = wchg
+						updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+						updateTrayIcon(wlvl, wchg, false)
+						if logger != nil {
+							logger.Printf("[CONNECT] quick worker confirm succeeded lvl=%d chg=%v (path=%s)", wlvl, wchg, path)
+						}
+						clearReading()
+						broadcast(map[string]interface{}{
+							"status":          "connected",
+							"mode":            map[bool]string{true: "Charging", false: "Discharging"}[wchg],
+							"statusText":      map[bool]string{true: "Charging", false: "Discharging"}[wchg],
+							"level":           batteryLvl,
+							"charging":        isCharging,
+							"lastChargeTime":  lastChargeTime,
+							"lastChargeLevel": lastChargeLevel,
+							"deviceModel":     deviceModel,
+							"updateAvailable": updateAvailable,
+							"updateVersion":   updateVersion,
+							"reading":         false,
+						})
+						goSafe("background_adopt_postconnect:"+path, func() {
+							if lvl3, chg3, adotOk := adoptWorkerManagedPath(&hid.DeviceInfo{Path: path}); adotOk {
+								setWorkerManagedDevice(true)
+								if lvl3 > 0 {
+									lastKnownMu.Lock()
+									lastKnownLevel = lvl3
+									lastKnownCharging = chg3
+									lastKnownMu.Unlock()
+								}
+							}
+						})
+						return
+					} else {
+						if !isForceLive() {
+							if logger != nil {
+								logger.Printf("[CONNECT] device became nil and quick worker confirm failed: %v; aborting post-connect reads", werr)
+							}
+							return
+						}
+					}
+				} else {
+					if !isForceLive() {
+						if logger != nil {
+							logger.Printf("[CONNECT] aborting post-connect reads; device became nil (no worker)")
+						}
+						return
+					}
+				}
+			}
+			if lvl2, chg2 := readBattery(); lvl2 >= 0 {
+				if preserveLastKnown {
+					if absInt(lvl2-lvl) <= 3 {
+						confirmCount++
+						if logger != nil {
+							logger.Printf("[CONNECT] confirmation for suspicious reading (confirm=%d) lvl2=%d target=%d", confirmCount, lvl2, lvl)
+						}
+						if confirmCount >= 2 {
+							batteryLvl = lvl2
+							isCharging = chg2
+							lastKnownMu.Lock()
+							showLastKnown = false
+							lastKnownMu.Unlock()
+							updateTrayTooltip(fmt.Sprintf("Battery: %d%%", batteryLvl))
+							updateTrayIcon(batteryLvl, isCharging, false)
+							if logger != nil {
+								logger.Printf("[CONNECT] accepted confirmed low reading lvl=%d chg=%v", lvl2, chg2)
+							}
+							clearReading()
+							broadcast(map[string]interface{}{"status": "connected", "reading": false, "level": batteryLvl, "charging": isCharging})
+							return
+						}
+						continue
+					}
+					confirmCount = 0
+				}
+				if lvl2 == 0 && batteryLvl > 0 {
+					zeroStreak++
+					if logger != nil {
+						logger.Printf("[CONNECT] suspicious zero reading (streak=%d) — will retry", zeroStreak)
+					}
+					if zeroStreak < 2 {
+						if !settings.NonIntrusiveMode {
+							_ = sendBatteryCommandWithReportID(device, selectedReportID)
+						}
+						continue
+					}
+					if err := StartProbeWorker(); err == nil && probeWorker != nil {
+						if logger != nil {
+							logger.Printf("[CONNECT] attempting worker fallback after %d zero reads on %s", zeroStreak, currentHIDPath)
+						}
+						if w := getProbeWorker(); w != nil {
+							wlvl, wchg, wok, wrid, wlen, werr := probeWorker.ProbePathAll(currentHIDPath)
+							if werr != nil && strings.Contains(strings.ToLower(werr.Error()), "timeout") {
+								if logger != nil {
+									logger.Printf("[CONNECT] worker probe timed out, retrying once")
+								}
+								time.Sleep(300 * time.Millisecond)
+								wlvl, wchg, wok, wrid, wlen, werr = probeWorker.ProbePathAll(currentHIDPath)
+							}
+							if werr == nil && wok {
+								lastKnownMu.Lock()
+								showLastKnown = false
+								lastKnownLevel = wlvl
+								lastKnownCharging = wchg
+								lastKnownMu.Unlock()
+								batteryLvl = wlvl
+								isCharging = wchg
+								updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+								updateTrayIcon(wlvl, wchg, false)
+								if logger != nil {
+									logger.Printf("[CONNECT] worker fallback probe succeeded: lvl=%d chg=%v rid=0x%02x len=%d", wlvl, wchg, wrid, wlen)
+								}
+								clearReading()
+								broadcast(map[string]interface{}{"status": "connected", "reading": false})
+								return
+							} else {
+								if logger != nil {
+									logger.Printf("[CONNECT] worker fallback probe failed: %v", werr)
+								}
+							}
+						}
+					}
+				}
+				if wlvl2, wchg2, wok2 := adoptWorkerManagedPath(&hid.DeviceInfo{Path: currentHIDPath}); wok2 {
+					useInputReports = true
+					useGetOnly = true
+					lastKnownMu.Lock()
+					showLastKnown = false
+					lastKnownLevel = wlvl2
+					lastKnownCharging = wchg2
+					lastKnownMu.Unlock()
+					batteryLvl = wlvl2
+					isCharging = wchg2
+					updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl2))
+					updateTrayIcon(wlvl2, wchg2, false)
+					if logger != nil {
+						logger.Printf("[CONNECT] worker session adoption succeeded: lvl=%d chg=%v", wlvl2, wchg2)
+					}
+					clearReading()
+					broadcast(map[string]interface{}{
+						"status":          "connected",
+						"mode":            map[bool]string{true: "Charging", false: "Discharging"}[wchg2],
+						"statusText":      map[bool]string{true: "Charging", false: "Discharging"}[wchg2],
+						"level":           batteryLvl,
+						"charging":        isCharging,
+						"lastChargeTime":  lastChargeTime,
+						"lastChargeLevel": lastChargeLevel,
+						"deviceModel":     deviceModel,
+						"updateAvailable": updateAvailable,
+						"updateVersion":   updateVersion,
+						"reading":         false,
+					})
+					setWorkerManagedDevice(true)
+					return
+				}
+				lastKnownMu.Lock()
+				showLastKnown = false
+				lastKnownLevel = lvl2
+				lastKnownCharging = chg2
+				lastKnownMu.Unlock()
+				batteryLvl = lvl2
+				isCharging = chg2
+				updateTrayTooltip(fmt.Sprintf("Battery: %d%%", lvl2))
+				updateTrayIcon(lvl2, chg2, false)
+				if logger != nil {
+					logger.Printf("[CONNECT] fresh read after connect (attempt %d/%d): lvl=%d chg=%v", i+1, attempts, lvl2, chg2)
+				}
+				clearReading()
+				broadcast(map[string]interface{}{"status": "connected", "reading": false})
+				return
+			}
+		}
+		if zeroStreak >= 1 {
+			if err := StartProbeWorker(); err == nil && probeWorker != nil {
+				if logger != nil {
+					logger.Printf("[CONNECT] attempting worker probe fallback on %s", currentHIDPath)
+				}
+				wlvl, wchg, wok, wrid, wlen, werr := probeWorker.ProbePathAll(currentHIDPath)
+				if werr != nil && strings.Contains(strings.ToLower(werr.Error()), "timeout") {
+					if logger != nil {
+						logger.Printf("[CONNECT] worker probe timed out, retrying once")
+					}
+					time.Sleep(300 * time.Millisecond)
+					wlvl, wchg, wok, wrid, wlen, werr = probeWorker.ProbePathAll(currentHIDPath)
+				}
+				if werr == nil && wok {
+					lastKnownMu.Lock()
+					showLastKnown = false
+					lastKnownLevel = wlvl
+					lastKnownCharging = wchg
+					lastKnownMu.Unlock()
+					batteryLvl = wlvl
+					isCharging = wchg
+					updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+					updateTrayIcon(wlvl, wchg, false)
+					if logger != nil {
+						logger.Printf("[CONNECT] worker fallback probe succeeded: lvl=%d chg=%v rid=0x%02x len=%d", wlvl, wchg, wrid, wlen)
+					}
+					clearReading()
+					broadcast(map[string]interface{}{"status": "connected", "reading": false})
+					return
+				} else {
+					if logger != nil {
+						logger.Printf("[CONNECT] worker fallback probe failed: %v", werr)
+					}
+				}
+			}
+		}
+		if logger != nil {
+			logger.Printf("[CONNECT] post-connect read attempts exhausted; will rely on periodic updates")
+		}
+		lastKnownMu.Lock()
+		lk := lastKnownLevel
+		lkchg := lastKnownCharging
+		lastKnownMu.Unlock()
+		if lk > 0 {
+			batteryLvl = lk
+			isCharging = lkchg
+			updateTrayTooltip(fmt.Sprintf("Battery: %d%%", lk))
+			updateTrayIcon(lk, lkchg, true)
+			clearReading()
+			broadcast(map[string]interface{}{"status": "connected", "reading": false, "lastKnown": true})
+			return
+		}
+	}()
 }
