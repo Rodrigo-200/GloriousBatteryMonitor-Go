@@ -1,160 +1,179 @@
-# Glorious Battery Monitor
+<div align="center">
 
-A Windows system tray application for monitoring battery levels of Glorious wireless mice.
+# 🖱️ Glorious Battery Monitor (GBM)
 
-## Features
+**A lightweight, open-source system tray app for checking real-time battery levels of Glorious wireless mice.**
 
-- **Real-time Battery Monitoring**: Displays current battery level and charging status
-- **System Tray Integration**: Runs quietly in the background with tray icon
-- **Time Remaining Estimation**: Shows estimated time until empty/full (like mobile phones)
-- **Last Known State**: Remembers last battery level when device disconnects
-- **Charge History**: Tracks when device was last charged and to what level
-- **Auto-start Support**: Option to launch with Windows
-- **Update Notifications**: Checks for new versions automatically
-- **HID Device Scanner**: Developer tools for diagnosing connection issues
+[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=flat&logo=windows)](https://www.microsoft.com/windows)
 
-## Building
+[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Supported Devices](#-supported-devices) • [Building](#-building-from-source)
 
-### Prerequisites
-- Go 1.19 or later
-- Windows OS
+</div>
 
-### Build Commands
+---
 
-**Standard build (with console window):**
-```bash
-go build -o GloriousBatteryMonitor.exe
+## ✨ Features
+
+- 🔋 **Live Battery Percentage** – Exact value from your Glorious mouse (no LED guessing)
+- ⚡ **Charging Detection** – Shows charge state in real-time
+- 🎯 **System Tray Integration** – Clean tray icon with quick controls
+- 📅 **Charge History** – Tracks last charge level and time
+- 🔄 **Auto Reconnect** – Detects when mouse is plugged/unplugged
+- ⚙️ **Custom Alerts** – Set low and critical battery warnings
+- 💾 **Lightweight** – App uses ~10MB RAM
+
+> ⏱️ **Note:** The “time remaining” value is **only an estimation** and may not always be accurate.  
+> This is a **known limitation**, and we’re working to improve its accuracy in future releases.
+
+---
+
+## 📸 Screenshots
+
+<div align="center">
+
+### Main Interface
+![Main UI](docs/main-page.png)
+
+### Settings Page
+![System Tray](docs/settings-page.png)
+
+</div>
+
+---
+
+## 🚀 Installation
+
+1. **Download:** Get the latest release from [Releases](../../releases).  
+2. **Run:** Double-click `GloriousBatteryMonitor-Go.exe`.  
+3. **Done:** The app starts in your Windows system tray.  
+
+**Requirements**
+- Windows 10/11 (64-bit)
+- WebView2 Runtime (included on Windows 11)
+- Glorious wireless mouse
+
+---
+
+## 📖 Usage
+
+- 🖱️ **Left Click** → Show/hide main window  
+- ⚙️ **Right Click** → Open tray menu (Battery info, Show Window, Quit)  
+- ❌ **Close Window** → Minimizes to tray (use "Quit" to fully exit)
+
+---
+
+## 🖱️ Supported Devices
+
+> Tested with **Model D Wireless**.  
+> Other Glorious mice should work, but are not yet verified.
+
+| Model | Wired | Wireless | Tested |
+|--------|--------|-----------|:------:|
+| Model O / O- | ❔ | ❔ | ❌ |
+| Model O2 | ❔ | ❔ | ❌ |
+| Model D | ✅ | ✅ | ✅ |
+| Model D- / D2 | ❔ | ❔ | Currently testing |
+| Model I / I2 | ❔ | ❔ | ❌ |
+| Model O Pro | ❔ | ❔ | ❌ |
+
+**Vendor ID:** `0x258a (Glorious LLC)`
+
+<details>
+<summary>View Product IDs</summary>
+
 ```
 
-**Production build (no console window):**
+Model O:      0x2011 (Wired), 0x2013 (Wireless)
+Model O-:     0x2019 (Wired), 0x2024 (Wireless)
+Model O Pro:  0x2017 (Wired), 0x2018 (Wireless)
+Model O2:     0x2009 (Wired), 0x200b (Wireless)
+Model D:      0x2012 (Wired), 0x2023 (Wireless)
+Model D-:     0x2015 (Wired), 0x2025 (Wireless)
+Model D2:     0x2031 (Wired), 0x2033 (Wireless)
+Model I:      0x2036 (Wired), 0x2046 (Wireless)
+Model I2:     0x2014 (Wired), 0x2016 (Wireless)
+
+````
+
+</details>
+
+---
+
+## 🛠️ Build from Source
+
+**Prerequisites**
+- [Go 1.21+](https://go.dev/dl/)
+- Windows 10/11
+- Git
+
+**Commands**
 ```bash
-go build -ldflags="-H windowsgui" -o GloriousBatteryMonitor.exe
+git clone https://github.com/Rodrigo-200/GloriousBatteryMonitor.git
+cd GloriousBatteryMonitor
+go mod download
+go build -ldflags -H=windowsgui -o GloriousBatteryMonitor-Go.exe
+````
+
+**Dependencies**
+
+- [go-webview2](https://github.com/jchv/go-webview2) - WebView2 bindings for Go
+- [go-hid](https://github.com/sstallion/go-hid) - HID device communication
+- [win](https://github.com/lxn/win) - Windows API bindings
+
+---
+
+## 🔧 Technical Overview
+
+**Battery Protocol**
+
+```go
+Command:  {0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x83}
+Response: inputReport[6] == 0x83 (valid)
+           inputReport[8] = battery level (0–100)
+           inputReport[7] = charging status (1 = charging)
 ```
 
-## Architecture
+**Architecture**
 
-### Core Files
+* **Backend:** Go (Windows API + HID)
+* **Frontend:** HTML/CSS/JS via WebView2
+* **Updates:** Real-time via Server-Sent Events (SSE)
+* **Tray:** Custom ARGB icons with transparency
 
-- **main.go**: Application entry point, HTTP server, WebView UI, tray icon management
-- **driver.go**: HID device communication and battery reading logic
-- **storage.go**: Persistent data storage (charge history, settings, rate tracking)
-- **logging.go**: Debug logging and HID device enumeration
-- **worker.go**: Helper process for safe HID operations
-- **ui.html**: Embedded WebView UI
+---
 
-### Key Components
+## 🐞 Troubleshooting
 
-#### Battery Monitoring (`reconnect()` in driver.go)
-- Polls device at configured interval (default 5 seconds)
-- Reads battery level and charging status via HID feature reports
-- Tracks discharge/charge rates for time estimation
-- Handles device disconnection gracefully
+### Antivirus False Positives
 
-#### Rate Tracking
-- Monitors battery level changes (1% minimum threshold)
-- Calculates discharge/charge rates using exponential moving average
-- Maintains 10-sample history window
-- Persists rates across restarts (up to 7 days)
+Some antivirus software may flag the app due to WebView2’s crash reporter (Crashpad).
+✅ **Solution:** Whitelist the executable or report a false positive.
 
-#### Time Estimation
-- Requires minimum 0.5%/hour rate and valid battery level
-- Shows time remaining when discharging
-- Shows time to full when charging
-- Uses median smoothing (3 samples) in UI to prevent flickering
+### Memory Usage
 
-#### Worker Process
-- Spawned as separate process (`--hid-worker` flag)
-- Performs potentially-blocking HID operations safely
-- Communicates via JSON-RPC over stdin/stdout
-- Prevents main process crashes from driver issues
+The app uses ~10MB RAM.
+The WebView2 runtime adds 50–100MB (standard for Chromium-based UIs).
 
-#### UI System
-- WebView2-based interface
-- Server-Sent Events (SSE) for real-time updates
-- Fallback polling every 3 seconds
-- Caches last valid time estimate to prevent flickering
+---
 
-## Data Storage
+## 🙏 Acknowledgments
 
-All data stored in: `%APPDATA%\GloriousBatteryMonitor\`
+* [AwesomeTy18/GloriousBatteryMonitor (C#)](https://github.com/AwesomeTy18/GloriousBatteryMonitor) – Reference for HID protocol implementation.
 
-- **charge_data.json**: Battery history and rate tracking
-- **settings.json**: User preferences
-- **conn_profile.json**: Device connection profiles
-- **debug.log**: Application logs
+---
 
-## Settings
+## ☕ Support Us
 
-- **Start with Windows**: Auto-launch on login
-- **Start Minimized**: Launch to tray without showing window
-- **Refresh Interval**: How often to poll device (1-60 seconds)
-- **Non-intrusive Mode**: Read-only operations (no writes)
-- **Notifications**: Low/critical battery alerts
-- **Battery Thresholds**: Customize warning levels
+If you find **Glorious Battery Monitor** helpful, you can buy me a coffee — every bit helps keep it updated. ❤️
 
-## Supported Devices
+<p align="center">
+  <a href="https://www.buymeacoffee.com/gloriousbattery" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="200"/>
+  </a>
+</p>
 
-Currently supports Glorious mice with VID `0x258a`:
-- Model D Wireless (PID `0x2023`)
-- Model D Wired (PID `0x2012`)
+⭐ **Star this repo** if you find it useful!
 
-Additional devices can be added to `knownDevices` map in driver.go.
-
-## Troubleshooting
-
-### Device Not Detected
-1. Open Settings → Developer Tools
-2. Click "Scan HID Devices"
-3. Check if your device appears in the list
-4. Verify VID/PID matches supported devices
-
-### Inaccurate Time Estimates
-- Requires at least 1% battery change to calculate rate
-- Wait for 3+ samples for stable estimates
-- Rates persist for 7 days; delete charge_data.json to reset
-
-### Application Crashes
-- Check `debug.log` for error messages
-- Enable "Non-intrusive Mode" to avoid write operations
-- Report issues with HID scan output
-
-## Development
-
-### Debug Mode
-Set environment variables for testing:
-- `GLORIOUS_NO_UI=1`: Run headless (server only)
-- `GLORIOUS_NO_HID=1`: Skip HID initialization
-- `GLORIOUS_FORCE_WORKER=1`: Always use worker process
-- `PORT=8080`: Override web server port
-
-### Code Structure
-
-**Main Loop** (`updateBattery()` → `reconnect()`):
-1. Attempt to connect to device
-2. Read battery level and charging status
-3. Update rate tracking if level changed
-4. Calculate time remaining
-5. Broadcast to UI clients
-6. Update tray icon
-7. Sleep until next interval
-
-**Broadcast Flow**:
-1. `reconnect()` calls `broadcast()` with data
-2. `broadcast()` adds metadata (lastKnown, reading flags)
-3. JSON payload sent to all SSE clients
-4. UI updates battery gauge, status, time remaining
-
-**Worker Communication**:
-1. Main process spawns worker with `--hid-worker`
-2. Worker listens on stdin for JSON commands
-3. Commands: `probe`, `probe_all`, `open_session`, `get_feature_session`
-4. Worker responds with JSON results on stdout
-5. Worker streams input reports as events
-
-## License
-
-See LICENSE file for details.
-
-## Version
-
-Current version: 2.3.4
+</div>
