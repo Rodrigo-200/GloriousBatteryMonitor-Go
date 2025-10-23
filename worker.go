@@ -46,6 +46,18 @@ var workerExitMu sync.Mutex
 var lastWorkerExit time.Time
 var probeWorkerLastStart time.Time
 
+func isD2W(path string) bool {
+	var ok bool
+	hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
+		if info.Path == path {
+			ok = info.VendorID == 0x093A && info.ProductID == 0x824D
+			return fmt.Errorf("found") // stop enumerate
+		}
+		return nil
+	})
+	return ok
+}
+
 func StartProbeWorker() error {
 	probeWorkerMu.Lock()
 	defer probeWorkerMu.Unlock()
@@ -945,20 +957,19 @@ func workerProbePath(path string, reportID byte) (int, bool, bool, int, error) {
 		return 0, false, false, 0, fmt.Errorf("open_device: %v", err)
 	}
 	defer d.Close()
-	// D2-W fast-path
-	var d2w bool
-	hid.Enumerate(0, 0, func(info *hid.DeviceInfo) error {
-		if info.Path == path {
-			d2w = info.VendorID == 0x093A && info.ProductID == 0x824D
-			return fmt.Errorf("found")
-		}
-		return nil
-	})
-	if d2w {
+
+	// --------------------------------------------------
+	// Model D 2 Wireless fast-path (0x093A:0x824D)
+	// --------------------------------------------------
+	if isD2W(path) {
 		if lvl, chg, ok := probeD2W(d); ok {
 			return lvl, chg, true, 65, nil
 		}
 	}
+
+	// --------------------------------------------------
+	// Generic fallback for all other devices
+	// --------------------------------------------------
 	sizes := []int{65, 33, 16, 9}
 	for _, sz := range sizes {
 		type resT struct {
@@ -973,6 +984,7 @@ func workerProbePath(path string, reportID byte) (int, bool, bool, int, error) {
 			n, err := safeGetFeatureReport(d, buf)
 			resCh <- resT{n: n, err: err, buf: buf}
 		}(sz)
+
 		select {
 		case r := <-resCh:
 			if r.err != nil {
