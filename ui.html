@@ -169,6 +169,12 @@
             border-color: #484f5822;
         }
 
+        .status-reading {
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--ink-muted);
+            border-color: transparent;
+        }
+
         .status-fair {
             background: rgba(210, 153, 34, .14);
             color: var(--warn);
@@ -696,6 +702,7 @@
                     <circle cx="12" cy="12" r="3" />
                 </svg>
             </button>
+            <!-- setup button removed to restore original UI -->
             <div class="title" id="deviceTitle">Glorious Mouse</div>
             <div class="subtitle">Battery Monitor</div>
         </div>
@@ -742,6 +749,8 @@
                     </div>
                 </div>
             </div>
+
+            <!-- setup wizard removed -->
         </div>
     </div>
 
@@ -763,6 +772,19 @@
                 <div class="checkbox-wrapper">
                     <input type="checkbox" id="startMinimized">
                     <label class="setting-label" for="startMinimized" style="margin:0">Start Minimized</label>
+                </div>
+            </div>
+            <div class="setting-item">
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="nonIntrusiveMode">
+                    <label class="setting-label" for="nonIntrusiveMode" style="margin:0">Non-intrusive (safe) mode</label>
+                </div>
+                <div class="hint">When enabled the app avoids SetFeature/Write pokes and will only perform safe reads. Useful for testing flaky dongles.</div>
+            </div>
+            <div class="setting-item">
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="notificationsEnabled">
+                    <label class="setting-label" for="notificationsEnabled" style="margin:0">Enable Notifications</label>
                 </div>
             </div>
 
@@ -801,15 +823,16 @@
                     </svg>
                     <span>Developer Tools</span>
                 </div>
-                <div class="dev-desc">Capture the latest HID report for diagnostics. The report is saved in the app data
+                <div class="dev-desc">Scan all HID devices or capture the latest HID report for diagnostics. The report is saved in the app data
                     folder for easy sharing.</div>
                 <div class="dev-actions">
+                    <button type="button" class="dev-btn" id="scanHidBtn" onclick="scanHIDDevices()">Scan HID Devices</button>
                     <button type="button" class="dev-btn" id="captureHidBtn" onclick="captureHidReport()">Capture HID
                         Report</button>
                     <button type="button" class="dev-btn" id="copyHidBtn" onclick="copyHidReport()" disabled>Copy
                         Output</button>
                 </div>
-                <div class="dev-status" id="captureStatus" aria-live="polite">No capture yet.</div>
+                <div class="dev-status" id="captureStatus" aria-live="polite">No scan yet.</div>
                 <pre class="code-block" id="hidDump" tabindex="0"></pre>
             </div>
 
@@ -890,6 +913,7 @@
                 currentSettings = await response.json();
                 byId('startWithWindows').checked = !!currentSettings.startWithWindows;
                 byId('startMinimized').checked = !!currentSettings.startMinimized;
+                byId('nonIntrusiveMode') && (byId('nonIntrusiveMode').checked = !!currentSettings.nonIntrusiveMode);
                 byId('refreshInterval').value = currentSettings.refreshInterval ?? 5;
                 byId('notificationsEnabled') && (byId('notificationsEnabled').checked = !!currentSettings.notificationsEnabled);
                 byId('lowBatteryThreshold').value = currentSettings.lowBatteryThreshold ?? 20;
@@ -942,6 +966,7 @@
                 startMinimized: byId('startMinimized').checked,
                 refreshInterval: clamp(parseInt(byId('refreshInterval').value, 10) || 5, 1, 60),
                 notificationsEnabled: byId('notificationsEnabled') ? byId('notificationsEnabled').checked : currentSettings.notificationsEnabled,
+                nonIntrusiveMode: byId('nonIntrusiveMode') ? byId('nonIntrusiveMode').checked : currentSettings.nonIntrusiveMode,
                 lowBatteryThreshold: clamp(parseInt(byId('lowBatteryThreshold').value, 10) || 20, 5, 50),
                 criticalBatteryThreshold: clamp(parseInt(byId('criticalBatteryThreshold').value, 10) || 10, 5, 30)
             };
@@ -971,6 +996,82 @@
             if (state) cls += ' ' + state;
             status.className = cls;
             status.textContent = message;
+        }
+
+        async function scanHIDDevices() {
+            const btn = byId('scanHidBtn');
+            const copyBtn = byId('copyHidBtn');
+            const dump = byId('hidDump');
+            if (!btn) return;
+
+            btn.setAttribute('disabled', '');
+            if (copyBtn) {
+                copyBtn.setAttribute('disabled', '');
+            }
+            setDevStatus('Scanning all HID devices…', '');
+
+            try {
+                const res = await fetch('/api/scan-hid', { method: 'POST' });
+                if (!res.ok) {
+                    const text = await res.text();
+                    throw new Error(text || 'Scan failed');
+                }
+                const data = await res.json();
+                
+                // Format the scan results
+                let output = `=== HID Device Scan Results ===\n`;
+                output += `Total devices: ${data.totalCount}\n`;
+                output += `Glorious devices: ${data.gloriousCount}\n\n`;
+                
+                if (data.gloriousCount > 0) {
+                    output += `--- Glorious Devices ---\n`;
+                    data.gloriousDevices.forEach((dev, i) => {
+                        output += `\n[${i + 1}] ${dev.modelName}\n`;
+                        output += `    VID: ${dev.vendorId}, PID: ${dev.productId}\n`;
+                        output += `    Product: ${dev.productStr}\n`;
+                        if (dev.manufacturer) output += `    Manufacturer: ${dev.manufacturer}\n`;
+                        if (dev.serialNumber) output += `    Serial: ${dev.serialNumber}\n`;
+                        output += `    UsagePage: ${dev.usagePage}, Usage: ${dev.usage}\n`;
+                        output += `    Interface: ${dev.interfaceNbr}, Release: ${dev.releaseNbr}\n`;
+                        output += `    Path: ${dev.path}\n`;
+                    });
+                    output += `\n`;
+                }
+                
+                output += `--- All HID Devices ---\n`;
+                data.allDevices.forEach((dev, i) => {
+                    output += `\n[${i + 1}] VID: ${dev.vendorId}, PID: ${dev.productId}`;
+                    if (dev.productStr) output += ` - ${dev.productStr}`;
+                    output += `\n`;
+                    if (dev.manufacturer) output += `    Manufacturer: ${dev.manufacturer}\n`;
+                    output += `    UsagePage: ${dev.usagePage}, Usage: ${dev.usage}, Interface: ${dev.interfaceNbr}\n`;
+                    if (dev.isGlorious) output += `    ⭐ Glorious Device\n`;
+                });
+                
+                lastHidDump = output;
+                lastHidHex = '';
+                lastHidPath = '';
+
+                if (dump) {
+                    dump.textContent = output;
+                    dump.style.display = 'block';
+                }
+
+                const statusText = `Found ${data.totalCount} HID devices (${data.gloriousCount} Glorious)`;
+                setDevStatus(statusText, 'ok');
+
+                if (copyBtn) {
+                    copyBtn.removeAttribute('disabled');
+                }
+
+                showToast(`Scan complete: ${data.gloriousCount} Glorious device(s) found`, 'ok');
+            } catch (err) {
+                const message = err && err.message ? err.message : 'Scan failed';
+                setDevStatus(message, 'error');
+                showToast(message, 'error');
+            } finally {
+                btn.removeAttribute('disabled');
+            }
         }
 
         async function captureHidReport() {
@@ -1060,8 +1161,62 @@
 
         const eventSource = new EventSource('/events');
         eventSource.onmessage = function (event) {
-            try { const data = JSON.parse(event.data); updateBattery(data); } catch (e) { }
+            try {
+                const data = JSON.parse(event.data);
+                // wizard removed: ignore openSetupWizard notifications
+                updateBattery(data);
+            } catch (e) { }
         };
+
+        // Also perform an explicit one-shot fetch of the current status
+        // to ensure the UI shows the latest server state even if the SSE
+        // stream missed the very first update (race on connect). This
+        // helps keep the app UI in sync with the tray icon.
+        (async function () {
+            try {
+                const r = await fetch('/api/status');
+                if (r.ok) {
+                    const s = await r.json();
+                    updateBattery(s);
+                }
+            } catch (e) {
+                // ignore — SSE will still provide updates
+                console.warn('status fetch failed', e);
+            }
+        })();
+
+        // Refresh status when the window regains focus or becomes visible
+        // so the UI can re-sync if it missed a live SSE update while
+        // backgrounded or if the stream dropped an early event.
+        window.addEventListener('focus', async () => {
+            try {
+                const r = await fetch('/api/status');
+                if (r.ok) updateBattery(await r.json());
+            } catch (e) { }
+        });
+        document.addEventListener('visibilitychange', async () => {
+            if (document.visibilityState === 'visible') {
+                try {
+                    const r = await fetch('/api/status');
+                    if (r.ok) updateBattery(await r.json());
+                } catch (e) { }
+            }
+        });
+
+        // Periodic polling fallback: if SSE is unavailable or misses an
+        // update, poll the server periodically while the UI is open so
+        // it can still reflect disconnects and last-known readings.
+        (function () {
+            const POLL_MS = 3000;
+            setInterval(async () => {
+                try {
+                    const r = await fetch('/api/status');
+                    if (r.ok) updateBattery(await r.json());
+                } catch (e) {
+                    // ignore network errors — SSE still attempted
+                }
+            }, POLL_MS);
+        })();
 
         async function installUpdate() {
             const btn = byId('updateBtn');
@@ -1078,7 +1233,21 @@
             }
         }
 
+        let lastPositiveUpdate = 0; // ms epoch of last time UI showed a positive reading
+
         function updateBattery(data) {
+            // If we recently displayed a positive battery value, ignore a
+            // transient disconnected message for a short grace window so
+            // the UI doesn't flicker due to races between probes.
+            try {
+                if (data && data.status === 'disconnected' && (data.level == null || data.level === 0) && lastPositiveUpdate !== 0) {
+                    const age = Date.now() - lastPositiveUpdate;
+                    if (age < 6000) {
+                        // Ignore this transient disconnected notification
+                        return;
+                    }
+                }
+            } catch (e) {}
             const percentage = document.getElementById('percentage');
             const icon = document.getElementById('icon');
             const status = document.getElementById('status');
@@ -1102,12 +1271,86 @@
                 deviceTitle.textContent = 'Glorious ' + data.deviceModel;
             }
 
+            // If the backend is still verifying the connection/reading,
+            // show a 'Reading…' state instead of briefly showing 0%.
+        if (data.reading) {
+                // Prefer showing the backend-provided last-known level when
+                // the server is in a verification window. Fall back to the
+                // last charge record if the explicit last-known isn't set.
+                const hasLastKnown = !!data.lastKnown && (data.level != null && data.level >= 0);
+                const lastLevel = hasLastKnown ? parseInt(data.level, 10) : ((data.lastChargeLevel != null && data.lastChargeLevel > 0) ? parseInt(data.lastChargeLevel, 10) : null);
+                if (lastLevel !== null) {
+                    percentage.textContent = lastLevel + '%';
+                    if (lastLevel > 0) lastPositiveUpdate = Date.now();
+                    const offset = Math.max(0, circumference * (1 - (lastLevel / 100)) - 0.001);
+                    progress.style.strokeDashoffset = offset.toFixed(3);
+                } else {
+                    percentage.textContent = 'Reading…';
+                    progress.style.strokeDashoffset = circumference.toFixed(2);
+                }
+                icon.innerHTML = '<circle cx="12" cy="12" r="10"/>';
+                status.className = 'status-badge status-reading';
+                statusText.textContent = 'Reading…';
+                return;
+            }
+
+            // If the server explicitly marks this update as a last-known
+            // presentation (even while the device is technically
+            // "connected"), prefer showing the last-known level in the
+            // same muted style we use for disconnected/last-known UI so
+            // the tray and the main window match.
+            const hasLastKnownWhileConnected = !!data.lastKnown && (data.level != null && data.level >= 0) && data.status === 'connected';
+            if (hasLastKnownWhileConnected) {
+                const lastLevel = parseInt(data.level, 10);
+                percentage.textContent = lastLevel + '%';
+                if (lastLevel > 0) lastPositiveUpdate = Date.now();
+                const offset = Math.max(0, circumference * (1 - (lastLevel / 100)) - 0.001);
+                progress.style.strokeDashoffset = offset.toFixed(3);
+                icon.innerHTML = '<circle cx="12" cy="12" r="10"/>';
+                status.className = 'status-badge status-disconnected';
+                progress.style.stroke = 'var(--ink-muted)';
+                percentage.style.color = 'var(--ink-muted)';
+                statusText.textContent = 'Last known';
+                return;
+            }
+
             if (data.status === 'disconnected') {
-                percentage.textContent = '--';
+                // Prefer showing a sensible last-known level/time when
+                // available so users can see the last battery state. If the
+                // backend indicates this is a last-known value, present it
+                // muted and labeled as such.
+                const hasLastKnown = !!data.lastKnown && (data.level != null && data.level >= 0);
+                const lastLevel = hasLastKnown ? parseInt(data.level, 10) : ((data.lastChargeLevel != null && data.lastChargeLevel > 0) ? parseInt(data.lastChargeLevel, 10) : null);
+                if (lastLevel !== null) {
+                    percentage.textContent = lastLevel + '%';
+                    if (lastLevel > 0) lastPositiveUpdate = Date.now();
+                    const offset = Math.max(0, circumference * (1 - (lastLevel / 100)) - 0.001);
+                    progress.style.strokeDashoffset = offset.toFixed(3);
+                } else {
+                    percentage.textContent = '--';
+                    progress.style.strokeDashoffset = circumference.toFixed(2);
+                }
+
+                if (data.lastChargeTime && data.lastChargeTime !== 'Never') {
+                    lastCharge.textContent = data.lastChargeTime;
+                    chargeLevel.textContent = (data.lastChargeLevel ?? '--') + '%';
+                }
+
                 icon.innerHTML = '<circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>';
                 status.className = 'status-badge status-disconnected';
-                statusText.textContent = 'Not Connected';
-                progress.style.strokeDashoffset = circumference.toFixed(2);
+                if (hasLastKnown) {
+                    // Dim the gauge and text to indicate this is not a live
+                    // measurement and mark the status accordingly.
+                    progress.style.stroke = 'var(--ink-muted)';
+                    percentage.style.color = 'var(--ink-muted)';
+                    statusText.textContent = 'Last known';
+                } else {
+                    // No last-known reading available — show standard
+                    // disconnected presentation.
+                    progress.style.stroke = 'var(--ink-muted)';
+                    percentage.style.color = '';
+                    statusText.textContent = 'Not Connected';
+                }
                 return;
             }
 
@@ -1138,7 +1381,10 @@
             }
 
             const level = Math.max(0, Math.min(100, parseInt(data.level, 10) || 0));
+            // Restore live color for an actual live reading
+            percentage.style.color = '';
             percentage.textContent = level + '%';
+            if (level > 0) lastPositiveUpdate = Date.now();
 
             const offset = Math.max(0, circumference * (1 - (level / 100)) - 0.001);
             progress.style.strokeDashoffset = offset.toFixed(3);
@@ -1165,6 +1411,8 @@
                 statusText.textContent = 'Low';
             }
         }
+
+        // Setup wizard client removed — UI no longer exposes device detection
     </script>
 </body>
 
