@@ -777,9 +777,16 @@
             <div class="setting-item">
                 <div class="checkbox-wrapper">
                     <input type="checkbox" id="nonIntrusiveMode">
-                    <label class="setting-label" for="nonIntrusiveMode" style="margin:0">Non-intrusive (safe) mode</label>
+                    <label class="setting-label" for="nonIntrusiveMode" style="margin:0">Non-intrusive mode</label>
                 </div>
-                <div class="hint">When enabled the app avoids SetFeature/Write pokes and will only perform safe reads. Useful for testing flaky dongles.</div>
+                <div class="hint">Legacy power-saving behaviour; safe HID probing is controlled separately below.</div>
+            </div>
+            <div class="setting-item">
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="safeMode">
+                    <label class="setting-label" for="safeMode" style="margin:0">Safe HID mode (read-only probing)</label>
+                </div>
+                <div class="hint">Default ON. Limits HID access to known Glorious telemetry endpoints and blocks feature writes to unknown devices.</div>
             </div>
             <div class="setting-item">
                 <div class="checkbox-wrapper">
@@ -915,6 +922,7 @@
                 byId('startWithWindows').checked = !!currentSettings.startWithWindows;
                 byId('startMinimized').checked = !!currentSettings.startMinimized;
                 byId('nonIntrusiveMode') && (byId('nonIntrusiveMode').checked = !!currentSettings.nonIntrusiveMode);
+                byId('safeMode') && (byId('safeMode').checked = (currentSettings.safeMode !== false));
                 byId('refreshInterval').value = currentSettings.refreshInterval ?? 5;
                 byId('notificationsEnabled') && (byId('notificationsEnabled').checked = !!currentSettings.notificationsEnabled);
                 byId('lowBatteryThreshold').value = currentSettings.lowBatteryThreshold ?? 20;
@@ -968,6 +976,7 @@
                 refreshInterval: clamp(parseInt(byId('refreshInterval').value, 10) || 5, 1, 60),
                 notificationsEnabled: byId('notificationsEnabled') ? byId('notificationsEnabled').checked : currentSettings.notificationsEnabled,
                 nonIntrusiveMode: byId('nonIntrusiveMode') ? byId('nonIntrusiveMode').checked : currentSettings.nonIntrusiveMode,
+                safeMode: byId('safeMode') ? byId('safeMode').checked : (currentSettings.safeMode !== false),
                 lowBatteryThreshold: clamp(parseInt(byId('lowBatteryThreshold').value, 10) || 20, 5, 50),
                 criticalBatteryThreshold: clamp(parseInt(byId('criticalBatteryThreshold').value, 10) || 10, 5, 30)
             };
