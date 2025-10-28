@@ -23,6 +23,7 @@
 - 🔄 **Auto Reconnect** – Detects when mouse is plugged/unplugged
 - ⚙️ **Custom Alerts** – Set low and critical battery warnings
 - 💾 **Lightweight** – App uses ~10MB RAM
+- 🛡️ **Safe HID Mode** – Default-on read-only probing with Glorious-specific allowlisting (override via Settings or `GBM_SAFE_MODE=0`)
 
 > ⏱️ **Note:** The “time remaining” value is **only an estimation** and may not always be accurate.  
 > This is a **known limitation**, and we’re working to improve its accuracy in future releases.
@@ -155,6 +156,19 @@ Some antivirus software may flag the app due to WebView2’s crash reporter (Cra
 
 The app uses ~10MB RAM.
 The WebView2 runtime adds 50–100MB (standard for Chromium-based UIs).
+
+### Safe HID Mode (Non-Invasive Mode)
+
+By default, the app operates in **Safe HID mode** (enabled), which:
+- Only opens HID devices with known Glorious vendor IDs (0x258A, 0x093A)
+- Only attempts writes (SetFeature/Output reports) to whitelisted devices
+- Skips keyboards, headsets, and non-telemetry interfaces
+
+If your Glorious mouse is not detected:
+1. Open **Settings** and verify "Safe HID mode" is enabled
+2. Try temporarily disabling it (not recommended for daily use)
+3. Set the environment variable `GBM_SAFE_MODE=0` before launching
+4. Check the debug log at `%APPDATA%\GloriousBatteryMonitor\debug.log`
 
 ---
 
