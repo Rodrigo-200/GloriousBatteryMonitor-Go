@@ -1002,11 +1002,8 @@ func updateTrayTooltip(text string) {
 		}
 		copy(nid.SzTip[:n], tip[:n])
 
-		win.Shell_NotifyIcon(win.NIM_SETFOCUS, &nid)
-		nid.UFlags = win.NIF_TIP | 0x00000080
+		nid.UFlags = win.NIF_TIP
 		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
-		nid.UVersion = win.NOTIFYICON_VERSION_4
-		win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
 		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 	})
 }
@@ -1263,7 +1260,7 @@ func updateTrayIcon(level int, charging bool, dim bool) {
 				trayMu.Lock()
 				oldIcon := nid.HIcon
 				nid.HIcon = ci
-				nid.UFlags = win.NIF_ICON | win.NIF_TIP | 0x00000080
+				nid.UFlags = win.NIF_ICON
 				win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 				nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 				trayMu.Unlock()
@@ -1297,7 +1294,7 @@ func updateTrayIcon(level int, charging bool, dim bool) {
 		trayMu.Lock()
 		oldIcon := nid.HIcon
 		nid.HIcon = newIcon
-		nid.UFlags = win.NIF_ICON | win.NIF_TIP | 0x00000080
+		nid.UFlags = win.NIF_ICON
 		win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
 		nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 		trayMu.Unlock()
