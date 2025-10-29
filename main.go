@@ -1295,21 +1295,21 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
                         }
                     } else if x > right-radius && y < top+radius {
                         dx := x - (right - radius)
-                        dy = top + radius - y
+                        dy := top + radius - y
                         dist := dx*dx + dy*dy
                         if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
                             isEdge = true
                         }
                     } else if x < left+radius && y > bottom-radius {
                         dx := left + radius - x
-                        dy = y - (bottom - radius)
+                        dy := y - (bottom - radius)
                         dist := dx*dx + dy*dy
                         if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
                             isEdge = true
                         }
                     } else if x > right-radius && y > bottom-radius {
                         dx := x - (right - radius)
-                        dy = y - (bottom - radius)
+                        dy := y - (bottom - radius)
                         dist := dx*dx + dy*dy
                         if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
                             isEdge = true
