@@ -2,6 +2,7 @@ package main
 
 import (
     "fmt"
+    "log"
     "strings"
     "sync"
     "time"
@@ -77,6 +78,49 @@ func parseBattery(data []byte) (int, bool, bool) {
     return -1, false, false
 }
 
+func parseModelD2WirelessBattery(data []byte) (int, bool, bool) {
+    if len(data) < 8 {
+        return -1, false, false
+    }
+    
+    // Try common Model D 2 Wireless report patterns
+    // Pattern 1: Battery at offset 2, charging at offset 3
+    if len(data) >= 4 {
+        level := int(data[2])
+        charging := data[3] == 0x01 || data[3] == 0x02
+        if level >= 0 && level <= 100 {
+            return level, charging, true
+        }
+    }
+    
+    // Pattern 2: Battery at offset 3, charging flag at offset 4
+    if len(data) >= 5 {
+        level := int(data[3])
+        charging := data[4] == 0x01 || data[4] == 0x02
+        if level >= 0 && level <= 100 {
+            return level, charging, true
+        }
+    }
+    
+    // Pattern 3: Look for battery percentage in valid range anywhere in report
+    for i := 0; i < len(data)-1; i++ {
+        level := int(data[i])
+        if level >= 0 && level <= 100 {
+            // Check if next byte could be charging flag
+            if i+1 < len(data) {
+                charging := data[i+1] == 0x01 || data[i+1] == 0x02
+                return level, charging, true
+            }
+        }
+    }
+    
+    return -1, false, false
+}
+
+func isModelD2Wireless(info *hid.DeviceInfo) bool {
+    return info.VendorID == 0x093A && info.ProductID == 0x824D
+}
+
 func isWirelessInterface(path string) bool {
     return strings.Contains(strings.ToLower(path), "mi_02")
 }
@@ -111,6 +155,64 @@ func findAndConnectMouse() (*MouseDevice, error) {
             continue
         }
 
+        // For Model D 2 Wireless, use read-only Input reports approach
+        if isModelD2Wireless(&info) {
+            // D2W detected
+            
+            // Try to read Input reports directly without sending Feature commands
+            buf := make([]byte, 65)
+            dev.SetNonblocking(true)
+            
+            // Try to read multiple times to get a battery report
+            for attempt := 0; attempt < 5; attempt++ {
+                n, err := dev.Read(buf)
+                if err == nil && n > 0 {
+                    level, charging, valid := parseModelD2WirelessBattery(buf[:n])
+                    if valid {
+                        modelName := knownDevices[info.VendorID][info.ProductID]
+                        mouse := &MouseDevice{
+                            handle:     dev,
+                            path:       info.Path,
+                            modelName:  modelName,
+                            isWireless: isWirelessInterface(info.Path),
+                        }
+                        if logger != nil {
+                            logger.Printf("[D2W] Connected via Input reports: %s (wireless:%v) %d%% charging:%v", mouse.modelName, mouse.isWireless, level, charging)
+                        }
+                        return mouse, nil
+                    }
+                }
+                time.Sleep(100 * time.Millisecond)
+            }
+            
+            // If Input reports don't work, try a minimal Feature report read (read-only)
+            buf = make([]byte, 65)
+            n, err := dev.GetFeatureReport(buf)
+            if err == nil && n > 0 {
+                level, charging, valid := parseModelD2WirelessBattery(buf[:n])
+                if valid {
+                    modelName := knownDevices[info.VendorID][info.ProductID]
+                    mouse := &MouseDevice{
+                        handle:     dev,
+                        path:       info.Path,
+                        modelName:  modelName,
+                        isWireless: isWirelessInterface(info.Path),
+                    }
+                    if logger != nil {
+                        logger.Printf("[D2W] Connected via Feature report: %s (wireless:%v) %d%% charging=%v", mouse.modelName, mouse.isWireless, level, charging)
+                    }
+                    return mouse, nil
+                }
+            }
+            
+            if logger != nil {
+                logger.Printf("[D2W] Failed to read battery data from Model D 2 Wireless")
+            }
+            dev.Close()
+            continue
+        }
+
+        // Standard handling for other devices
         canWrite := canWriteToDevice(&info)
         if !canWrite {
             logBlockedWrite(info.Path, "SafeMode enabled or device not whitelisted")
@@ -162,6 +264,13 @@ func (m *MouseDevice) ReadBattery() (int, bool, error) {
         return -1, false, fmt.Errorf("not connected")
     }
 
+    // Check if this is a Model D 2 Wireless device
+    info := findDeviceInfoByPath(m.path)
+    if info != nil && isModelD2Wireless(info) {
+        return m.readModelD2WirelessBattery()
+    }
+
+    // Standard handling for other devices
     cmd := make([]byte, 65)
     cmd[3], cmd[4], cmd[6] = 0x02, 0x02, 0x83
     if _, err := m.handle.SendFeatureReport(cmd); err != nil {
@@ -202,6 +311,49 @@ func (m *MouseDevice) ReadBattery() (int, bool, error) {
         logger.Printf("[READ] Battery: %d%% charging=%v", level, charging)
     }
     return level, charging, nil
+}
+
+func (m *MouseDevice) readModelD2WirelessBattery() (int, bool, error) {
+    if logger != nil {
+        logger.Printf("[D2W] Reading battery from Model D 2 Wireless")
+    }
+    
+    // Try Input reports first (read-only approach)
+    buf := make([]byte, 65)
+    m.handle.SetNonblocking(true)
+    
+    // Try to read multiple times to get a battery report
+    for attempt := 0; attempt < 3; attempt++ {
+        n, err := m.handle.Read(buf)
+        if err == nil && n > 0 {
+            level, charging, valid := parseModelD2WirelessBattery(buf[:n])
+            if valid {
+                if logger != nil {
+                    logger.Printf("[D2W] Battery via Input: %d%% charging=%v", level, charging)
+                }
+                return level, charging, nil
+            }
+        }
+        time.Sleep(50 * time.Millisecond)
+    }
+    
+    // Fallback to read-only Feature report
+    buf = make([]byte, 65)
+    n, err := m.handle.GetFeatureReport(buf)
+    if err == nil && n > 0 {
+        level, charging, valid := parseModelD2WirelessBattery(buf[:n])
+        if valid {
+            if logger != nil {
+                logger.Printf("[D2W] Battery via Feature: %d%% charging=%v", level, charging)
+            }
+            return level, charging, nil
+        }
+    }
+    
+    if logger != nil {
+        logger.Printf("[D2W] Failed to read battery: n=%d err=%v", n, err)
+    }
+    return -1, false, fmt.Errorf("D2W read failed")
 }
 
 func (m *MouseDevice) Close() {
