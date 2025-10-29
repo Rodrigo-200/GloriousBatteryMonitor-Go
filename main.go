@@ -1016,25 +1016,31 @@ func updateBattery() {
 }
 
 func updateTrayTooltip(text string) {
+    if text == "" {
+        text = "Glorious Battery Monitor"
+    }
+    
     tip, _ := syscall.UTF16FromString(text)
 
-    trayInvoke(func() {
-        trayMu.Lock()
-        defer trayMu.Unlock()
+    trayMu.Lock()
+    defer trayMu.Unlock()
 
-        for i := range nid.SzTip {
-            nid.SzTip[i] = 0
-        }
-        n := len(tip)
-        if n > len(nid.SzTip) {
-            n = len(nid.SzTip)
-        }
-        copy(nid.SzTip[:n], tip[:n])
+    for i := range nid.SzTip {
+        nid.SzTip[i] = 0
+    }
+    n := len(tip)
+    if n > len(nid.SzTip) {
+        n = len(nid.SzTip)
+    }
+    copy(nid.SzTip[:n], tip[:n])
 
-        nid.UFlags = win.NIF_TIP | 0x00000080
-        win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
-        nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
-    })
+    nid.UFlags = win.NIF_TIP | win.NIF_INFO
+    if !win.Shell_NotifyIcon(win.NIM_MODIFY, &nid) {
+        if logger != nil {
+            logger.Printf("[TOOLTIP] Failed to modify tooltip")
+        }
+    }
+    nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
 }
 
 func formatTrayTooltip(level int, charging bool, connected bool, model string) string {
@@ -1206,10 +1212,10 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         scale = 1
     }
 
-    bodyLeft := int32(float32(8) * scale)
-    bodyTop := int32(float32(18) * scale)
-    bodyRight := int32(float32(52) * scale)
-    bodyBottom := int32(float32(46) * scale)
+    bodyLeft := int32(float32(22) * scale)
+    bodyTop := int32(float32(12) * scale)
+    bodyRight := int32(float32(42) * scale)
+    bodyBottom := int32(float32(54) * scale)
     bodyWidth := bodyRight - bodyLeft
     bodyHeight := bodyBottom - bodyTop
     
@@ -1226,7 +1232,7 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         bodyBottom = height - 1
     }
 
-    cornerRadius := int32(float32(3) * scale)
+    cornerRadius := int32(float32(2) * scale)
     if cornerRadius < 1 {
         cornerRadius = 1
     }
@@ -1326,25 +1332,23 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, bgColor, true)
     drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, borderColor, false)
 
-    tipLeft := bodyRight + 1
-    tipRight := int32(float32(58) * scale)
-    tipTop := int32(float32(28) * scale)
-    tipBottom := int32(float32(36) * scale)
-    tipRadius := int32(float32(2) * scale)
+    tipWidth := bodyWidth / 2
+    if tipWidth < 4 {
+        tipWidth = 4
+    }
+    tipLeft := bodyLeft + (bodyWidth-tipWidth)/2
+    tipRight := tipLeft + tipWidth
+    tipBottom := bodyTop - 1
+    tipTop := tipBottom - int32(float32(6)*scale)
+    if tipTop < 0 {
+        tipTop = 0
+    }
+    if tipBottom <= tipTop {
+        tipBottom = tipTop + 1
+    }
+    tipRadius := int32(float32(1.5) * scale)
     if tipRadius < 1 {
         tipRadius = 1
-    }
-    if tipRight < tipLeft+2 {
-        tipRight = tipLeft + 2
-    }
-    if tipBottom < tipTop+2 {
-        tipBottom = tipTop + 2
-    }
-    if tipRight >= width {
-        tipRight = width - 1
-    }
-    if tipBottom >= height {
-        tipBottom = height - 1
     }
     drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, bgColor, true)
     drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, borderColor, false)
@@ -1361,22 +1365,22 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         fillTop := bodyTop + 2
         fillRight := bodyRight - 2
         fillBottom := bodyBottom - 2
-        fillWidth := fillRight - fillLeft
-        if fillWidth < 1 {
-            fillWidth = 1
+        fillHeight := fillBottom - fillTop
+        if fillHeight < 1 {
+            fillHeight = 1
         }
-        fw := int32(float32(fillWidth) * float32(displayLevel) / 100.0)
-        if fw < 0 {
-            fw = 0
+        fh := int32(float32(fillHeight) * float32(displayLevel) / 100.0)
+        if fh < 0 {
+            fh = 0
         }
-        if fw > fillWidth {
-            fw = fillWidth
+        if fh > fillHeight {
+            fh = fillHeight
         }
         fillRadius := cornerRadius - 1
         if fillRadius < 0 {
             fillRadius = 0
         }
-        drawRoundedRect(fillLeft, fillTop, fillLeft+fw, fillBottom, fillRadius, fillColor, true)
+        drawRoundedRect(fillLeft, fillBottom-fh, fillRight, fillBottom, fillRadius, fillColor, true)
     }
 
     if charging && !dim {
@@ -1422,46 +1426,76 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
 
     if settings.ShowPercentageOnIcon && !dim && level >= 0 && level <= 100 {
         percentText := fmt.Sprintf("%d", level)
-        innerWidth := (bodyRight - bodyLeft) - 2
-        innerHeight := (bodyBottom - bodyTop) - 2
-        if innerWidth > 0 && innerHeight > 0 {
-            unitsWidth := int32(len(percentText))*digitPatternWidth + int32(len(percentText)-1)
-            if unitsWidth <= 0 {
-                unitsWidth = digitPatternWidth
+        unitsWidth := int32(len(percentText))*digitPatternWidth + int32(len(percentText)-1)
+        if unitsWidth <= 0 {
+            unitsWidth = digitPatternWidth
+        }
+        availableWidth := width - int32(8*scale)
+        if availableWidth < width/2 {
+            availableWidth = width - 4
+        }
+        availableHeight := height - int32(8*scale)
+        if availableHeight < height/2 {
+            availableHeight = height - 4
+        }
+        if availableWidth <= 0 {
+            availableWidth = width - 4
+        }
+        if availableHeight <= 0 {
+            availableHeight = height - 4
+        }
+        block := availableWidth / unitsWidth
+        maxBlock := availableHeight / digitPatternHeight
+        if maxBlock < block {
+            block = maxBlock
+        }
+        if block < 2 {
+            block = 2
+        }
+        glyphWidth := digitPatternWidth * block
+        glyphHeight := digitPatternHeight * block
+        spacing := block
+        totalWidth := block * unitsWidth
+        if totalWidth > width-2 {
+            totalWidth = width - 2
+        }
+        if glyphHeight > height-2 {
+            glyphHeight = height - 2
+        }
+        startX := (width - totalWidth) / 2
+        startY := (height - glyphHeight) / 2
+        overlayPadding := block
+        overlayLeft := startX - overlayPadding/2
+        overlayRight := startX + totalWidth + overlayPadding/2
+        overlayTop := startY - overlayPadding/2
+        overlayBottom := startY + glyphHeight + overlayPadding/2
+        if overlayLeft < 0 {
+            overlayLeft = 0
+        }
+        if overlayRight >= width {
+            overlayRight = width - 1
+        }
+        if overlayTop < 0 {
+            overlayTop = 0
+        }
+        if overlayBottom >= height {
+            overlayBottom = height - 1
+        }
+        overlayRadius := overlayPadding / 2
+        if overlayRadius < 1 {
+            overlayRadius = 1
+        }
+        drawRoundedRect(overlayLeft, overlayTop, overlayRight, overlayBottom, overlayRadius, 0xB0000000, true)
+        shadowColor := uint32(0xFF000000)
+        textColor := uint32(0xFFFFFFFF)
+        for i, ch := range percentText {
+            digit := int(ch - '0')
+            if digit < 0 || digit > 9 {
+                continue
             }
-            block := innerWidth / unitsWidth
-            if block > innerHeight/digitPatternHeight {
-                block = innerHeight / digitPatternHeight
-            }
-            if block < 1 {
-                block = 1
-            }
-            glyphWidth := digitPatternWidth * block
-            glyphHeight := digitPatternHeight * block
-            spacing := block
-            totalWidth := int32(len(percentText))*glyphWidth + int32(len(percentText)-1)*spacing
-            if totalWidth > innerWidth {
-                totalWidth = innerWidth
-            }
-            startX := bodyLeft + 1 + (innerWidth-totalWidth)/2
-            startY := bodyTop + 1 + (innerHeight-glyphHeight)/2
-            if startX < bodyLeft+1 {
-                startX = bodyLeft + 1
-            }
-            if startY < bodyTop+1 {
-                startY = bodyTop + 1
-            }
-            shadowColor := uint32(0x80000000)
-            textColor := uint32(0xFFFFFFFF)
-            for i, ch := range percentText {
-                digit := int(ch - '0')
-                if digit < 0 || digit > 9 {
-                    continue
-                }
-                offsetX := startX + int32(i)*(glyphWidth+spacing)
-                drawDigitPattern(set, digit, offsetX+1, startY+1, block, shadowColor)
-                drawDigitPattern(set, digit, offsetX, startY, block, textColor)
-            }
+            offsetX := startX + int32(i)*(glyphWidth+spacing)
+            drawDigitPattern(set, digit, offsetX+1, startY+1, block, shadowColor)
+            drawDigitPattern(set, digit, offsetX, startY, block, textColor)
         }
     }
 
