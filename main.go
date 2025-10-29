@@ -186,6 +186,13 @@ func absInt(x int) int {
     return x
 }
 
+func minUint32(a, b uint32) uint32 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
 func main() {
     defer func() {
         if r := recover(); r != nil {
@@ -1019,28 +1026,26 @@ func updateTrayTooltip(text string) {
     if text == "" {
         text = "Glorious Battery Monitor"
     }
-    
+
     tip, _ := syscall.UTF16FromString(text)
 
-    trayMu.Lock()
-    defer trayMu.Unlock()
+    trayInvoke(func() {
+        trayMu.Lock()
+        defer trayMu.Unlock()
 
-    for i := range nid.SzTip {
-        nid.SzTip[i] = 0
-    }
-    n := len(tip)
-    if n > len(nid.SzTip) {
-        n = len(nid.SzTip)
-    }
-    copy(nid.SzTip[:n], tip[:n])
-
-    nid.UFlags = win.NIF_TIP | win.NIF_INFO
-    if !win.Shell_NotifyIcon(win.NIM_MODIFY, &nid) {
-        if logger != nil {
-            logger.Printf("[TOOLTIP] Failed to modify tooltip")
+        for i := range nid.SzTip {
+            nid.SzTip[i] = 0
         }
-    }
-    nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+        n := len(tip)
+        if n > len(nid.SzTip) {
+            n = len(nid.SzTip)
+        }
+        copy(nid.SzTip[:n], tip[:n])
+
+        nid.UFlags = win.NIF_TIP
+        win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+        nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+    })
 }
 
 func formatTrayTooltip(level int, charging bool, connected bool, model string) string {
@@ -1238,15 +1243,18 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     }
 
     borderWidth := int32(2 * scale)
-    if borderWidth < 1 {
-        borderWidth = 1
+    if borderWidth < 2 {
+        borderWidth = 2
     }
 
-    borderColor := uint32(0xE0000000)
+    borderColor := uint32(0xFF2C2C2C)
     if dim {
-        borderColor = 0xC0606060
+        borderColor = 0xFF707070
     }
-    bgColor := uint32(0xFFFFFFFF)
+    bgColor := uint32(0xFFF5F5F5)
+    if dim {
+        bgColor = 0xFFD0D0D0
+    }
     
     drawRoundedRect := func(left, top, right, bottom, radius int32, color uint32, filled bool) {
         for y := top; y <= bottom; y++ {
@@ -1338,18 +1346,20 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, borderColor, false)
 
     tipWidth := int32(float32(bodyWidth) * 0.18)
-    if tipWidth < int32(5*scale) {
-        tipWidth = int32(5 * scale)
+    if tipWidth < int32(4*scale) {
+        tipWidth = int32(4 * scale)
     }
-    tipLeft := bodyRight + borderWidth
+    tipLeft := bodyRight + borderWidth - 1
     tipRight := tipLeft + tipWidth
-    tipTop := bodyTop + borderWidth*2
-    tipBottom := bodyBottom - borderWidth*2
-    tipRadius := borderWidth
+    tipHeight := int32(float32(bodyHeight) * 0.6)
+    tipTop := bodyTop + (bodyHeight-tipHeight)/2
+    tipBottom := tipTop + tipHeight
+    tipRadius := borderWidth / 2
     if tipRadius < 1 {
         tipRadius = 1
     }
     drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, borderColor, true)
+    drawRoundedRect(tipLeft+1, tipTop+1, tipRight-1, tipBottom-1, tipRadius, bgColor, true)
 
     if level > 0 {
         displayLevel := level
@@ -1375,11 +1385,54 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         if fw > fillWidth {
             fw = fillWidth
         }
-        fillRadius := cornerRadius - padding
-        if fillRadius < 0 {
-            fillRadius = 0
+        if fw > 0 {
+            fillRadius := cornerRadius - padding
+            if fillRadius < 0 {
+                fillRadius = 0
+            }
+            for y := fillTop; y <= fillBottom; y++ {
+                progress := float32(y-fillTop) / float32(fillBottom-fillTop)
+                lighten := uint32(20 * (1.0 - progress))
+                r := (fillColor >> 16) & 0xFF
+                g := (fillColor >> 8) & 0xFF
+                b := fillColor & 0xFF
+                r = minUint32(r+lighten, uint32(255))
+                g = minUint32(g+lighten, uint32(255))
+                b = minUint32(b+lighten, uint32(255))
+                gradColor := (fillColor & 0xFF000000) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF)
+                for x := fillLeft; x < fillLeft+fw; x++ {
+                    dx := int32(0)
+                    dy := int32(0)
+                    left, top, right, bottom := fillLeft, fillTop, fillLeft+fw-1, fillBottom
+                    if x < left+fillRadius && y < top+fillRadius {
+                        dx = left + fillRadius - x
+                        dy = top + fillRadius - y
+                        if dx*dx+dy*dy > fillRadius*fillRadius {
+                            continue
+                        }
+                    } else if x > right-fillRadius && y < top+fillRadius {
+                        dx = x - (right - fillRadius)
+                        dy = top + fillRadius - y
+                        if dx*dx+dy*dy > fillRadius*fillRadius {
+                            continue
+                        }
+                    } else if x < left+fillRadius && y > bottom-fillRadius {
+                        dx = left + fillRadius - x
+                        dy = y - (bottom - fillRadius)
+                        if dx*dx+dy*dy > fillRadius*fillRadius {
+                            continue
+                        }
+                    } else if x > right-fillRadius && y > bottom-fillRadius {
+                        dx = x - (right - fillRadius)
+                        dy = y - (bottom - fillRadius)
+                        if dx*dx+dy*dy > fillRadius*fillRadius {
+                            continue
+                        }
+                    }
+                    set(x, y, gradColor)
+                }
+            }
         }
-        drawRoundedRect(fillLeft, fillTop, fillLeft+fw, fillBottom, fillRadius, fillColor, true)
     }
 
     if charging && !dim && !settings.ShowPercentageOnIcon {
