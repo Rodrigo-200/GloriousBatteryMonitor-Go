@@ -915,6 +915,12 @@ func showMenu() {
         return
     }
 
+    uxtheme := syscall.NewLazyDLL("uxtheme.dll")
+    setPreferredAppMode := uxtheme.NewProc("SetPreferredAppMode")
+    if setPreferredAppMode.Find() == nil {
+        setPreferredAppMode.Call(1)
+    }
+
     batteryItem, _ := syscall.UTF16PtrFromString(batteryText)
     appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_STRING|win.MF_GRAYED), 0, uintptr(unsafe.Pointer(batteryItem)))
 
@@ -1025,7 +1031,7 @@ func updateTrayTooltip(text string) {
         }
         copy(nid.SzTip[:n], tip[:n])
 
-        nid.UFlags = win.NIF_TIP
+        nid.UFlags = win.NIF_TIP | 0x00000080
         win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
         nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
     })
@@ -1194,23 +1200,24 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     } else {
         fillColor = 0xFFC42B1C
     }
-    black := uint32(0xFF000000)
-    white := uint32(0xFFFFFFFF)
 
     scale := float32(width) / 64.0
     if scale <= 0 {
         scale = 1
     }
 
-    bodyLeft := int32(float32(10) * scale)
-    bodyTop := int32(float32(20) * scale)
-    bodyRight := int32(float32(50) * scale)
-    bodyBottom := int32(float32(44) * scale)
-    if bodyRight <= bodyLeft+2 {
-        bodyRight = bodyLeft + 2
+    bodyLeft := int32(float32(8) * scale)
+    bodyTop := int32(float32(18) * scale)
+    bodyRight := int32(float32(52) * scale)
+    bodyBottom := int32(float32(46) * scale)
+    bodyWidth := bodyRight - bodyLeft
+    bodyHeight := bodyBottom - bodyTop
+    
+    if bodyRight <= bodyLeft+4 {
+        bodyRight = bodyLeft + 4
     }
-    if bodyBottom <= bodyTop+2 {
-        bodyBottom = bodyTop + 2
+    if bodyBottom <= bodyTop+4 {
+        bodyBottom = bodyTop + 4
     }
     if bodyRight >= width {
         bodyRight = width - 1
@@ -1219,25 +1226,119 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         bodyBottom = height - 1
     }
 
-    for y := bodyTop; y <= bodyBottom; y++ {
-        for x := bodyLeft; x <= bodyRight; x++ {
-            if y == bodyTop || y == bodyBottom || x == bodyLeft || x == bodyRight {
-                set(x, y, black)
-            } else {
-                set(x, y, white)
+    cornerRadius := int32(float32(3) * scale)
+    if cornerRadius < 1 {
+        cornerRadius = 1
+    }
+
+    borderColor := uint32(0xFF242424)
+    if dim {
+        borderColor = 0xFF4A4A4A
+    }
+    bgColor := uint32(0xFFE8E8E8)
+    
+    drawRoundedRect := func(left, top, right, bottom, radius int32, color uint32, filled bool) {
+        for y := top; y <= bottom; y++ {
+            for x := left; x <= right; x++ {
+                if filled {
+                    dx := int32(0)
+                    dy := int32(0)
+                    if x < left+radius && y < top+radius {
+                        dx = left + radius - x
+                        dy = top + radius - y
+                        if dx*dx+dy*dy > radius*radius {
+                            continue
+                        }
+                    } else if x > right-radius && y < top+radius {
+                        dx = x - (right - radius)
+                        dy = top + radius - y
+                        if dx*dx+dy*dy > radius*radius {
+                            continue
+                        }
+                    } else if x < left+radius && y > bottom-radius {
+                        dx = left + radius - x
+                        dy = y - (bottom - radius)
+                        if dx*dx+dy*dy > radius*radius {
+                            continue
+                        }
+                    } else if x > right-radius && y > bottom-radius {
+                        dx = x - (right - radius)
+                        dy = y - (bottom - radius)
+                        if dx*dx+dy*dy > radius*radius {
+                            continue
+                        }
+                    }
+                    set(x, y, color)
+                } else {
+                    isEdge := false
+                    if y == top || y == bottom {
+                        if x >= left+radius && x <= right-radius {
+                            isEdge = true
+                        }
+                    }
+                    if x == left || x == right {
+                        if y >= top+radius && y <= bottom-radius {
+                            isEdge = true
+                        }
+                    }
+                    if x >= left+radius && x <= right-radius && y >= top+radius && y <= bottom-radius {
+                        if (x == left+radius || x == right-radius) && (y == top+radius || y == bottom-radius) {
+                            isEdge = true
+                        }
+                    }
+                    if x < left+radius && y < top+radius {
+                        dx := left + radius - x
+                        dy := top + radius - y
+                        dist := dx*dx + dy*dy
+                        if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
+                            isEdge = true
+                        }
+                    } else if x > right-radius && y < top+radius {
+                        dx := x - (right - radius)
+                        dy = top + radius - y
+                        dist := dx*dx + dy*dy
+                        if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
+                            isEdge = true
+                        }
+                    } else if x < left+radius && y > bottom-radius {
+                        dx := left + radius - x
+                        dy = y - (bottom - radius)
+                        dist := dx*dx + dy*dy
+                        if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
+                            isEdge = true
+                        }
+                    } else if x > right-radius && y > bottom-radius {
+                        dx := x - (right - radius)
+                        dy = y - (bottom - radius)
+                        dist := dx*dx + dy*dy
+                        if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
+                            isEdge = true
+                        }
+                    }
+                    if isEdge {
+                        set(x, y, color)
+                    }
+                }
             }
         }
     }
 
+    drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, bgColor, true)
+    drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, borderColor, false)
+
     tipLeft := bodyRight + 1
-    tipRight := int32(float32(56) * scale)
-    tipTop := int32(float32(27) * scale)
-    tipBottom := int32(float32(37) * scale)
-    if tipRight < tipLeft {
-        tipRight = tipLeft
+    tipRight := int32(float32(58) * scale)
+    tipTop := int32(float32(28) * scale)
+    tipBottom := int32(float32(36) * scale)
+    tipRadius := int32(float32(2) * scale)
+    if tipRadius < 1 {
+        tipRadius = 1
     }
-    if tipBottom < tipTop {
-        tipBottom = tipTop
+    if tipRight < tipLeft+2 {
+        tipRight = tipLeft + 2
+    }
+    if tipBottom < tipTop+2 {
+        tipBottom = tipTop + 2
     }
     if tipRight >= width {
         tipRight = width - 1
@@ -1245,11 +1346,8 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     if tipBottom >= height {
         tipBottom = height - 1
     }
-    for y := tipTop; y <= tipBottom; y++ {
-        for x := tipLeft; x <= tipRight; x++ {
-            set(x, y, black)
-        }
-    }
+    drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, bgColor, true)
+    drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, borderColor, false)
 
     if level > 0 {
         displayLevel := level
@@ -1259,58 +1357,65 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
                 displayLevel = 100
             }
         }
-        maxFillPixels := (bodyRight - (bodyLeft + 1))
-        if maxFillPixels < 0 {
-            maxFillPixels = 0
+        fillLeft := bodyLeft + 2
+        fillTop := bodyTop + 2
+        fillRight := bodyRight - 2
+        fillBottom := bodyBottom - 2
+        fillWidth := fillRight - fillLeft
+        if fillWidth < 1 {
+            fillWidth = 1
         }
-        fw := int32(float32(38) * scale * float32(displayLevel) / 100.0)
+        fw := int32(float32(fillWidth) * float32(displayLevel) / 100.0)
         if fw < 0 {
             fw = 0
         }
-        if fw > maxFillPixels {
-            fw = maxFillPixels
+        if fw > fillWidth {
+            fw = fillWidth
         }
-        for y := bodyTop + 1; y < bodyBottom; y++ {
-            for x := bodyLeft + 1; x < bodyLeft+1+fw; x++ {
-                set(x, y, fillColor)
-            }
+        fillRadius := cornerRadius - 1
+        if fillRadius < 0 {
+            fillRadius = 0
         }
+        drawRoundedRect(fillLeft, fillTop, fillLeft+fw, fillBottom, fillRadius, fillColor, true)
     }
 
     if charging && !dim {
-        boltColor := uint32(0xFFFFFFFF)
-        centerX := bodyLeft + (bodyRight-bodyLeft)/2
-        centerY := bodyTop + (bodyBottom-bodyTop)/2
-        boltHeight := int32(float32(14) * scale)
-        boltWidth := int32(float32(8) * scale)
-        if boltHeight < 4 {
-            boltHeight = 4
+        boltColor := uint32(0xFFFFD700)
+        centerX := bodyLeft + bodyWidth/2
+        centerY := bodyTop + bodyHeight/2
+        boltSize := int32(float32(10) * scale)
+        if boltSize < 5 {
+            boltSize = 5
         }
-        if boltWidth < 3 {
-            boltWidth = 3
+        
+        points := []struct{ x, y int32 }{
+            {centerX, centerY - boltSize/2},
+            {centerX - boltSize/4, centerY},
+            {centerX + boltSize/6, centerY},
+            {centerX, centerY + boltSize/2},
+            {centerX + boltSize/4, centerY},
+            {centerX - boltSize/6, centerY},
         }
-        topY := centerY - boltHeight/2
-        bottomY := centerY + boltHeight/2
-        leftX := centerX - boltWidth/2
-        rightX := centerX + boltWidth/2
-        midY := centerY
-        for y := topY; y <= bottomY; y++ {
-            if y < midY {
-                x1 := leftX + (rightX-leftX)*(y-topY)/(midY-topY)
-                x2 := centerX
-                for x := x1; x <= x2; x++ {
-                    set(x, y, boltColor)
-                }
-            } else if y == midY {
-                for x := leftX; x <= rightX; x++ {
-                    set(x, y, boltColor)
-                }
-            } else {
-                x1 := centerX
-                x2 := rightX - (rightX-leftX)*(y-midY)/(bottomY-midY)
-                for x := x1; x <= x2; x++ {
-                    set(x, y, boltColor)
-                }
+        
+        for i := 0; i < len(points); i++ {
+            p1 := points[i]
+            p2 := points[(i+1)%len(points)]
+            dx := p2.x - p1.x
+            dy := p2.y - p1.y
+            steps := absInt(int(dx))
+            if absInt(int(dy)) > steps {
+                steps = absInt(int(dy))
+            }
+            if steps == 0 {
+                steps = 1
+            }
+            for step := 0; step <= steps; step++ {
+                t := float32(step) / float32(steps)
+                x := p1.x + int32(float32(dx)*t)
+                y := p1.y + int32(float32(dy)*t)
+                set(x, y, boltColor)
+                set(x+1, y, boltColor)
+                set(x, y+1, boltColor)
             }
         }
     }
