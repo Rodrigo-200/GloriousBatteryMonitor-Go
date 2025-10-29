@@ -2155,12 +2155,13 @@ func quickRefreshOnDeviceChange() {
                         }
 
                         status := map[bool]string{true: "Charging", false: "Discharging"}[wchg]
-                        icon := "🔋"
-                        if wchg {
-                            icon = "⚡"
-                        }
-                        batteryText = fmt.Sprintf("%s %d%% (%s)", icon, wlvl, status)
-                        updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+                        lastKnownMu.Lock()
+                        showLastKnown = false
+                        lastKnownLevel = wlvl
+                        lastKnownCharging = wchg
+                        lastKnownMu.Unlock()
+                        tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
+                        updateTrayTooltip(tooltipText)
                         updateTrayIcon(wlvl, wchg, false)
                         broadcast(map[string]interface{}{
                             "status":          "connected",
@@ -2214,8 +2215,8 @@ func quickRefreshOnDeviceChange() {
                     trayInvoke(func() {
                         batteryLvl = hold
                         isCharging = holdchg
-                        batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", hold)
-                        updateTrayTooltip(fmt.Sprintf("Last known: %d%%", hold))
+                        tooltipText := formatTrayTooltip(hold, holdchg, true, deviceModel)
+                        updateTrayTooltip(tooltipText)
                         updateTrayIcon(hold, holdchg, true)
                     })
                     broadcast(map[string]interface{}{
@@ -2255,7 +2256,8 @@ func quickRefreshOnDeviceChange() {
                                     lastKnownLevel = expected
                                     lastKnownCharging = chg
                                     lastKnownMu.Unlock()
-                                    updateTrayTooltip(fmt.Sprintf("Battery: %d%%", expected))
+                                    tooltipText := formatTrayTooltip(expected, chg, false, deviceModel)
+                                    updateTrayTooltip(tooltipText)
                                     updateTrayIcon(expected, chg, false)
                                     if logger != nil {
                                         logger.Printf("[DEVCHANGE] quick probe on %s confirmed lvl=%d chg=%v", path, expected, chg)
@@ -2308,17 +2310,13 @@ func quickRefreshOnDeviceChange() {
                 }
 
                 status := map[bool]string{true: "Charging", false: "Discharging"}[wchg]
-                icon := "🔋"
-                if wchg {
-                    icon = "⚡"
-                }
-                batteryText = fmt.Sprintf("%s %d%% (%s)", icon, wlvl, status)
                 lastKnownMu.Lock()
                 showLastKnown = false
                 lastKnownLevel = wlvl
                 lastKnownCharging = wchg
                 lastKnownMu.Unlock()
-                updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+                tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
+                updateTrayTooltip(tooltipText)
                 updateTrayIcon(wlvl, wchg, false)
                 broadcast(map[string]interface{}{
                     "status":          "connected",
@@ -2646,14 +2644,9 @@ func finishConnect(path string, lvl int, chg bool) {
             lastKnownMu.Unlock()
         }
     }
-    status := "Discharging"
-    icon := "🔋"
-    if chg {
-        status, icon = "Charging", "⚡"
-    }
     displayLevel := batteryLvl
-    batteryText = fmt.Sprintf("%s %d%% (%s)", icon, displayLevel, status)
-    updateTrayTooltip(fmt.Sprintf("Battery: %d%%", displayLevel))
+    tooltipText := formatTrayTooltip(displayLevel, isCharging, preserveLastKnown, deviceModel)
+    updateTrayTooltip(tooltipText)
     updateTrayIcon(displayLevel, isCharging, preserveLastKnown)
 
     if logger != nil {
@@ -2709,7 +2702,8 @@ func finishConnect(path string, lvl int, chg bool) {
                     selectedReportLen = wlen
                     useGetOnly = true
                     useInputReports = false
-                    updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+                    tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
+                    updateTrayTooltip(tooltipText)
                     updateTrayIcon(wlvl, wchg, false)
                     if logger != nil {
                         logger.Printf("[CONNECT] worker-confirmed level=%d chg=%v (updated UI)", wlvl, wchg)
@@ -2743,7 +2737,8 @@ func finishConnect(path string, lvl int, chg bool) {
                         useInputReports = false
                         batteryLvl = wlvl
                         isCharging = wchg
-                        updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+                        tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
+                        updateTrayTooltip(tooltipText)
                         updateTrayIcon(wlvl, wchg, false)
                         if logger != nil {
                             logger.Printf("[CONNECT] quick worker confirm succeeded lvl=%d chg=%v (path=%s)", wlvl, wchg, path)
@@ -2804,7 +2799,8 @@ func finishConnect(path string, lvl int, chg bool) {
                             lastKnownMu.Lock()
                             showLastKnown = false
                             lastKnownMu.Unlock()
-                            updateTrayTooltip(fmt.Sprintf("Battery: %d%%", batteryLvl))
+                            tooltipText := formatTrayTooltip(batteryLvl, isCharging, false, deviceModel)
+                            updateTrayTooltip(tooltipText)
                             updateTrayIcon(batteryLvl, isCharging, false)
                             if logger != nil {
                                 logger.Printf("[CONNECT] accepted confirmed low reading lvl=%d chg=%v", lvl2, chg2)
@@ -2849,7 +2845,8 @@ func finishConnect(path string, lvl int, chg bool) {
                                 lastKnownMu.Unlock()
                                 batteryLvl = wlvl
                                 isCharging = wchg
-                                updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+                                tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
+                                updateTrayTooltip(tooltipText)
                                 updateTrayIcon(wlvl, wchg, false)
                                 if logger != nil {
                                     logger.Printf("[CONNECT] worker fallback probe succeeded: lvl=%d chg=%v rid=0x%02x len=%d", wlvl, wchg, wrid, wlen)
@@ -2875,7 +2872,8 @@ func finishConnect(path string, lvl int, chg bool) {
                     lastKnownMu.Unlock()
                     batteryLvl = wlvl2
                     isCharging = wchg2
-                    updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl2))
+                    tooltipText := formatTrayTooltip(wlvl2, wchg2, false, deviceModel)
+                    updateTrayTooltip(tooltipText)
                     updateTrayIcon(wlvl2, wchg2, false)
                     if logger != nil {
                         logger.Printf("[CONNECT] worker session adoption succeeded: lvl=%d chg=%v", wlvl2, wchg2)
@@ -2904,7 +2902,8 @@ func finishConnect(path string, lvl int, chg bool) {
                 lastKnownMu.Unlock()
                 batteryLvl = lvl2
                 isCharging = chg2
-                updateTrayTooltip(fmt.Sprintf("Battery: %d%%", lvl2))
+                tooltipText := formatTrayTooltip(lvl2, chg2, false, deviceModel)
+                updateTrayTooltip(tooltipText)
                 updateTrayIcon(lvl2, chg2, false)
                 if logger != nil {
                     logger.Printf("[CONNECT] fresh read after connect (attempt %d/%d): lvl=%d chg=%v", i+1, attempts, lvl2, chg2)
@@ -2935,7 +2934,8 @@ func finishConnect(path string, lvl int, chg bool) {
                     lastKnownMu.Unlock()
                     batteryLvl = wlvl
                     isCharging = wchg
-                    updateTrayTooltip(fmt.Sprintf("Battery: %d%%", wlvl))
+                    tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
+                    updateTrayTooltip(tooltipText)
                     updateTrayIcon(wlvl, wchg, false)
                     if logger != nil {
                         logger.Printf("[CONNECT] worker fallback probe succeeded: lvl=%d chg=%v rid=0x%02x len=%d", wlvl, wchg, wrid, wlen)
@@ -2960,7 +2960,8 @@ func finishConnect(path string, lvl int, chg bool) {
         if lk > 0 {
             batteryLvl = lk
             isCharging = lkchg
-            updateTrayTooltip(fmt.Sprintf("Battery: %d%%", lk))
+            tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
+            updateTrayTooltip(tooltipText)
             updateTrayIcon(lk, lkchg, true)
             clearReading()
             broadcast(map[string]interface{}{"status": "connected", "reading": false, "lastKnown": true})
