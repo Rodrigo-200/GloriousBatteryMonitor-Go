@@ -1212,10 +1212,10 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         scale = 1
     }
 
-    bodyLeft := int32(float32(8) * scale)
-    bodyTop := int32(float32(8) * scale)
-    bodyRight := int32(float32(56) * scale)
-    bodyBottom := int32(float32(56) * scale)
+    bodyLeft := int32(float32(6) * scale)
+    bodyTop := int32(float32(20) * scale)
+    bodyRight := int32(float32(52) * scale)
+    bodyBottom := int32(float32(44) * scale)
     bodyWidth := bodyRight - bodyLeft
     bodyHeight := bodyBottom - bodyTop
     
@@ -1232,16 +1232,21 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         bodyBottom = height - 1
     }
 
-    cornerRadius := int32(float32(4) * scale)
-    if cornerRadius < 2 {
-        cornerRadius = 2
+    cornerRadius := int32(float32(3) * scale)
+    if cornerRadius < 1 {
+        cornerRadius = 1
     }
 
-    borderColor := uint32(0xFF242424)
-    if dim {
-        borderColor = 0xFF4A4A4A
+    borderWidth := int32(2 * scale)
+    if borderWidth < 1 {
+        borderWidth = 1
     }
-    bgColor := uint32(0xFFE8E8E8)
+
+    borderColor := uint32(0xE0000000)
+    if dim {
+        borderColor = 0xC0606060
+    }
+    bgColor := uint32(0xFFFFFFFF)
     
     drawRoundedRect := func(left, top, right, bottom, radius int32, color uint32, filled bool) {
         for y := top; y <= bottom; y++ {
@@ -1332,26 +1337,19 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, bgColor, true)
     drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, borderColor, false)
 
-    tipWidth := bodyWidth / 3
-    if tipWidth < int32(6*scale) {
-        tipWidth = int32(6 * scale)
+    tipWidth := int32(float32(bodyWidth) * 0.18)
+    if tipWidth < int32(5*scale) {
+        tipWidth = int32(5 * scale)
     }
-    tipLeft := bodyLeft + (bodyWidth-tipWidth)/2
+    tipLeft := bodyRight + borderWidth
     tipRight := tipLeft + tipWidth
-    tipTop := bodyTop - int32(6*scale)
-    tipBottom := bodyTop - 1
-    if tipTop < 0 {
-        tipTop = 0
-    }
-    if tipBottom <= tipTop {
-        tipBottom = tipTop + 1
-    }
-    tipRadius := cornerRadius / 2
+    tipTop := bodyTop + borderWidth*2
+    tipBottom := bodyBottom - borderWidth*2
+    tipRadius := borderWidth
     if tipRadius < 1 {
         tipRadius = 1
     }
-    drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, bgColor, true)
-    drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, borderColor, false)
+    drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, borderColor, true)
 
     if level > 0 {
         displayLevel := level
@@ -1361,44 +1359,54 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
                 displayLevel = 100
             }
         }
-        fillLeft := bodyLeft + 2
-        fillTop := bodyTop + 2
-        fillRight := bodyRight - 2
-        fillBottom := bodyBottom - 2
-        fillHeight := fillBottom - fillTop
-        if fillHeight < 1 {
-            fillHeight = 1
+        padding := borderWidth + 1
+        fillLeft := bodyLeft + padding
+        fillTop := bodyTop + padding
+        fillRight := bodyRight - padding
+        fillBottom := bodyBottom - padding
+        fillWidth := fillRight - fillLeft
+        if fillWidth < 1 {
+            fillWidth = 1
         }
-        fh := int32(float32(fillHeight) * float32(displayLevel) / 100.0)
-        if fh < 0 {
-            fh = 0
+        fw := int32(float32(fillWidth) * float32(displayLevel) / 100.0)
+        if fw < 0 {
+            fw = 0
         }
-        if fh > fillHeight {
-            fh = fillHeight
+        if fw > fillWidth {
+            fw = fillWidth
         }
-        fillRadius := cornerRadius - 1
+        fillRadius := cornerRadius - padding
         if fillRadius < 0 {
             fillRadius = 0
         }
-        drawRoundedRect(fillLeft, fillBottom-fh, fillRight, fillBottom, fillRadius, fillColor, true)
+        drawRoundedRect(fillLeft, fillTop, fillLeft+fw, fillBottom, fillRadius, fillColor, true)
     }
 
-    if charging && !dim {
-        boltColor := uint32(0xFFFFD700)
+    if charging && !dim && !settings.ShowPercentageOnIcon {
+        boltSize := int32(float32(8) * scale)
+        if boltSize < 6 {
+            boltSize = 6
+        }
         centerX := bodyLeft + bodyWidth/2
         centerY := bodyTop + bodyHeight/2
-        boltSize := int32(float32(10) * scale)
-        if boltSize < 5 {
-            boltSize = 5
-        }
+        
+        boltColor := uint32(0xFFFFFFFF)
+        shadowColor := uint32(0x80000000)
         
         points := []struct{ x, y int32 }{
             {centerX, centerY - boltSize/2},
-            {centerX - boltSize/4, centerY},
-            {centerX + boltSize/6, centerY},
-            {centerX, centerY + boltSize/2},
+            {centerX - boltSize/3, centerY - boltSize/6},
+            {centerX + boltSize/4, centerY - boltSize/6},
             {centerX + boltSize/4, centerY},
-            {centerX - boltSize/6, centerY},
+            {centerX, centerY + boltSize/2},
+            {centerX + boltSize/3, centerY + boltSize/6},
+            {centerX - boltSize/4, centerY + boltSize/6},
+            {centerX - boltSize/4, centerY},
+        }
+        
+        for _, p := range points {
+            set(p.x+1, p.y+1, shadowColor)
+            set(p.x, p.y, boltColor)
         }
         
         for i := 0; i < len(points); i++ {
@@ -1417,35 +1425,29 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
                 t := float32(step) / float32(steps)
                 x := p1.x + int32(float32(dx)*t)
                 y := p1.y + int32(float32(dy)*t)
+                set(x+1, y+1, shadowColor)
                 set(x, y, boltColor)
-                set(x+1, y, boltColor)
-                set(x, y+1, boltColor)
             }
         }
     }
 
     if settings.ShowPercentageOnIcon && !dim && level >= 0 && level <= 100 {
         percentText := fmt.Sprintf("%d", level)
-        innerWidth := bodyWidth - int32(8*scale)
-        innerHeight := bodyHeight - int32(8*scale)
-        if innerWidth < bodyWidth/2 {
-            innerWidth = bodyWidth - 4
-        }
-        if innerHeight < bodyHeight/2 {
-            innerHeight = bodyHeight - 4
-        }
+        textPadding := borderWidth * 2
+        innerWidth := bodyWidth - textPadding*2
+        innerHeight := bodyHeight - textPadding*2
         if innerWidth <= 0 {
             innerWidth = bodyWidth - 4
         }
         if innerHeight <= 0 {
             innerHeight = bodyHeight - 4
         }
-        
+
         unitsWidth := int32(len(percentText))*digitPatternWidth + int32(len(percentText)-1)
         if unitsWidth <= 0 {
             unitsWidth = digitPatternWidth
         }
-        
+
         block := innerWidth / unitsWidth
         maxBlockHeight := innerHeight / digitPatternHeight
         if maxBlockHeight < block {
@@ -1454,32 +1456,28 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         if block < 1 {
             block = 1
         }
-        
+        if block > 4 {
+            block = 4
+        }
+
         glyphWidth := digitPatternWidth * block
         glyphHeight := digitPatternHeight * block
-        spacing := int32(0)
-        if block > 1 {
-            spacing = block / 2
-        }
-        
+        spacing := int32(block / 2)
         totalWidth := int32(len(percentText))*glyphWidth + int32(len(percentText)-1)*spacing
-        
-        startX := bodyLeft + (bodyWidth-totalWidth)/2
-        startY := bodyTop + (bodyHeight-glyphHeight)/2
-        
+        startX := bodyLeft + textPadding + (innerWidth-totalWidth)/2
+        startY := bodyTop + textPadding + (innerHeight-glyphHeight)/2
+
         textColor := uint32(0xFF000000)
-        if !charging {
-            if level < 20 {
-                textColor = 0xFFFFFFFF
-            } else if level < 50 {
-                textColor = 0xFF000000
-            } else {
-                textColor = 0xFFFFFFFF
-            }
-        } else {
+        if level >= 50 {
             textColor = 0xFFFFFFFF
         }
-        
+        if level < 20 {
+            textColor = 0xFFFFFFFF
+        }
+        if charging {
+            textColor = 0xFFFFFFFF
+        }
+
         for i, ch := range percentText {
             digit := int(ch - '0')
             if digit < 0 || digit > 9 {
