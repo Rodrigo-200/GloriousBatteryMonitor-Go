@@ -2666,10 +2666,15 @@ func finishConnect(path string, lvl int, chg bool) {
     } else {
         clearReading()
     }
+    modeText := map[bool]string{true: "Charging", false: "Discharging"}[isCharging]
+    statusText := "Connected"
+    if preserveLastKnown {
+        statusText = "Last known"
+    }
     bcast := map[string]interface{}{
-        "status":          "connected",
-        "mode":            status,
-        "statusText":      status,
+        "status":          map[bool]string{true: "connected", false: "connected"}[true],
+        "mode":            modeText,
+        "statusText":      statusText,
         "level":           batteryLvl,
         "charging":        isCharging,
         "lastChargeTime":  lastChargeTime,
