@@ -361,6 +361,28 @@
                                 Copy Output
                             </button>
                         </div>
+                        
+                        <!-- Diagnostics Export -->
+                        <div class="border-t border-fluent-border dark:border-fluent-dark-border mt-4 pt-4">
+                            <div class="flex items-center gap-2 mb-2">
+                                <svg class="w-4 h-4 text-fluent-accent dark:text-fluent-dark-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                </svg>
+                                <h4 class="text-sm font-semibold text-fluent-text dark:text-fluent-dark-text">Device Diagnostics</h4>
+                            </div>
+                            <p class="text-xs text-fluent-muted dark:text-fluent-dark-muted mb-3">Export device information for support (read-only, PII sanitized)</p>
+                            
+                            <label class="flex items-center gap-2 cursor-pointer group mb-3">
+                                <input type="checkbox" id="includeExperimental" class="w-4 h-4 rounded border-fluent-border dark:border-fluent-dark-border text-fluent-accent dark:text-fluent-dark-accent focus:ring-2 focus:ring-fluent-accent/50">
+                                <span class="text-sm text-fluent-text dark:text-fluent-dark-text group-hover:text-fluent-accent dark:group-hover:text-fluent-dark-accent transition">Include experimental vendor reads</span>
+                            </label>
+                            <p class="text-xs text-yellow-600 dark:text-yellow-400 mb-3 ml-6">⚠️ May trigger device responses - use with caution</p>
+                            
+                            <button onclick="captureDiagnostics()" class="px-4 py-2 bg-fluent-accent dark:bg-fluent-dark-accent hover:bg-fluent-accent-hover dark:hover:bg-fluent-dark-accent-hover text-white rounded-lg text-sm font-semibold transition btn-press focus-ring">
+                                <span id="diagnosticsSpinner" class="hidden">⏳</span>
+                                <span id="diagnosticsText">Capture Diagnostics</span>
+                            </button>
+                        </div>
                         <div id="devStatus" class="text-xs text-fluent-muted dark:text-fluent-dark-muted" aria-live="polite">No scan yet</div>
                         <pre id="hidDump" class="hidden mt-2 p-3 bg-fluent-bg dark:bg-fluent-dark-bg border border-fluent-border dark:border-fluent-dark-border rounded-lg text-xs text-fluent-text dark:text-fluent-dark-text overflow-auto max-h-48 font-mono"></pre>
                     </div>
@@ -980,6 +1002,58 @@
                 showToast('HID report copied to clipboard', 'success');
             } catch (err) {
                 showToast('Failed to copy to clipboard', 'error');
+            }
+        }
+
+        async function captureDiagnostics() {
+            const devStatus = document.getElementById('devStatus');
+            const diagnosticsSpinner = document.getElementById('diagnosticsSpinner');
+            const diagnosticsText = document.getElementById('diagnosticsText');
+            const includeExperimental = document.getElementById('includeExperimental').checked;
+            
+            diagnosticsSpinner.classList.remove('hidden');
+            diagnosticsText.textContent = 'Capturing...';
+            
+            try {
+                const res = await fetch('/api/diagnostics', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        includeExperimental: includeExperimental
+                    })
+                });
+                
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    throw new Error(errorText || 'Diagnostics capture failed');
+                }
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    devStatus.textContent = `Diagnostics saved to ${data.zipPath}`;
+                    devStatus.className = 'text-xs text-green-600 dark:text-green-400';
+                    showToast(`Diagnostics captured: ${data.devices} device(s) saved`, 'success');
+                    
+                    // Optionally copy summary to clipboard
+                    try {
+                        await navigator.clipboard.writeText(data.summary);
+                        console.log('Summary copied to clipboard');
+                    } catch (err) {
+                        console.log('Failed to copy summary to clipboard:', err);
+                    }
+                } else {
+                    throw new Error('Diagnostics capture failed');
+                }
+            } catch (err) {
+                devStatus.textContent = err.message;
+                devStatus.className = 'text-xs text-red-600 dark:text-red-400';
+                showToast(err.message, 'error');
+            } finally {
+                diagnosticsSpinner.classList.add('hidden');
+                diagnosticsText.textContent = 'Capture Diagnostics';
             }
         }
 
