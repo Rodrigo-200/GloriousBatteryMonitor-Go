@@ -68,6 +68,7 @@ func loadSettings() {
         LowBatteryThreshold:      20,
         CriticalBatteryThreshold: 10,
         SafeMode:                 true,
+        ShowPercentageOnIcon:     false,
     }
     data, err := os.ReadFile(settingsFile)
     if err != nil {

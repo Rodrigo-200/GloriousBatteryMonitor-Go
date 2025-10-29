@@ -77,6 +77,7 @@ type Settings struct {
     LowBatteryThreshold      int  `json:"lowBatteryThreshold"`
     CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"`
     SafeMode                 bool `json:"safeMode"`
+    ShowPercentageOnIcon     bool `json:"showPercentageOnIcon"`
 }
 
 const currentVersion = "2.4.4"
@@ -721,7 +722,8 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                         batteryLvl = lk
                         isCharging = lkchg
                         batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
-                        updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+                        tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                        updateTrayTooltip(tooltipText)
                         updateTrayIcon(lk, lkchg, true)
                     })
                     broadcast(map[string]interface{}{
@@ -760,7 +762,8 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                     batteryLvl = lk
                     isCharging = lkchg
                     batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
-                    updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+                    tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                    updateTrayTooltip(tooltipText)
                     updateTrayIcon(lk, lkchg, true)
                 })
                 broadcast(map[string]interface{}{
@@ -791,8 +794,9 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                         trayInvoke(func() {
                             batteryLvl = lk
                             isCharging = lkchg
-                            batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
-                            updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+                            tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                            batteryText = tooltipText
+                            updateTrayTooltip(tooltipText)
                             updateTrayIcon(lk, lkchg, true)
                         })
                         broadcast(map[string]interface{}{
@@ -811,8 +815,9 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                         trayInvoke(func() {
                             batteryLvl = 0
                             isCharging = false
-                            batteryText = "Mouse Not Found"
-                            updateTrayTooltip("Mouse Not Found")
+                            tooltipText := formatTrayTooltip(-1, false, false, deviceModel)
+                            batteryText = tooltipText
+                            updateTrayTooltip(tooltipText)
                             updateTrayIcon(0, false, false)
                         })
                         broadcast(map[string]interface{}{
@@ -1026,6 +1031,59 @@ func updateTrayTooltip(text string) {
     })
 }
 
+func formatTrayTooltip(level int, charging bool, connected bool, model string) string {
+    if !connected {
+        if level >= 0 {
+            return fmt.Sprintf("Last known: %d%%", level)
+        }
+        return "Mouse Not Found"
+    }
+    if model == "" || model == "Unknown" {
+        model = "Glorious Mouse"
+    }
+    if charging {
+        return fmt.Sprintf("%s — %d%% (Charging)", model, level)
+    }
+    return fmt.Sprintf("%s — %d%%", model, level)
+}
+
+const (
+    digitPatternWidth  = 3
+    digitPatternHeight = 5
+)
+
+var digitPatterns = [10][5]uint8{
+    {0b111, 0b101, 0b101, 0b101, 0b111},
+    {0b010, 0b110, 0b010, 0b010, 0b111},
+    {0b111, 0b001, 0b111, 0b100, 0b111},
+    {0b111, 0b001, 0b111, 0b001, 0b111},
+    {0b101, 0b101, 0b111, 0b001, 0b001},
+    {0b111, 0b100, 0b111, 0b001, 0b111},
+    {0b111, 0b100, 0b111, 0b101, 0b111},
+    {0b111, 0b001, 0b001, 0b001, 0b001},
+    {0b111, 0b101, 0b111, 0b101, 0b111},
+    {0b111, 0b101, 0b111, 0b001, 0b111},
+}
+
+func drawDigitPattern(set func(int32, int32, uint32), digit int, x, y, blockSize int32, color uint32) {
+    if digit < 0 || digit > 9 || blockSize < 1 {
+        return
+    }
+    pattern := digitPatterns[digit]
+    for row := int32(0); row < digitPatternHeight; row++ {
+        bits := pattern[row]
+        for col := int32(0); col < digitPatternWidth; col++ {
+            if (bits>>(digitPatternWidth-1-col))&1 == 1 {
+                for dy := int32(0); dy < blockSize; dy++ {
+                    for dx := int32(0); dx < blockSize; dx++ {
+                        set(x+col*blockSize+dx, y+row*blockSize+dy, color)
+                    }
+                }
+            }
+        }
+    }
+}
+
 func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON {
     defer safeDefer("createBatteryIcon")
 
@@ -1219,6 +1277,89 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         }
     }
 
+    if charging && !dim {
+        boltColor := uint32(0xFFFFFFFF)
+        centerX := bodyLeft + (bodyRight-bodyLeft)/2
+        centerY := bodyTop + (bodyBottom-bodyTop)/2
+        boltHeight := int32(float32(14) * scale)
+        boltWidth := int32(float32(8) * scale)
+        if boltHeight < 4 {
+            boltHeight = 4
+        }
+        if boltWidth < 3 {
+            boltWidth = 3
+        }
+        topY := centerY - boltHeight/2
+        bottomY := centerY + boltHeight/2
+        leftX := centerX - boltWidth/2
+        rightX := centerX + boltWidth/2
+        midY := centerY
+        for y := topY; y <= bottomY; y++ {
+            if y < midY {
+                x1 := leftX + (rightX-leftX)*(y-topY)/(midY-topY)
+                x2 := centerX
+                for x := x1; x <= x2; x++ {
+                    set(x, y, boltColor)
+                }
+            } else if y == midY {
+                for x := leftX; x <= rightX; x++ {
+                    set(x, y, boltColor)
+                }
+            } else {
+                x1 := centerX
+                x2 := rightX - (rightX-leftX)*(y-midY)/(bottomY-midY)
+                for x := x1; x <= x2; x++ {
+                    set(x, y, boltColor)
+                }
+            }
+        }
+    }
+
+    if settings.ShowPercentageOnIcon && !dim && level >= 0 && level <= 100 {
+        percentText := fmt.Sprintf("%d", level)
+        innerWidth := (bodyRight - bodyLeft) - 2
+        innerHeight := (bodyBottom - bodyTop) - 2
+        if innerWidth > 0 && innerHeight > 0 {
+            unitsWidth := int32(len(percentText))*digitPatternWidth + int32(len(percentText)-1)
+            if unitsWidth <= 0 {
+                unitsWidth = digitPatternWidth
+            }
+            block := innerWidth / unitsWidth
+            if block > innerHeight/digitPatternHeight {
+                block = innerHeight / digitPatternHeight
+            }
+            if block < 1 {
+                block = 1
+            }
+            glyphWidth := digitPatternWidth * block
+            glyphHeight := digitPatternHeight * block
+            spacing := block
+            totalWidth := int32(len(percentText))*glyphWidth + int32(len(percentText)-1)*spacing
+            if totalWidth > innerWidth {
+                totalWidth = innerWidth
+            }
+            startX := bodyLeft + 1 + (innerWidth-totalWidth)/2
+            startY := bodyTop + 1 + (innerHeight-glyphHeight)/2
+            if startX < bodyLeft+1 {
+                startX = bodyLeft + 1
+            }
+            if startY < bodyTop+1 {
+                startY = bodyTop + 1
+            }
+            shadowColor := uint32(0x80000000)
+            textColor := uint32(0xFFFFFFFF)
+            for i, ch := range percentText {
+                digit := int(ch - '0')
+                if digit < 0 || digit > 9 {
+                    continue
+                }
+                offsetX := startX + int32(i)*(glyphWidth+spacing)
+                drawDigitPattern(set, digit, offsetX+1, startY+1, block, shadowColor)
+                drawDigitPattern(set, digit, offsetX, startY, block, textColor)
+            }
+        }
+    }
+
     hMask := win.CreateBitmap(width, height, 1, 1, nil)
     if hMask == 0 {
         if logger != nil {
@@ -1247,6 +1388,35 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     win.DeleteObject(win.HGDIOBJ(hMask))
 
     return hIcon
+}
+
+func invalidateIconCache() {
+    trayMu.Lock()
+    current := nid.HIcon
+    trayMu.Unlock()
+
+    iconCacheMu.Lock()
+    for key, icon := range iconCache {
+        if icon == 0 || icon == current {
+            continue
+        }
+        select {
+        case iconReap <- icon:
+        default:
+        }
+        delete(iconCache, key)
+    }
+    iconCacheMu.Unlock()
+
+    cachedIconMu.Lock()
+    if cachedDisconnectedIcon != 0 && cachedDisconnectedIcon != current {
+        select {
+        case iconReap <- cachedDisconnectedIcon:
+        default:
+        }
+        cachedDisconnectedIcon = 0
+    }
+    cachedIconMu.Unlock()
 }
 
 func updateTrayIcon(level int, charging bool, dim bool) {
@@ -1293,7 +1463,7 @@ func updateTrayIcon(level int, charging bool, dim bool) {
             }
         }
 
-        key := fmt.Sprintf("%03d:%t:%d", level, charging, animationFrame)
+        key := fmt.Sprintf("%03d:%t:%d:%t", level, charging, animationFrame, settings.ShowPercentageOnIcon)
         iconCacheMu.Lock()
         cachedIcon, ok := iconCache[key]
         iconCacheMu.Unlock()
@@ -1384,10 +1554,18 @@ func handleSettings(w http.ResponseWriter, r *http.Request) {
             newSettings.RefreshInterval = 5
         }
         prevSafe := settings.SafeMode
+        prevPercentage := settings.ShowPercentageOnIcon
         settings = newSettings
         saveSettings()
         if logger != nil && prevSafe != settings.SafeMode {
             logger.Printf("[SETTINGS] SafeMode toggled to %v via UI", settings.SafeMode)
+        }
+        if prevPercentage != settings.ShowPercentageOnIcon {
+            go func() {
+                invalidateIconCache()
+                dim := showLastKnown
+                updateTrayIcon(batteryLvl, isCharging, dim)
+            }()
         }
         json.NewEncoder(w).Encode(map[string]bool{"success": true})
     }

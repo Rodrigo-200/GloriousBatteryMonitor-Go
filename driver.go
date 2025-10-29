@@ -303,7 +303,9 @@ func reconnect() {
             lastKnownMu.Unlock()
 
             trayInvoke(func() {
-                updateTrayTooltip(fmt.Sprintf("Battery: %d%%", level))
+                tooltipText := formatTrayTooltip(level, charging, true, deviceModel)
+                batteryText = tooltipText
+                updateTrayTooltip(tooltipText)
                 updateTrayIcon(level, charging, false)
             })
 
@@ -428,7 +430,9 @@ func reconnect() {
                 batteryLvl = lk
                 isCharging = lkchg
                 trayInvoke(func() {
-                    updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+                    tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                    batteryText = tooltipText
+                    updateTrayTooltip(tooltipText)
                     updateTrayIcon(lk, lkchg, true)
                 })
                 broadcast(map[string]interface{}{"status": "disconnected", "level": lk, "charging": lkchg, "lastKnown": true})
@@ -436,7 +440,9 @@ func reconnect() {
                 batteryLvl = 0
                 isCharging = false
                 trayInvoke(func() {
-                    updateTrayTooltip("Mouse Not Found")
+                    tooltipText := formatTrayTooltip(-1, false, false, deviceModel)
+                    batteryText = tooltipText
+                    updateTrayTooltip(tooltipText)
                     updateTrayIcon(0, false, false)
                 })
                 broadcast(map[string]interface{}{"status": "disconnected", "level": 0, "charging": false, "lastKnown": false})
@@ -458,7 +464,9 @@ func reconnect() {
         lastKnownMu.Unlock()
 
         trayInvoke(func() {
-            updateTrayTooltip(fmt.Sprintf("Battery: %d%%", batteryLvl))
+            tooltipText := formatTrayTooltip(batteryLvl, isCharging, true, deviceModel)
+            batteryText = tooltipText
+            updateTrayTooltip(tooltipText)
             updateTrayIcon(batteryLvl, isCharging, false)
         })
         broadcast(map[string]interface{}{"status": "connected", "level": batteryLvl, "charging": isCharging, "lastKnown": false})

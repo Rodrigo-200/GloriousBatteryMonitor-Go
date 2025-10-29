@@ -313,6 +313,12 @@
                             <input type="checkbox" id="notificationsEnabled" class="w-5 h-5 rounded border-fluent-border dark:border-fluent-dark-border text-fluent-accent dark:text-fluent-dark-accent focus-ring">
                             <span class="text-sm font-medium text-fluent-text dark:text-fluent-dark-text group-hover:text-fluent-accent dark:group-hover:text-fluent-dark-accent transition">Enable Notifications</span>
                         </label>
+                        
+                        <label class="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" id="showPercentageOnIcon" class="w-5 h-5 rounded border-fluent-border dark:border-fluent-dark-border text-fluent-accent dark:text-fluent-dark-accent focus-ring">
+                            <span class="text-sm font-medium text-fluent-text dark:text-fluent-dark-text group-hover:text-fluent-accent dark:group-hover:text-fluent-dark-accent transition">Show percentage on tray icon</span>
+                        </label>
+                        <p class="text-xs text-fluent-muted dark:text-fluent-dark-muted ml-8">Display battery percentage overlay</p>
                     </div>
                     
                     <!-- Number Inputs -->
@@ -794,6 +800,7 @@
                 document.getElementById('notificationsEnabled').checked = !!currentSettings.notificationsEnabled;
                 document.getElementById('lowBatteryThreshold').value = currentSettings.lowBatteryThreshold ?? 20;
                 document.getElementById('criticalBatteryThreshold').value = currentSettings.criticalBatteryThreshold ?? 10;
+                document.getElementById('showPercentageOnIcon').checked = !!currentSettings.showPercentageOnIcon;
             } catch (e) {
                 showToast('Failed to load settings', 'error');
             }
@@ -830,7 +837,8 @@
                 nonIntrusiveMode: document.getElementById('nonIntrusiveMode').checked,
                 safeMode: document.getElementById('safeMode').checked,
                 lowBatteryThreshold: clamp(parseInt(document.getElementById('lowBatteryThreshold').value, 10) || 20, 5, 50),
-                criticalBatteryThreshold: clamp(parseInt(document.getElementById('criticalBatteryThreshold').value, 10) || 10, 5, 30)
+                criticalBatteryThreshold: clamp(parseInt(document.getElementById('criticalBatteryThreshold').value, 10) || 10, 5, 30),
+                showPercentageOnIcon: document.getElementById('showPercentageOnIcon').checked
             };
             
             try {
