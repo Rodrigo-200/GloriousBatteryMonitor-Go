@@ -604,7 +604,7 @@ func startTray() {
     win.Shell_NotifyIcon(win.NIM_ADD, &nid)
     nid.UVersion = win.NOTIFYICON_VERSION_4
     win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
-    updateTrayTooltip("Glorious Battery")
+    applyTrayTooltip("Glorious Battery")
 
     go func() {
         t := time.NewTicker(1500 * time.Millisecond)
@@ -695,7 +695,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
         win.Shell_NotifyIcon(win.NIM_ADD, &nid)
         nid.UVersion = win.NOTIFYICON_VERSION_4
         win.Shell_NotifyIcon(win.NIM_SETVERSION, &nid)
-        updateTrayTooltip(batteryText)
+        applyTrayTooltip(batteryText)
         return 0
     }
 
@@ -736,7 +736,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                         batteryLvl = lk
                         isCharging = lkchg
                         tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
-                        updateTrayTooltip(tooltipText)
+                        applyTrayTooltip(tooltipText)
                         updateTrayIcon(lk, lkchg, true)
                     })
                     broadcast(map[string]interface{}{
@@ -775,7 +775,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                     batteryLvl = lk
                     isCharging = lkchg
                     tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
-                    updateTrayTooltip(tooltipText)
+                    applyTrayTooltip(tooltipText)
                     updateTrayIcon(lk, lkchg, true)
                 })
                 broadcast(map[string]interface{}{
@@ -807,7 +807,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                             batteryLvl = lk
                             isCharging = lkchg
                             tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
-                            updateTrayTooltip(tooltipText)
+                            applyTrayTooltip(tooltipText)
                             updateTrayIcon(lk, lkchg, true)
                         })
                         broadcast(map[string]interface{}{
@@ -827,7 +827,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                             batteryLvl = 0
                             isCharging = false
                             tooltipText := formatTrayTooltip(-1, false, false, deviceModel)
-                            updateTrayTooltip(tooltipText)
+                            applyTrayTooltip(tooltipText)
                             updateTrayIcon(0, false, false)
                         })
                         broadcast(map[string]interface{}{
@@ -1025,7 +1025,7 @@ func updateBattery() {
     }
 }
 
-func updateTrayTooltip(text string) {
+func normalizeTrayTooltip(text string) string {
     text = strings.TrimSpace(text)
     if text == "" {
         text = "Glorious Battery Monitor"
@@ -1037,27 +1037,43 @@ func updateTrayTooltip(text string) {
         runes = runes[:maxTooltipChars]
         text = string(runes)
     }
+    return text
+}
 
+func updateTrayTooltipLocked(text string) {
     batteryText = text
-
     tip, _ := syscall.UTF16FromString(text)
 
+    for i := range nid.SzTip {
+        nid.SzTip[i] = 0
+    }
+    n := len(tip)
+    if n > len(nid.SzTip) {
+        n = len(nid.SzTip)
+    }
+    copy(nid.SzTip[:n], tip[:n])
+
+    nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+    win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
+
+    if logger != nil {
+        logger.Printf("[TOOLTIP] Updated tooltip to: %s", text)
+    }
+}
+
+func applyTrayTooltip(text string) {
+    sanitized := normalizeTrayTooltip(text)
+    trayMu.Lock()
+    defer trayMu.Unlock()
+    updateTrayTooltipLocked(sanitized)
+}
+
+func updateTrayTooltip(text string) {
+    sanitized := normalizeTrayTooltip(text)
     trayInvoke(func() {
         trayMu.Lock()
         defer trayMu.Unlock()
-
-        for i := range nid.SzTip {
-            nid.SzTip[i] = 0
-        }
-        n := len(tip)
-        if n > len(nid.SzTip) {
-            n = len(nid.SzTip)
-        }
-        copy(nid.SzTip[:n], tip[:n])
-
-        nid.UFlags = win.NIF_TIP
-        win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
-        nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
+        updateTrayTooltipLocked(sanitized)
     })
 }
 
@@ -1512,58 +1528,63 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     }
 
     showPercentOverlay := settings.ShowPercentageOnIcon
-    if logger != nil && level > 0 {
-        logger.Printf("[ICON] Creating icon level=%d charging=%v dim=%v showPercent=%v", level, charging, dim, showPercentOverlay)
-    }
     
     if showPercentOverlay && !dim && level >= 0 && level <= 100 {
-        if logger != nil {
-            logger.Printf("[ICON] Drawing percentage overlay: %d%%", level)
-        }
         percentText := fmt.Sprintf("%d", level)
-        textPadding := borderWidth * 2
-        innerWidth := bodyWidth - textPadding*2
-        innerHeight := bodyHeight - textPadding*2
-        if innerWidth <= 0 {
-            innerWidth = bodyWidth - 4
+        
+        padding := borderWidth + 2
+        if padding < 3 {
+            padding = 3
         }
-        if innerHeight <= 0 {
-            innerHeight = bodyHeight - 4
+        innerWidth := bodyWidth - padding*2
+        innerHeight := bodyHeight - padding*2
+        if innerWidth < 8 {
+            innerWidth = bodyWidth - 6
+        }
+        if innerHeight < 10 {
+            innerHeight = bodyHeight - 6
         }
 
-        unitsWidth := int32(len(percentText))*digitPatternWidth + int32(len(percentText)-1)
-        if unitsWidth <= 0 {
-            unitsWidth = digitPatternWidth
+        numDigits := int32(len(percentText))
+        spacing := int32(1)
+        if numDigits > 1 {
+            spacing = 2
         }
-
-        block := innerWidth / unitsWidth
+        
+        totalUnitsWidth := numDigits*digitPatternWidth + (numDigits-1)*spacing
+        block := innerWidth / totalUnitsWidth
         maxBlockHeight := innerHeight / digitPatternHeight
         if maxBlockHeight < block {
             block = maxBlockHeight
         }
-        if block < 1 {
-            block = 1
+        
+        if block < 2 {
+            block = 2
         }
-        if block > 4 {
-            block = 4
+        if block > 7 {
+            block = 7
         }
 
         glyphWidth := digitPatternWidth * block
         glyphHeight := digitPatternHeight * block
-        spacing := int32(block / 2)
-        totalWidth := int32(len(percentText))*glyphWidth + int32(len(percentText)-1)*spacing
-        startX := bodyLeft + textPadding + (innerWidth-totalWidth)/2
-        startY := bodyTop + textPadding + (innerHeight-glyphHeight)/2
+        glyphSpacing := spacing * block
+        totalWidth := numDigits*glyphWidth + (numDigits-1)*glyphSpacing
+        
+        startX := bodyLeft + padding + (innerWidth-totalWidth)/2
+        startY := bodyTop + padding + (innerHeight-glyphHeight)/2
 
-        textColor := uint32(0xFF000000)
-        if level >= 50 {
-            textColor = 0xFFFFFFFF
-        }
-        if level < 20 {
-            textColor = 0xFFFFFFFF
-        }
-        if charging {
-            textColor = 0xFFFFFFFF
+        textColor := uint32(0xFFFFFFFF)
+        shadowColor := uint32(0x80000000)
+        
+        if !charging {
+            if level >= 50 {
+                textColor = 0xFFFFFFFF
+            } else if level >= 20 {
+                textColor = 0xFF000000
+                shadowColor = 0x00000000
+            } else {
+                textColor = 0xFFFFFFFF
+            }
         }
 
         for i, ch := range percentText {
@@ -1571,11 +1592,16 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
             if digit < 0 || digit > 9 {
                 continue
             }
-            offsetX := startX + int32(i)*(glyphWidth+spacing)
+            offsetX := startX + int32(i)*(glyphWidth+glyphSpacing)
+            
+            if shadowColor != 0 {
+                drawDigitPattern(set, digit, offsetX+1, startY+1, block, shadowColor)
+            }
             drawDigitPattern(set, digit, offsetX, startY, block, textColor)
         }
+        
         if logger != nil {
-            logger.Printf("[ICON] Percentage overlay drawn successfully")
+            logger.Printf("[ICON] Percentage overlay drawn: %d%% block=%d", level, block)
         }
     }
 
@@ -2048,7 +2074,7 @@ func quickRefreshOnDeviceChange() {
                                 batteryLvl = hold
                                 isCharging = holdchg
                                 tooltipText := formatTrayTooltip(hold, holdchg, true, deviceModel)
-                                updateTrayTooltip(tooltipText)
+                                applyTrayTooltip(tooltipText)
                                 updateTrayIcon(hold, holdchg, true)
                             })
                             broadcast(map[string]interface{}{
@@ -2088,7 +2114,7 @@ func quickRefreshOnDeviceChange() {
                                             lastKnownCharging = chg
                                             lastKnownMu.Unlock()
                                             tooltipText := formatTrayTooltip(expected, chg, false, deviceModel)
-                                            updateTrayTooltip(tooltipText)
+                                            applyTrayTooltip(tooltipText)
                                             updateTrayIcon(expected, chg, false)
                                             if logger != nil {
                                                 logger.Printf("[DEVCHANGE] quick probe on %s confirmed lvl=%d chg=%v", path, expected, chg)
@@ -2161,7 +2187,7 @@ func quickRefreshOnDeviceChange() {
                         lastKnownCharging = wchg
                         lastKnownMu.Unlock()
                         tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
-                        updateTrayTooltip(tooltipText)
+                        applyTrayTooltip(tooltipText)
                         updateTrayIcon(wlvl, wchg, false)
                         broadcast(map[string]interface{}{
                             "status":          "connected",
@@ -2216,7 +2242,7 @@ func quickRefreshOnDeviceChange() {
                         batteryLvl = hold
                         isCharging = holdchg
                         tooltipText := formatTrayTooltip(hold, holdchg, true, deviceModel)
-                        updateTrayTooltip(tooltipText)
+                        applyTrayTooltip(tooltipText)
                         updateTrayIcon(hold, holdchg, true)
                     })
                     broadcast(map[string]interface{}{
@@ -2257,7 +2283,7 @@ func quickRefreshOnDeviceChange() {
                                     lastKnownCharging = chg
                                     lastKnownMu.Unlock()
                                     tooltipText := formatTrayTooltip(expected, chg, false, deviceModel)
-                                    updateTrayTooltip(tooltipText)
+                                    applyTrayTooltip(tooltipText)
                                     updateTrayIcon(expected, chg, false)
                                     if logger != nil {
                                         logger.Printf("[DEVCHANGE] quick probe on %s confirmed lvl=%d chg=%v", path, expected, chg)
@@ -2316,7 +2342,7 @@ func quickRefreshOnDeviceChange() {
                 lastKnownCharging = wchg
                 lastKnownMu.Unlock()
                 tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
-                updateTrayTooltip(tooltipText)
+                applyTrayTooltip(tooltipText)
                 updateTrayIcon(wlvl, wchg, false)
                 broadcast(map[string]interface{}{
                     "status":          "connected",
@@ -2646,7 +2672,7 @@ func finishConnect(path string, lvl int, chg bool) {
     }
     displayLevel := batteryLvl
     tooltipText := formatTrayTooltip(displayLevel, isCharging, preserveLastKnown, deviceModel)
-    updateTrayTooltip(tooltipText)
+    applyTrayTooltip(tooltipText)
     updateTrayIcon(displayLevel, isCharging, preserveLastKnown)
 
     if logger != nil {
@@ -2708,7 +2734,7 @@ func finishConnect(path string, lvl int, chg bool) {
                     useGetOnly = true
                     useInputReports = false
                     tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
-                    updateTrayTooltip(tooltipText)
+                    applyTrayTooltip(tooltipText)
                     updateTrayIcon(wlvl, wchg, false)
                     if logger != nil {
                         logger.Printf("[CONNECT] worker-confirmed level=%d chg=%v (updated UI)", wlvl, wchg)
@@ -2743,7 +2769,7 @@ func finishConnect(path string, lvl int, chg bool) {
                         batteryLvl = wlvl
                         isCharging = wchg
                         tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
-                        updateTrayTooltip(tooltipText)
+                        applyTrayTooltip(tooltipText)
                         updateTrayIcon(wlvl, wchg, false)
                         if logger != nil {
                             logger.Printf("[CONNECT] quick worker confirm succeeded lvl=%d chg=%v (path=%s)", wlvl, wchg, path)
@@ -2805,7 +2831,7 @@ func finishConnect(path string, lvl int, chg bool) {
                             showLastKnown = false
                             lastKnownMu.Unlock()
                             tooltipText := formatTrayTooltip(batteryLvl, isCharging, false, deviceModel)
-                            updateTrayTooltip(tooltipText)
+                            applyTrayTooltip(tooltipText)
                             updateTrayIcon(batteryLvl, isCharging, false)
                             if logger != nil {
                                 logger.Printf("[CONNECT] accepted confirmed low reading lvl=%d chg=%v", lvl2, chg2)
@@ -2851,7 +2877,7 @@ func finishConnect(path string, lvl int, chg bool) {
                                 batteryLvl = wlvl
                                 isCharging = wchg
                                 tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
-                                updateTrayTooltip(tooltipText)
+                                applyTrayTooltip(tooltipText)
                                 updateTrayIcon(wlvl, wchg, false)
                                 if logger != nil {
                                     logger.Printf("[CONNECT] worker fallback probe succeeded: lvl=%d chg=%v rid=0x%02x len=%d", wlvl, wchg, wrid, wlen)
@@ -2878,7 +2904,7 @@ func finishConnect(path string, lvl int, chg bool) {
                     batteryLvl = wlvl2
                     isCharging = wchg2
                     tooltipText := formatTrayTooltip(wlvl2, wchg2, false, deviceModel)
-                    updateTrayTooltip(tooltipText)
+                    applyTrayTooltip(tooltipText)
                     updateTrayIcon(wlvl2, wchg2, false)
                     if logger != nil {
                         logger.Printf("[CONNECT] worker session adoption succeeded: lvl=%d chg=%v", wlvl2, wchg2)
@@ -2908,7 +2934,7 @@ func finishConnect(path string, lvl int, chg bool) {
                 batteryLvl = lvl2
                 isCharging = chg2
                 tooltipText := formatTrayTooltip(lvl2, chg2, false, deviceModel)
-                updateTrayTooltip(tooltipText)
+                applyTrayTooltip(tooltipText)
                 updateTrayIcon(lvl2, chg2, false)
                 if logger != nil {
                     logger.Printf("[CONNECT] fresh read after connect (attempt %d/%d): lvl=%d chg=%v", i+1, attempts, lvl2, chg2)
@@ -2940,7 +2966,7 @@ func finishConnect(path string, lvl int, chg bool) {
                     batteryLvl = wlvl
                     isCharging = wchg
                     tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
-                    updateTrayTooltip(tooltipText)
+                    applyTrayTooltip(tooltipText)
                     updateTrayIcon(wlvl, wchg, false)
                     if logger != nil {
                         logger.Printf("[CONNECT] worker fallback probe succeeded: lvl=%d chg=%v rid=0x%02x len=%d", wlvl, wchg, wrid, wlen)
@@ -2966,7 +2992,7 @@ func finishConnect(path string, lvl int, chg bool) {
             batteryLvl = lk
             isCharging = lkchg
             tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
-            updateTrayTooltip(tooltipText)
+            applyTrayTooltip(tooltipText)
             updateTrayIcon(lk, lkchg, true)
             clearReading()
             broadcast(map[string]interface{}{"status": "connected", "reading": false, "lastKnown": true})
