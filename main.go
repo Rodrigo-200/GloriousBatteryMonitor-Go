@@ -4,7 +4,10 @@
 package main
 
 import (
+    "archive/zip"
+    "bytes"
     "embed"
+    "encoding/hex"
     "encoding/json"
     "fmt"
     "log"
@@ -80,6 +83,35 @@ type Settings struct {
     ShowPercentageOnIcon     bool `json:"showPercentageOnIcon"`
 }
 
+type DiagnosticsRequest struct {
+    IncludeExperimental bool `json:"includeExperimental"`
+}
+
+type DeviceDiagnostics struct {
+    VID            uint16   `json:"vid"`
+    PID            uint16   `json:"pid"`
+    UsagePage      uint16   `json:"usagePage"`
+    Usage          uint16   `json:"usage"`
+    Interface      int      `json:"interface"`
+    Path           string   `json:"path"`
+    Manufacturer   string   `json:"manufacturer,omitempty"`
+    Product        string   `json:"product,omitempty"`
+    SerialNumber   string   `json:"serialNumber,omitempty"`
+    ReportDesc     string   `json:"reportDesc"`
+    InputSamples   []string `json:"inputSamples"`
+    FeatureSamples []string `json:"featureSamples,omitempty"`
+    IsGlorious     bool     `json:"isGlorious"`
+}
+
+type DiagnosticsBundle struct {
+    Timestamp           string               `json:"timestamp"`
+    AppVersion          string               `json:"appVersion"`
+    OSVersion           string               `json:"osVersion"`
+    ExperimentalEnabled bool                 `json:"experimentalEnabled"`
+    Devices             []DeviceDiagnostics   `json:"devices"`
+    Summary             string               `json:"summary"`
+}
+
 const currentVersion = "2.4.4"
 const iconBucketUnset = -999
 
@@ -107,6 +139,7 @@ var (
     dataFile                string
     settingsFile            string
     logFile                 string
+    diagnosticsDir          string
     logger                  *log.Logger
     settings                Settings
     notifiedLow             bool
@@ -228,6 +261,8 @@ func main() {
     settingsFile = filepath.Join(dataDir, "settings.json")
     logFile = filepath.Join(dataDir, "debug.log")
     cacheFile = filepath.Join(dataDir, "conn_profile.json")
+    diagnosticsDir = filepath.Join(dataDir, "diagnostics")
+    os.MkdirAll(diagnosticsDir, 0755)
 
     setupLogging()
     loadChargeData()
@@ -412,6 +447,7 @@ func startWebServer() {
     http.HandleFunc("/api/rescan", handleRescan)
     http.HandleFunc("/api/resize", handleResize)
     http.HandleFunc("/api/scan-hid", handleScanHID)
+    http.HandleFunc("/api/diagnostics", handleDiagnostics)
 
     addr := ":" + serverPort
     if logger != nil {
@@ -1978,6 +2014,290 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
         "path":            curPath,
     }
     _ = json.NewEncoder(w).Encode(resp)
+}
+
+func sanitizeString(s string) string {
+    if len(s) == 0 {
+        return ""
+    }
+    // Replace potential PII/sensitive data with placeholder
+    sanitized := strings.ReplaceAll(s, "SN:", "SN:<REDACTED>")
+    sanitized = strings.ReplaceAll(sanitized, "Serial:", "Serial:<REDACTED>")
+    sanitized = strings.ReplaceAll(sanitized, "serial:", "serial:<REDACTED>")
+    // Remove any remaining potential serial numbers (alphanumeric strings 8+ chars)
+    words := strings.Fields(sanitized)
+    var result []string
+    for _, word := range words {
+        if len(word) >= 8 && isAlphanumeric(word) {
+            result = append(result, "<REDACTED>")
+        } else {
+            result = append(result, word)
+        }
+    }
+    return strings.Join(result, " ")
+}
+
+func isAlphanumeric(s string) bool {
+    for _, r := range s {
+        if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+            return false
+        }
+    }
+    return true
+}
+
+func collectDeviceDiagnostics(includeExperimental bool) ([]DeviceDiagnostics, error) {
+    var devices []DeviceDiagnostics
+    
+    // Collect diagnostics for all Glorious devices
+    for _, vid := range gloriousVendorIDs {
+        err := hid.Enumerate(vid, 0, func(info *hid.DeviceInfo) error {
+            if isKeyboardInterface(info) {
+                return nil
+            }
+            
+            // Skip if device doesn't match our criteria
+            if !shouldCollectForDiagnostics(info) {
+                return nil
+            }
+            
+            dev := DeviceDiagnostics{
+                VID:          info.VendorID,
+                PID:          info.ProductID,
+                UsagePage:    info.UsagePage,
+                Usage:        info.Usage,
+                Interface:    info.InterfaceNbr,
+                Path:         info.Path,
+                Manufacturer: sanitizeString(info.MfrStr),
+                Product:      sanitizeString(info.ProductStr),
+                SerialNumber: sanitizeString(info.SerialNbr),
+                IsGlorious:   isGloriousVendor(info.VendorID),
+            }
+            
+            // Try to open device for report descriptor and samples
+            if device, err := hid.OpenPath(info.Path); err == nil {
+                defer device.Close()
+                
+                // Get report descriptor (if available)
+                // Note: GetReportDescriptor might not be available in all HID library versions
+                // This is a best-effort collection
+                dev.ReportDesc = "Not available in this version"
+                
+                // Collect input report samples (read-only)
+                var inputSamples []string
+                buf := make([]byte, 65)
+                for i := 0; i < 5; i++ { // Collect up to 5 samples
+                    device.SetNonblocking(true)
+                    n, err := device.Read(buf)
+                    if err == nil && n > 0 {
+                        inputSamples = append(inputSamples, hex.EncodeToString(buf[:n]))
+                    }
+                    time.Sleep(50 * time.Millisecond) // Small delay between reads
+                }
+                dev.InputSamples = inputSamples
+                
+                // Experimental: collect feature reports if requested
+                if includeExperimental {
+                    var featureSamples []string
+                    for rid := byte(0x01); rid <= 0x0F; rid++ { // Try common report IDs
+                        featureBuf := make([]byte, 65)
+                        featureBuf[0] = rid
+                        n, err := device.GetFeatureReport(featureBuf)
+                        if err == nil && n > 0 {
+                            featureSamples = append(featureSamples, hex.EncodeToString(featureBuf[:n]))
+                        }
+                    }
+                    dev.FeatureSamples = featureSamples
+                }
+            }
+            
+            devices = append(devices, dev)
+            return nil
+        })
+        
+        if err != nil && logger != nil {
+            logger.Printf("[DIAG] Error enumerating VID 0x%04X: %v", vid, err)
+        }
+    }
+    
+    return devices, nil
+}
+
+func shouldCollectForDiagnostics(info *hid.DeviceInfo) bool {
+    // Include known Glorious devices and potential new devices
+    if isGloriousVendor(info.VendorID) {
+        return true
+    }
+    
+    // Include devices with mouse-like usage pages
+    switch info.UsagePage {
+    case 0x01: // Generic Desktop
+        if info.Usage == 0x02 { // Mouse
+            return true
+        }
+    case 0x0C: // Consumer
+        return true
+    }
+    
+    return false
+}
+
+func getOSVersion() string {
+    version := runtime.GOOS
+    if runtime.GOOS == "windows" {
+        // Try to get Windows version
+        if major, minor, build := getWindowsVersion(); major > 0 {
+            version = fmt.Sprintf("Windows %d.%d Build %d", major, minor, build)
+        } else {
+            version = "Windows (unknown version)"
+        }
+    }
+    return version
+}
+
+func getWindowsVersion() (major, minor, build uint32) {
+    // Simple Windows version detection
+    version := syscall.NewLazyDLL("kernel32.dll")
+    proc := version.NewProc("GetVersion")
+    result, _, _ := proc.Call()
+    
+    major = uint32(result & 0xFF)
+    minor = uint32((result >> 8) & 0xFF)
+    build = uint32((result >> 16) & 0xFFFF)
+    
+    return
+}
+
+func createDiagnosticsBundle(devices []DeviceDiagnostics, experimental bool) DiagnosticsBundle {
+    // Create summary
+    var summary strings.Builder
+    summary.WriteString(fmt.Sprintf("Diagnostics captured %d device(s)\n", len(devices)))
+    
+    gloriousCount := 0
+    for _, dev := range devices {
+        if dev.IsGlorious {
+            gloriousCount++
+        }
+    }
+    if gloriousCount > 0 {
+        summary.WriteString(fmt.Sprintf("- %d Glorious device(s)\n", gloriousCount))
+    }
+    
+    summary.WriteString(fmt.Sprintf("- Experimental reads: %v\n", experimental))
+    summary.WriteString(fmt.Sprintf("- Safe mode: %v\n", settings.SafeMode))
+    
+    return DiagnosticsBundle{
+        Timestamp:           time.Now().Format(time.RFC3339),
+        AppVersion:          currentVersion,
+        OSVersion:           getOSVersion(),
+        ExperimentalEnabled: experimental,
+        Devices:             devices,
+        Summary:             summary.String(),
+    }
+}
+
+func handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+    
+    if logger != nil {
+        logger.Printf("[HTTP] Diagnostics capture requested")
+    }
+    
+    var req DiagnosticsRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request body", http.StatusBadRequest)
+        return
+    }
+    
+    // Collect device diagnostics
+    devices, err := collectDeviceDiagnostics(req.IncludeExperimental)
+    if err != nil {
+        if logger != nil {
+            logger.Printf("[DIAG] Error collecting diagnostics: %v", err)
+        }
+        http.Error(w, "Failed to collect diagnostics", http.StatusInternalServerError)
+        return
+    }
+    
+    // Create diagnostics bundle
+    bundle := createDiagnosticsBundle(devices, req.IncludeExperimental)
+    
+    // Create zip file
+    timestamp := time.Now().Format("20060102_150405")
+    zipPath := filepath.Join(diagnosticsDir, fmt.Sprintf("glorious_diagnostics_%s.zip", timestamp))
+    
+    zipFile, err := os.Create(zipPath)
+    if err != nil {
+        if logger != nil {
+            logger.Printf("[DIAG] Error creating zip file: %v", err)
+        }
+        http.Error(w, "Failed to create diagnostics file", http.StatusInternalServerError)
+        return
+    }
+    defer zipFile.Close()
+    
+    zipWriter := zip.NewWriter(zipFile)
+    defer zipWriter.Close()
+    
+    // Add JSON bundle
+    if bundleJson, err := json.MarshalIndent(bundle, "", "  "); err == nil {
+        if writer, err := zipWriter.Create("diagnostics.json"); err == nil {
+            writer.Write(bundleJson)
+        }
+    }
+    
+    // Add text summary
+    if writer, err := zipWriter.Create("summary.txt"); err == nil {
+        writer.Write([]byte(bundle.Summary))
+        writer.Write([]byte("\n\nDevice Details:\n"))
+        for i, dev := range bundle.Devices {
+            writer.Write([]byte(fmt.Sprintf("\nDevice %d:\n", i+1)))
+            writer.Write([]byte(fmt.Sprintf("  VID: 0x%04X, PID: 0x%04X\n", dev.VID, dev.PID)))
+            writer.Write([]byte(fmt.Sprintf("  UsagePage: 0x%04X, Usage: 0x%04X\n", dev.UsagePage, dev.Usage)))
+            writer.Write([]byte(fmt.Sprintf("  Interface: %d\n", dev.Interface)))
+            if dev.Product != "" {
+                writer.Write([]byte(fmt.Sprintf("  Product: %s\n", dev.Product)))
+            }
+            if dev.Manufacturer != "" {
+                writer.Write([]byte(fmt.Sprintf("  Manufacturer: %s\n", dev.Manufacturer)))
+            }
+            writer.Write([]byte(fmt.Sprintf("  IsGlorious: %v\n", dev.IsGlorious)))
+            if dev.ReportDesc != "" {
+                writer.Write([]byte(fmt.Sprintf("  Report Descriptor: %s\n", dev.ReportDesc)))
+            }
+            if len(dev.InputSamples) > 0 {
+                writer.Write([]byte(fmt.Sprintf("  Input Samples: %d\n", len(dev.InputSamples))))
+                for j, sample := range dev.InputSamples {
+                    writer.Write([]byte(fmt.Sprintf("    Sample %d: %s\n", j+1, sample)))
+                }
+            }
+            if len(dev.FeatureSamples) > 0 {
+                writer.Write([]byte(fmt.Sprintf("  Feature Samples: %d\n", len(dev.FeatureSamples))))
+                for j, sample := range dev.FeatureSamples {
+                    writer.Write([]byte(fmt.Sprintf("    Feature %d: %s\n", j+1, sample)))
+                }
+            }
+        }
+    }
+    
+    zipWriter.Close()
+    zipFile.Close()
+    
+    if logger != nil {
+        logger.Printf("[DIAG] Diagnostics saved to: %s", zipPath)
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "success":   true,
+        "zipPath":   zipPath,
+        "timestamp": timestamp,
+        "devices":   len(devices),
+        "summary":   bundle.Summary,
+    })
 }
 
 func quickRefreshOnDeviceChange() {
