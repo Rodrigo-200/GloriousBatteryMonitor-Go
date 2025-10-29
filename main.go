@@ -5,7 +5,6 @@ package main
 
 import (
     "archive/zip"
-    "bytes"
     "embed"
     "encoding/hex"
     "encoding/json"
@@ -97,6 +96,7 @@ type DeviceDiagnostics struct {
     Manufacturer   string   `json:"manufacturer,omitempty"`
     Product        string   `json:"product,omitempty"`
     SerialNumber   string   `json:"serialNumber,omitempty"`
+    ReleaseNbr     int      `json:"releaseNbr,omitempty"`
     ReportDesc     string   `json:"reportDesc"`
     InputSamples   []string `json:"inputSamples"`
     FeatureSamples []string `json:"featureSamples,omitempty"`
@@ -2061,6 +2061,11 @@ func collectDeviceDiagnostics(includeExperimental bool) ([]DeviceDiagnostics, er
                 return nil
             }
             
+            // Additional filtering similar to existing code
+            if info.UsagePage == 0x01 && info.Usage == 0x06 {
+                return nil // Skip keyboards
+            }
+            
             dev := DeviceDiagnostics{
                 VID:          info.VendorID,
                 PID:          info.ProductID,
@@ -2071,6 +2076,7 @@ func collectDeviceDiagnostics(includeExperimental bool) ([]DeviceDiagnostics, er
                 Manufacturer: sanitizeString(info.MfrStr),
                 Product:      sanitizeString(info.ProductStr),
                 SerialNumber: sanitizeString(info.SerialNbr),
+                ReleaseNbr:   int(info.ReleaseNbr),
                 IsGlorious:   isGloriousVendor(info.VendorID),
             }
             
@@ -2086,12 +2092,33 @@ func collectDeviceDiagnostics(includeExperimental bool) ([]DeviceDiagnostics, er
                 // Collect input report samples (read-only)
                 var inputSamples []string
                 buf := make([]byte, 65)
+            sampleLoop:
                 for i := 0; i < 5; i++ { // Collect up to 5 samples
-                    device.SetNonblocking(true)
-                    n, err := device.Read(buf)
-                    if err == nil && n > 0 {
-                        inputSamples = append(inputSamples, hex.EncodeToString(buf[:n]))
+                    // Try to read with timeout using goroutine
+                    resultChan := make(chan struct {
+                        n int
+                        err error
+                    }, 1)
+                    
+                    go func() {
+                        n, err := device.Read(buf)
+                        resultChan <- struct {
+                            n int
+                            err error
+                        }{n, err}
+                    }()
+                    
+                    select {
+                    case result := <-resultChan:
+                        if result.err == nil && result.n > 0 {
+                            inputSamples = append(inputSamples, hex.EncodeToString(buf[:result.n]))
+                        }
+                    case <-time.After(100 * time.Millisecond):
+                        // Timeout - this is expected for devices that don't send input reports continuously
+                        // Break out of the sample collection loop on timeout
+                        break sampleLoop
                     }
+                    
                     time.Sleep(50 * time.Millisecond) // Small delay between reads
                 }
                 dev.InputSamples = inputSamples
@@ -2264,6 +2291,7 @@ func handleDiagnostics(w http.ResponseWriter, r *http.Request) {
             if dev.Manufacturer != "" {
                 writer.Write([]byte(fmt.Sprintf("  Manufacturer: %s\n", dev.Manufacturer)))
             }
+            writer.Write([]byte(fmt.Sprintf("  Release: %d\n", dev.ReleaseNbr)))
             writer.Write([]byte(fmt.Sprintf("  IsGlorious: %v\n", dev.IsGlorious)))
             if dev.ReportDesc != "" {
                 writer.Write([]byte(fmt.Sprintf("  Report Descriptor: %s\n", dev.ReportDesc)))
