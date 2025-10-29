@@ -81,94 +81,101 @@ type Settings struct {
 }
 
 const currentVersion = "2.4.4"
+const iconBucketUnset = -999
 
 var (
-    device                 *hid.Device
-    deviceModel            = "Unknown"
-    hwnd                   win.HWND
-    webviewHwnd            win.HWND
-    nid                    win.NOTIFYICONDATA
-    batteryText            = "Connecting..."
-    batteryLvl             int
-    isCharging             bool
-    wasCharging            bool
-    hasPrevCharging        bool
-    lastChargeTime         = "Never"
-    lastChargeLevel        = 0
-    user32                 = syscall.NewLazyDLL("user32.dll")
-    appendMenuW            = user32.NewProc("AppendMenuW")
-    showWindow             = user32.NewProc("ShowWindow")
-    clients                = make(map[chan string]bool)
-    clientsMu              sync.RWMutex
-    w                      webview2.WebView
-    serverPort             = "8765"
-    dataDir                string
-    dataFile               string
-    settingsFile           string
-    logFile                string
-    logger                 *log.Logger
-    settings               Settings
-    notifiedLow            bool
-    notifiedCritical       bool
-    notifiedFull           bool
-    lastBatteryLevel       = -1
-    lastBatteryTime        time.Time
-    dischargeRate          float64
-    lastChargeLevel2       = -1
-    lastChargeTime2        time.Time
-    lastKnownLevel         = -1
-    lastKnownCharging      bool
-    lastKnownMu            sync.Mutex
-    showLastKnown          bool
-    chargeRate             float64
-    rateHistory            []float64
-    chargeRateHistory      []float64
-    animationFrame         int
-    stopAnimation          chan bool
-    updateAvailable        bool
-    updateVersion          string
-    updateURL              string
-    selectedReportID       byte = 0x00
-    selectedReportLen      int  = 65
-    useGetOnly             bool
-    consecutiveReadFails   int
-    linkDown               bool
-    probeRIDs              = []byte{0x04, 0x03, 0x02, 0x01, 0x00}
-    useInputReports        bool
-    inputFrames            chan []byte
-    cacheFile              string
-    cachedProfiles         []DeviceProfile
-    softLinkDownCount      int
-    currentHIDPath         string
-    fileMu                 sync.Mutex
-    safeForInput           bool
-    inputDev               *hid.Device
-    inputMu                sync.Mutex
-    recordedUnplug         bool
-    dropConfirmMu          sync.Mutex
-    dropConfirmActive      bool
-    trayMu                 sync.Mutex
-    trayOps                = make(chan func(), 64)
-    iconReap               = make(chan win.HICON, 64)
-    iconCache              = make(map[string]win.HICON)
-    iconCacheMu            sync.Mutex
-    cachedDisconnectedIcon win.HICON
-    cachedIconMu           sync.Mutex
-    readerDone             chan struct{}
-    taskbarCreated         = win.RegisterWindowMessage(syscall.StringToUTF16Ptr("TaskbarCreated"))
-    readingUntil           time.Time
-    readingMu              sync.Mutex
-    lastTrayPing           time.Time
-    lastTrayPong           time.Time
-    lastTrayPongMu         sync.Mutex
-    lastTrayPingMu         sync.Mutex
-    watchdogNoPongCount    int
-    lastDevChangeUnix      int64
-    devChangeScheduledInt  int32
-    forceFreshProbeOnceInt int32
-    lastGoodReadUnix       int64
-    forceLiveUntilInt64    int64
-    forceWorkerMode        bool
+    device                  *hid.Device
+    deviceModel             = "Unknown"
+    hwnd                    win.HWND
+    webviewHwnd             win.HWND
+    nid                     win.NOTIFYICONDATA
+    batteryText             = "Connecting..."
+    batteryLvl              int
+    isCharging              bool
+    wasCharging             bool
+    hasPrevCharging         bool
+    lastChargeTime          = "Never"
+    lastChargeLevel         = 0
+    user32                  = syscall.NewLazyDLL("user32.dll")
+    appendMenuW             = user32.NewProc("AppendMenuW")
+    showWindow              = user32.NewProc("ShowWindow")
+    clients                 = make(map[chan string]bool)
+    clientsMu               sync.RWMutex
+    w                       webview2.WebView
+    serverPort              = "8765"
+    dataDir                 string
+    dataFile                string
+    settingsFile            string
+    logFile                 string
+    logger                  *log.Logger
+    settings                Settings
+    notifiedLow             bool
+    notifiedCritical        bool
+    notifiedFull            bool
+    lastBatteryLevel        = -1
+    lastBatteryTime         time.Time
+    dischargeRate           float64
+    lastChargeLevel2        = -1
+    lastChargeTime2         time.Time
+    lastKnownLevel          = -1
+    lastKnownCharging       bool
+    lastKnownMu             sync.Mutex
+    showLastKnown           bool
+    chargeRate              float64
+    rateHistory             []float64
+    chargeRateHistory       []float64
+    animationFrame          int
+    stopAnimation           chan bool
+    updateAvailable         bool
+    updateVersion           string
+    updateURL               string
+    selectedReportID        byte = 0x00
+    selectedReportLen       int  = 65
+    useGetOnly              bool
+    consecutiveReadFails    int
+    linkDown                bool
+    probeRIDs               = []byte{0x04, 0x03, 0x02, 0x01, 0x00}
+    useInputReports         bool
+    inputFrames             chan []byte
+    cacheFile               string
+    cachedProfiles          []DeviceProfile
+    softLinkDownCount       int
+    currentHIDPath          string
+    fileMu                  sync.Mutex
+    safeForInput            bool
+    inputDev                *hid.Device
+    inputMu                 sync.Mutex
+    recordedUnplug          bool
+    dropConfirmMu           sync.Mutex
+    dropConfirmActive       bool
+    trayMu                  sync.Mutex
+    trayOps                 = make(chan func(), 64)
+    iconReap                = make(chan win.HICON, 64)
+    iconCache               = make(map[string]win.HICON)
+    iconCacheMu             sync.Mutex
+    cachedDisconnectedIcon  win.HICON
+    cachedIconMu            sync.Mutex
+    readerDone              chan struct{}
+    taskbarCreated          = win.RegisterWindowMessage(syscall.StringToUTF16Ptr("TaskbarCreated"))
+    readingUntil            time.Time
+    readingMu               sync.Mutex
+    lastTrayPing            time.Time
+    lastTrayPong            time.Time
+    lastTrayPongMu          sync.Mutex
+    lastTrayPingMu          sync.Mutex
+    watchdogNoPongCount     int
+    lastDevChangeUnix       int64
+    devChangeScheduledInt   int32
+    forceFreshProbeOnceInt  int32
+    lastGoodReadUnix        int64
+    forceLiveUntilInt64     int64
+    forceWorkerMode         bool
+    lastTrayIconBucket      = iconBucketUnset
+    lastTrayIconCharging    = false
+    lastTrayIconDim         = false
+    lastTrayIconShowPercent = false
+    lastTrayIconFrame       = -1
+    lastTrayIconMu          sync.Mutex
 )
 
 func safeDefer(where string) {
@@ -728,8 +735,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                     trayInvoke(func() {
                         batteryLvl = lk
                         isCharging = lkchg
-                        batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
-                        tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                        tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
                         updateTrayTooltip(tooltipText)
                         updateTrayIcon(lk, lkchg, true)
                     })
@@ -768,8 +774,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                 trayInvoke(func() {
                     batteryLvl = lk
                     isCharging = lkchg
-                    batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
-                    tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                    tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
                     updateTrayTooltip(tooltipText)
                     updateTrayIcon(lk, lkchg, true)
                 })
@@ -801,8 +806,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                         trayInvoke(func() {
                             batteryLvl = lk
                             isCharging = lkchg
-                            tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
-                            batteryText = tooltipText
+                            tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
                             updateTrayTooltip(tooltipText)
                             updateTrayIcon(lk, lkchg, true)
                         })
@@ -823,7 +827,6 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                             batteryLvl = 0
                             isCharging = false
                             tooltipText := formatTrayTooltip(-1, false, false, deviceModel)
-                            batteryText = tooltipText
                             updateTrayTooltip(tooltipText)
                             updateTrayIcon(0, false, false)
                         })
@@ -1023,9 +1026,19 @@ func updateBattery() {
 }
 
 func updateTrayTooltip(text string) {
+    text = strings.TrimSpace(text)
     if text == "" {
         text = "Glorious Battery Monitor"
     }
+
+    const maxTooltipChars = 127
+    runes := []rune(text)
+    if len(runes) > maxTooltipChars {
+        runes = runes[:maxTooltipChars]
+        text = string(runes)
+    }
+
+    batteryText = text
 
     tip, _ := syscall.UTF16FromString(text)
 
@@ -1048,8 +1061,8 @@ func updateTrayTooltip(text string) {
     })
 }
 
-func formatTrayTooltip(level int, charging bool, connected bool, model string) string {
-    if !connected {
+func formatTrayTooltip(level int, charging bool, lastKnown bool, model string) string {
+    if lastKnown {
         if level >= 0 {
             return fmt.Sprintf("Last known: %d%%", level)
         }
@@ -1108,8 +1121,22 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     smCxIcon, _, _ := getSystemMetrics.Call(uintptr(11))
     smCyIcon, _, _ := getSystemMetrics.Call(uintptr(12))
 
-    width := int32(smCxIcon) * 2
-    height := int32(smCyIcon) * 2
+    dpiScale := float32(1)
+    if hwnd != 0 {
+        getDpiForWindow := user32.NewProc("GetDpiForWindow")
+        if getDpiForWindow.Find() == nil {
+            if dpi, _, _ := getDpiForWindow.Call(uintptr(hwnd)); dpi != 0 {
+                dpiScale = float32(dpi) / 96.0
+            }
+        }
+    }
+    if dpiScale < 1 {
+        dpiScale = 1
+    }
+
+    scaleFactor := dpiScale * 2
+    width := int32(float32(smCxIcon) * scaleFactor)
+    height := int32(float32(smCyIcon) * scaleFactor)
     if width < 64 {
         width = 64
     }
@@ -1223,7 +1250,7 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     bodyBottom := int32(float32(44) * scale)
     bodyWidth := bodyRight - bodyLeft
     bodyHeight := bodyBottom - bodyTop
-    
+
     if bodyRight <= bodyLeft+4 {
         bodyRight = bodyLeft + 4
     }
@@ -1255,7 +1282,7 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     if dim {
         bgColor = 0xFFD0D0D0
     }
-    
+
     drawRoundedRect := func(left, top, right, bottom, radius int32, color uint32, filled bool) {
         for y := top; y <= bottom; y++ {
             for x := left; x <= right; x++ {
@@ -1442,10 +1469,10 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         }
         centerX := bodyLeft + bodyWidth/2
         centerY := bodyTop + bodyHeight/2
-        
+
         boltColor := uint32(0xFFFFFFFF)
         shadowColor := uint32(0x80000000)
-        
+
         points := []struct{ x, y int32 }{
             {centerX, centerY - boltSize/2},
             {centerX - boltSize/3, centerY - boltSize/6},
@@ -1456,12 +1483,12 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
             {centerX - boltSize/4, centerY + boltSize/6},
             {centerX - boltSize/4, centerY},
         }
-        
+
         for _, p := range points {
             set(p.x+1, p.y+1, shadowColor)
             set(p.x, p.y, boltColor)
         }
-        
+
         for i := 0; i < len(points); i++ {
             p1 := points[i]
             p2 := points[(i+1)%len(points)]
@@ -1598,9 +1625,51 @@ func invalidateIconCache() {
         cachedDisconnectedIcon = 0
     }
     cachedIconMu.Unlock()
+
+    lastTrayIconMu.Lock()
+    lastTrayIconBucket = iconBucketUnset
+    lastTrayIconFrame = -1
+    lastTrayIconMu.Unlock()
 }
 
 func updateTrayIcon(level int, charging bool, dim bool) {
+    showPercent := settings.ShowPercentageOnIcon
+    frame := animationFrame
+    bucket := -1
+    if level >= 0 {
+        if level > 100 {
+            level = 100
+        }
+        if showPercent {
+            bucket = level
+        } else {
+            bucket = level / 5
+        }
+    }
+
+    lastTrayIconMu.Lock()
+    needsRedraw := lastTrayIconDim != dim ||
+        lastTrayIconShowPercent != showPercent ||
+        lastTrayIconCharging != charging ||
+        lastTrayIconBucket != bucket ||
+        (charging && lastTrayIconFrame != frame)
+    if needsRedraw {
+        lastTrayIconDim = dim
+        lastTrayIconShowPercent = showPercent
+        lastTrayIconCharging = charging
+        lastTrayIconBucket = bucket
+        if charging {
+            lastTrayIconFrame = frame
+        } else {
+            lastTrayIconFrame = -1
+        }
+    }
+    lastTrayIconMu.Unlock()
+
+    if !needsRedraw {
+        return
+    }
+
     trayInvoke(func() {
         if dim {
             cachedIconMu.Lock()
@@ -1644,25 +1713,26 @@ func updateTrayIcon(level int, charging bool, dim bool) {
             }
         }
 
-        key := fmt.Sprintf("%03d:%t:%d:%t", level, charging, animationFrame, settings.ShowPercentageOnIcon)
+        cacheKey := fmt.Sprintf("%03d:%t:%d:%t:%t", bucket, charging, frame, showPercent, dim)
         iconCacheMu.Lock()
-        cachedIcon, ok := iconCache[key]
+        cachedIcon, ok := iconCache[cacheKey]
         iconCacheMu.Unlock()
-        var newIcon win.HICON
+        var icon win.HICON
         if ok && cachedIcon != 0 {
-            newIcon = cachedIcon
+            icon = cachedIcon
         } else {
-            newIcon = createBatteryIcon(level, charging, dim, animationFrame)
-            if newIcon == 0 {
+            icon = createBatteryIcon(level, charging, dim, frame)
+            if icon == 0 {
                 return
             }
             iconCacheMu.Lock()
-            iconCache[key] = newIcon
+            iconCache[cacheKey] = icon
             iconCacheMu.Unlock()
         }
+
         trayMu.Lock()
         oldIcon := nid.HIcon
-        nid.HIcon = newIcon
+        nid.HIcon = icon
         nid.UFlags = win.NIF_ICON
         win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
         nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
@@ -1671,7 +1741,7 @@ func updateTrayIcon(level int, charging bool, dim bool) {
         cachedIconMu.Lock()
         cached := cachedDisconnectedIcon
         cachedIconMu.Unlock()
-        if oldIcon != 0 && oldIcon != newIcon && oldIcon != cached {
+        if oldIcon != 0 && oldIcon != icon && oldIcon != cached {
             keepon := false
             iconCacheMu.Lock()
             for _, v := range iconCache {
@@ -1966,8 +2036,8 @@ func quickRefreshOnDeviceChange() {
                             trayInvoke(func() {
                                 batteryLvl = hold
                                 isCharging = holdchg
-                                batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", hold)
-                                updateTrayTooltip(fmt.Sprintf("Last known: %d%%", hold))
+                                tooltipText := formatTrayTooltip(hold, holdchg, true, deviceModel)
+                                updateTrayTooltip(tooltipText)
                                 updateTrayIcon(hold, holdchg, true)
                             })
                             broadcast(map[string]interface{}{
@@ -2006,7 +2076,8 @@ func quickRefreshOnDeviceChange() {
                                             lastKnownLevel = expected
                                             lastKnownCharging = chg
                                             lastKnownMu.Unlock()
-                                            updateTrayTooltip(fmt.Sprintf("Battery: %d%%", expected))
+                                            tooltipText := formatTrayTooltip(expected, chg, false, deviceModel)
+                                            updateTrayTooltip(tooltipText)
                                             updateTrayIcon(expected, chg, false)
                                             if logger != nil {
                                                 logger.Printf("[DEVCHANGE] quick probe on %s confirmed lvl=%d chg=%v", path, expected, chg)
