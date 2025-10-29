@@ -77,6 +77,7 @@ type Settings struct {
     LowBatteryThreshold      int  `json:"lowBatteryThreshold"`
     CriticalBatteryThreshold int  `json:"criticalBatteryThreshold"`
     SafeMode                 bool `json:"safeMode"`
+    ShowPercentageOnIcon     bool `json:"showPercentageOnIcon"`
 }
 
 const currentVersion = "2.4.4"
@@ -183,6 +184,13 @@ func absInt(x int) int {
         return -x
     }
     return x
+}
+
+func minUint32(a, b uint32) uint32 {
+    if a < b {
+        return a
+    }
+    return b
 }
 
 func main() {
@@ -721,7 +729,8 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                         batteryLvl = lk
                         isCharging = lkchg
                         batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
-                        updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+                        tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                        updateTrayTooltip(tooltipText)
                         updateTrayIcon(lk, lkchg, true)
                     })
                     broadcast(map[string]interface{}{
@@ -760,7 +769,8 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                     batteryLvl = lk
                     isCharging = lkchg
                     batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
-                    updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+                    tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                    updateTrayTooltip(tooltipText)
                     updateTrayIcon(lk, lkchg, true)
                 })
                 broadcast(map[string]interface{}{
@@ -791,8 +801,9 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                         trayInvoke(func() {
                             batteryLvl = lk
                             isCharging = lkchg
-                            batteryText = fmt.Sprintf("Last: %d%% (Disconnected)", lk)
-                            updateTrayTooltip(fmt.Sprintf("Last known: %d%%", lk))
+                            tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
+                            batteryText = tooltipText
+                            updateTrayTooltip(tooltipText)
                             updateTrayIcon(lk, lkchg, true)
                         })
                         broadcast(map[string]interface{}{
@@ -811,8 +822,9 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
                         trayInvoke(func() {
                             batteryLvl = 0
                             isCharging = false
-                            batteryText = "Mouse Not Found"
-                            updateTrayTooltip("Mouse Not Found")
+                            tooltipText := formatTrayTooltip(-1, false, false, deviceModel)
+                            batteryText = tooltipText
+                            updateTrayTooltip(tooltipText)
                             updateTrayIcon(0, false, false)
                         })
                         broadcast(map[string]interface{}{
@@ -910,6 +922,12 @@ func showMenu() {
         return
     }
 
+    uxtheme := syscall.NewLazyDLL("uxtheme.dll")
+    setPreferredAppMode := uxtheme.NewProc("SetPreferredAppMode")
+    if setPreferredAppMode.Find() == nil {
+        setPreferredAppMode.Call(1)
+    }
+
     batteryItem, _ := syscall.UTF16PtrFromString(batteryText)
     appendMenuW.Call(uintptr(hMenu), uintptr(win.MF_STRING|win.MF_GRAYED), 0, uintptr(unsafe.Pointer(batteryItem)))
 
@@ -1005,6 +1023,10 @@ func updateBattery() {
 }
 
 func updateTrayTooltip(text string) {
+    if text == "" {
+        text = "Glorious Battery Monitor"
+    }
+
     tip, _ := syscall.UTF16FromString(text)
 
     trayInvoke(func() {
@@ -1024,6 +1046,59 @@ func updateTrayTooltip(text string) {
         win.Shell_NotifyIcon(win.NIM_MODIFY, &nid)
         nid.UFlags = win.NIF_ICON | win.NIF_MESSAGE | win.NIF_TIP
     })
+}
+
+func formatTrayTooltip(level int, charging bool, connected bool, model string) string {
+    if !connected {
+        if level >= 0 {
+            return fmt.Sprintf("Last known: %d%%", level)
+        }
+        return "Mouse Not Found"
+    }
+    if model == "" || model == "Unknown" {
+        model = "Glorious Mouse"
+    }
+    if charging {
+        return fmt.Sprintf("%s — %d%% (Charging)", model, level)
+    }
+    return fmt.Sprintf("%s — %d%%", model, level)
+}
+
+const (
+    digitPatternWidth  = 3
+    digitPatternHeight = 5
+)
+
+var digitPatterns = [10][5]uint8{
+    {0b111, 0b101, 0b101, 0b101, 0b111},
+    {0b010, 0b110, 0b010, 0b010, 0b111},
+    {0b111, 0b001, 0b111, 0b100, 0b111},
+    {0b111, 0b001, 0b111, 0b001, 0b111},
+    {0b101, 0b101, 0b111, 0b001, 0b001},
+    {0b111, 0b100, 0b111, 0b001, 0b111},
+    {0b111, 0b100, 0b111, 0b101, 0b111},
+    {0b111, 0b001, 0b001, 0b001, 0b001},
+    {0b111, 0b101, 0b111, 0b101, 0b111},
+    {0b111, 0b101, 0b111, 0b001, 0b111},
+}
+
+func drawDigitPattern(set func(int32, int32, uint32), digit int, x, y, blockSize int32, color uint32) {
+    if digit < 0 || digit > 9 || blockSize < 1 {
+        return
+    }
+    pattern := digitPatterns[digit]
+    for row := int32(0); row < digitPatternHeight; row++ {
+        bits := pattern[row]
+        for col := int32(0); col < digitPatternWidth; col++ {
+            if (bits>>(digitPatternWidth-1-col))&1 == 1 {
+                for dy := int32(0); dy < blockSize; dy++ {
+                    for dx := int32(0); dx < blockSize; dx++ {
+                        set(x+col*blockSize+dx, y+row*blockSize+dy, color)
+                    }
+                }
+            }
+        }
+    }
 }
 
 func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON {
@@ -1136,23 +1211,24 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     } else {
         fillColor = 0xFFC42B1C
     }
-    black := uint32(0xFF000000)
-    white := uint32(0xFFFFFFFF)
 
     scale := float32(width) / 64.0
     if scale <= 0 {
         scale = 1
     }
 
-    bodyLeft := int32(float32(10) * scale)
+    bodyLeft := int32(float32(6) * scale)
     bodyTop := int32(float32(20) * scale)
-    bodyRight := int32(float32(50) * scale)
+    bodyRight := int32(float32(52) * scale)
     bodyBottom := int32(float32(44) * scale)
-    if bodyRight <= bodyLeft+2 {
-        bodyRight = bodyLeft + 2
+    bodyWidth := bodyRight - bodyLeft
+    bodyHeight := bodyBottom - bodyTop
+    
+    if bodyRight <= bodyLeft+4 {
+        bodyRight = bodyLeft + 4
     }
-    if bodyBottom <= bodyTop+2 {
-        bodyBottom = bodyTop + 2
+    if bodyBottom <= bodyTop+4 {
+        bodyBottom = bodyTop + 4
     }
     if bodyRight >= width {
         bodyRight = width - 1
@@ -1161,37 +1237,129 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         bodyBottom = height - 1
     }
 
-    for y := bodyTop; y <= bodyBottom; y++ {
-        for x := bodyLeft; x <= bodyRight; x++ {
-            if y == bodyTop || y == bodyBottom || x == bodyLeft || x == bodyRight {
-                set(x, y, black)
-            } else {
-                set(x, y, white)
+    cornerRadius := int32(float32(3) * scale)
+    if cornerRadius < 1 {
+        cornerRadius = 1
+    }
+
+    borderWidth := int32(2 * scale)
+    if borderWidth < 2 {
+        borderWidth = 2
+    }
+
+    borderColor := uint32(0xFF2C2C2C)
+    if dim {
+        borderColor = 0xFF707070
+    }
+    bgColor := uint32(0xFFF5F5F5)
+    if dim {
+        bgColor = 0xFFD0D0D0
+    }
+    
+    drawRoundedRect := func(left, top, right, bottom, radius int32, color uint32, filled bool) {
+        for y := top; y <= bottom; y++ {
+            for x := left; x <= right; x++ {
+                if filled {
+                    dx := int32(0)
+                    dy := int32(0)
+                    if x < left+radius && y < top+radius {
+                        dx = left + radius - x
+                        dy = top + radius - y
+                        if dx*dx+dy*dy > radius*radius {
+                            continue
+                        }
+                    } else if x > right-radius && y < top+radius {
+                        dx = x - (right - radius)
+                        dy = top + radius - y
+                        if dx*dx+dy*dy > radius*radius {
+                            continue
+                        }
+                    } else if x < left+radius && y > bottom-radius {
+                        dx = left + radius - x
+                        dy = y - (bottom - radius)
+                        if dx*dx+dy*dy > radius*radius {
+                            continue
+                        }
+                    } else if x > right-radius && y > bottom-radius {
+                        dx = x - (right - radius)
+                        dy = y - (bottom - radius)
+                        if dx*dx+dy*dy > radius*radius {
+                            continue
+                        }
+                    }
+                    set(x, y, color)
+                } else {
+                    isEdge := false
+                    if y == top || y == bottom {
+                        if x >= left+radius && x <= right-radius {
+                            isEdge = true
+                        }
+                    }
+                    if x == left || x == right {
+                        if y >= top+radius && y <= bottom-radius {
+                            isEdge = true
+                        }
+                    }
+                    if x >= left+radius && x <= right-radius && y >= top+radius && y <= bottom-radius {
+                        if (x == left+radius || x == right-radius) && (y == top+radius || y == bottom-radius) {
+                            isEdge = true
+                        }
+                    }
+                    if x < left+radius && y < top+radius {
+                        dx := left + radius - x
+                        dy := top + radius - y
+                        dist := dx*dx + dy*dy
+                        if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
+                            isEdge = true
+                        }
+                    } else if x > right-radius && y < top+radius {
+                        dx := x - (right - radius)
+                        dy := top + radius - y
+                        dist := dx*dx + dy*dy
+                        if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
+                            isEdge = true
+                        }
+                    } else if x < left+radius && y > bottom-radius {
+                        dx := left + radius - x
+                        dy := y - (bottom - radius)
+                        dist := dx*dx + dy*dy
+                        if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
+                            isEdge = true
+                        }
+                    } else if x > right-radius && y > bottom-radius {
+                        dx := x - (right - radius)
+                        dy := y - (bottom - radius)
+                        dist := dx*dx + dy*dy
+                        if dist >= (radius-1)*(radius-1) && dist <= radius*radius {
+                            isEdge = true
+                        }
+                    }
+                    if isEdge {
+                        set(x, y, color)
+                    }
+                }
             }
         }
     }
 
-    tipLeft := bodyRight + 1
-    tipRight := int32(float32(56) * scale)
-    tipTop := int32(float32(27) * scale)
-    tipBottom := int32(float32(37) * scale)
-    if tipRight < tipLeft {
-        tipRight = tipLeft
+    drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, bgColor, true)
+    drawRoundedRect(bodyLeft, bodyTop, bodyRight, bodyBottom, cornerRadius, borderColor, false)
+
+    tipWidth := int32(float32(bodyWidth) * 0.18)
+    if tipWidth < int32(4*scale) {
+        tipWidth = int32(4 * scale)
     }
-    if tipBottom < tipTop {
-        tipBottom = tipTop
+    tipLeft := bodyRight + borderWidth - 1
+    tipRight := tipLeft + tipWidth
+    tipHeight := int32(float32(bodyHeight) * 0.6)
+    tipTop := bodyTop + (bodyHeight-tipHeight)/2
+    tipBottom := tipTop + tipHeight
+    tipRadius := borderWidth / 2
+    if tipRadius < 1 {
+        tipRadius = 1
     }
-    if tipRight >= width {
-        tipRight = width - 1
-    }
-    if tipBottom >= height {
-        tipBottom = height - 1
-    }
-    for y := tipTop; y <= tipBottom; y++ {
-        for x := tipLeft; x <= tipRight; x++ {
-            set(x, y, black)
-        }
-    }
+    drawRoundedRect(tipLeft, tipTop, tipRight, tipBottom, tipRadius, borderColor, true)
+    drawRoundedRect(tipLeft+1, tipTop+1, tipRight-1, tipBottom-1, tipRadius, bgColor, true)
 
     if level > 0 {
         displayLevel := level
@@ -1201,21 +1369,175 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
                 displayLevel = 100
             }
         }
-        maxFillPixels := (bodyRight - (bodyLeft + 1))
-        if maxFillPixels < 0 {
-            maxFillPixels = 0
+        padding := borderWidth + 1
+        fillLeft := bodyLeft + padding
+        fillTop := bodyTop + padding
+        fillRight := bodyRight - padding
+        fillBottom := bodyBottom - padding
+        fillWidth := fillRight - fillLeft
+        if fillWidth < 1 {
+            fillWidth = 1
         }
-        fw := int32(float32(38) * scale * float32(displayLevel) / 100.0)
+        fw := int32(float32(fillWidth) * float32(displayLevel) / 100.0)
         if fw < 0 {
             fw = 0
         }
-        if fw > maxFillPixels {
-            fw = maxFillPixels
+        if fw > fillWidth {
+            fw = fillWidth
         }
-        for y := bodyTop + 1; y < bodyBottom; y++ {
-            for x := bodyLeft + 1; x < bodyLeft+1+fw; x++ {
-                set(x, y, fillColor)
+        if fw > 0 {
+            fillRadius := cornerRadius - padding
+            if fillRadius < 0 {
+                fillRadius = 0
             }
+            for y := fillTop; y <= fillBottom; y++ {
+                progress := float32(y-fillTop) / float32(fillBottom-fillTop)
+                lighten := uint32(20 * (1.0 - progress))
+                r := (fillColor >> 16) & 0xFF
+                g := (fillColor >> 8) & 0xFF
+                b := fillColor & 0xFF
+                r = minUint32(r+lighten, uint32(255))
+                g = minUint32(g+lighten, uint32(255))
+                b = minUint32(b+lighten, uint32(255))
+                gradColor := (fillColor & 0xFF000000) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF)
+                for x := fillLeft; x < fillLeft+fw; x++ {
+                    dx := int32(0)
+                    dy := int32(0)
+                    left, top, right, bottom := fillLeft, fillTop, fillLeft+fw-1, fillBottom
+                    if x < left+fillRadius && y < top+fillRadius {
+                        dx = left + fillRadius - x
+                        dy = top + fillRadius - y
+                        if dx*dx+dy*dy > fillRadius*fillRadius {
+                            continue
+                        }
+                    } else if x > right-fillRadius && y < top+fillRadius {
+                        dx = x - (right - fillRadius)
+                        dy = top + fillRadius - y
+                        if dx*dx+dy*dy > fillRadius*fillRadius {
+                            continue
+                        }
+                    } else if x < left+fillRadius && y > bottom-fillRadius {
+                        dx = left + fillRadius - x
+                        dy = y - (bottom - fillRadius)
+                        if dx*dx+dy*dy > fillRadius*fillRadius {
+                            continue
+                        }
+                    } else if x > right-fillRadius && y > bottom-fillRadius {
+                        dx = x - (right - fillRadius)
+                        dy = y - (bottom - fillRadius)
+                        if dx*dx+dy*dy > fillRadius*fillRadius {
+                            continue
+                        }
+                    }
+                    set(x, y, gradColor)
+                }
+            }
+        }
+    }
+
+    if charging && !dim && !settings.ShowPercentageOnIcon {
+        boltSize := int32(float32(8) * scale)
+        if boltSize < 6 {
+            boltSize = 6
+        }
+        centerX := bodyLeft + bodyWidth/2
+        centerY := bodyTop + bodyHeight/2
+        
+        boltColor := uint32(0xFFFFFFFF)
+        shadowColor := uint32(0x80000000)
+        
+        points := []struct{ x, y int32 }{
+            {centerX, centerY - boltSize/2},
+            {centerX - boltSize/3, centerY - boltSize/6},
+            {centerX + boltSize/4, centerY - boltSize/6},
+            {centerX + boltSize/4, centerY},
+            {centerX, centerY + boltSize/2},
+            {centerX + boltSize/3, centerY + boltSize/6},
+            {centerX - boltSize/4, centerY + boltSize/6},
+            {centerX - boltSize/4, centerY},
+        }
+        
+        for _, p := range points {
+            set(p.x+1, p.y+1, shadowColor)
+            set(p.x, p.y, boltColor)
+        }
+        
+        for i := 0; i < len(points); i++ {
+            p1 := points[i]
+            p2 := points[(i+1)%len(points)]
+            dx := p2.x - p1.x
+            dy := p2.y - p1.y
+            steps := absInt(int(dx))
+            if absInt(int(dy)) > steps {
+                steps = absInt(int(dy))
+            }
+            if steps == 0 {
+                steps = 1
+            }
+            for step := 0; step <= steps; step++ {
+                t := float32(step) / float32(steps)
+                x := p1.x + int32(float32(dx)*t)
+                y := p1.y + int32(float32(dy)*t)
+                set(x+1, y+1, shadowColor)
+                set(x, y, boltColor)
+            }
+        }
+    }
+
+    if settings.ShowPercentageOnIcon && !dim && level >= 0 && level <= 100 {
+        percentText := fmt.Sprintf("%d", level)
+        textPadding := borderWidth * 2
+        innerWidth := bodyWidth - textPadding*2
+        innerHeight := bodyHeight - textPadding*2
+        if innerWidth <= 0 {
+            innerWidth = bodyWidth - 4
+        }
+        if innerHeight <= 0 {
+            innerHeight = bodyHeight - 4
+        }
+
+        unitsWidth := int32(len(percentText))*digitPatternWidth + int32(len(percentText)-1)
+        if unitsWidth <= 0 {
+            unitsWidth = digitPatternWidth
+        }
+
+        block := innerWidth / unitsWidth
+        maxBlockHeight := innerHeight / digitPatternHeight
+        if maxBlockHeight < block {
+            block = maxBlockHeight
+        }
+        if block < 1 {
+            block = 1
+        }
+        if block > 4 {
+            block = 4
+        }
+
+        glyphWidth := digitPatternWidth * block
+        glyphHeight := digitPatternHeight * block
+        spacing := int32(block / 2)
+        totalWidth := int32(len(percentText))*glyphWidth + int32(len(percentText)-1)*spacing
+        startX := bodyLeft + textPadding + (innerWidth-totalWidth)/2
+        startY := bodyTop + textPadding + (innerHeight-glyphHeight)/2
+
+        textColor := uint32(0xFF000000)
+        if level >= 50 {
+            textColor = 0xFFFFFFFF
+        }
+        if level < 20 {
+            textColor = 0xFFFFFFFF
+        }
+        if charging {
+            textColor = 0xFFFFFFFF
+        }
+
+        for i, ch := range percentText {
+            digit := int(ch - '0')
+            if digit < 0 || digit > 9 {
+                continue
+            }
+            offsetX := startX + int32(i)*(glyphWidth+spacing)
+            drawDigitPattern(set, digit, offsetX, startY, block, textColor)
         }
     }
 
@@ -1247,6 +1569,35 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
     win.DeleteObject(win.HGDIOBJ(hMask))
 
     return hIcon
+}
+
+func invalidateIconCache() {
+    trayMu.Lock()
+    current := nid.HIcon
+    trayMu.Unlock()
+
+    iconCacheMu.Lock()
+    for key, icon := range iconCache {
+        if icon == 0 || icon == current {
+            continue
+        }
+        select {
+        case iconReap <- icon:
+        default:
+        }
+        delete(iconCache, key)
+    }
+    iconCacheMu.Unlock()
+
+    cachedIconMu.Lock()
+    if cachedDisconnectedIcon != 0 && cachedDisconnectedIcon != current {
+        select {
+        case iconReap <- cachedDisconnectedIcon:
+        default:
+        }
+        cachedDisconnectedIcon = 0
+    }
+    cachedIconMu.Unlock()
 }
 
 func updateTrayIcon(level int, charging bool, dim bool) {
@@ -1293,7 +1644,7 @@ func updateTrayIcon(level int, charging bool, dim bool) {
             }
         }
 
-        key := fmt.Sprintf("%03d:%t:%d", level, charging, animationFrame)
+        key := fmt.Sprintf("%03d:%t:%d:%t", level, charging, animationFrame, settings.ShowPercentageOnIcon)
         iconCacheMu.Lock()
         cachedIcon, ok := iconCache[key]
         iconCacheMu.Unlock()
@@ -1384,10 +1735,18 @@ func handleSettings(w http.ResponseWriter, r *http.Request) {
             newSettings.RefreshInterval = 5
         }
         prevSafe := settings.SafeMode
+        prevPercentage := settings.ShowPercentageOnIcon
         settings = newSettings
         saveSettings()
         if logger != nil && prevSafe != settings.SafeMode {
             logger.Printf("[SETTINGS] SafeMode toggled to %v via UI", settings.SafeMode)
+        }
+        if prevPercentage != settings.ShowPercentageOnIcon {
+            go func() {
+                invalidateIconCache()
+                dim := showLastKnown
+                updateTrayIcon(batteryLvl, isCharging, dim)
+            }()
         }
         json.NewEncoder(w).Encode(map[string]bool{"success": true})
     }
