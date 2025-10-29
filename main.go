@@ -1511,7 +1511,15 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
         }
     }
 
-    if settings.ShowPercentageOnIcon && !dim && level >= 0 && level <= 100 {
+    showPercentOverlay := settings.ShowPercentageOnIcon
+    if logger != nil && level > 0 {
+        logger.Printf("[ICON] Creating icon level=%d charging=%v dim=%v showPercent=%v", level, charging, dim, showPercentOverlay)
+    }
+    
+    if showPercentOverlay && !dim && level >= 0 && level <= 100 {
+        if logger != nil {
+            logger.Printf("[ICON] Drawing percentage overlay: %d%%", level)
+        }
         percentText := fmt.Sprintf("%d", level)
         textPadding := borderWidth * 2
         innerWidth := bodyWidth - textPadding*2
@@ -1565,6 +1573,9 @@ func createBatteryIcon(level int, charging bool, dim bool, frame int) win.HICON 
             }
             offsetX := startX + int32(i)*(glyphWidth+spacing)
             drawDigitPattern(set, digit, offsetX, startY, block, textColor)
+        }
+        if logger != nil {
+            logger.Printf("[ICON] Percentage overlay drawn successfully")
         }
     }
 
