@@ -1,3 +1,6 @@
+//go:build windows
+// +build windows
+
 package main
 
 import (
@@ -1061,34 +1064,108 @@ func workerPokePath(path string, reportID byte, body []byte) error {
 }
 
 func probeD2W(dev *hid.Device) (int, bool, bool) {
+    if logger != nil {
+        logger.Printf("[WORKER] probeD2W: Starting Model D 2 Wireless probe (read-only)")
+    }
+    
+    // Try Input reports first (read-only approach)
+    buf := make([]byte, 65)
+    
+    // Try to read multiple times to get a battery report
+    for attempt := 0; attempt < 5; attempt++ {
+        n, err := dev.Read(buf)
+        if err == nil && n > 0 {
+            level, charging, valid := parseModelD2WirelessBatteryWorker(buf[:n])
+            if valid {
+                if logger != nil {
+                    logger.Printf("[WORKER] probeD2W: Success via Input reports: level=%d charging=%v", level, charging)
+                }
+                return level, charging, true
+            }
+        }
+        time.Sleep(100 * time.Millisecond)
+    }
+    
+    // Fallback to read-only Feature report (no SendFeatureReport)
     if settings.SafeMode {
         if logger != nil {
-            logger.Printf("[WORKER] probeD2W: SafeMode active, attempting read-only probe")
+            logger.Printf("[WORKER] probeD2W: SafeMode active, using read-only Feature report")
         }
     }
-    buf := make([]byte, 65)
-    buf[0] = 0x04
-    buf[1] = 0x84
-    if _, err := dev.SendFeatureReport(buf); err != nil {
-        if logger != nil {
-            logger.Printf("[WORKER] probeD2W: SendFeatureReport failed: %v", err)
-        }
-        return -1, false, false
-    }
-    time.Sleep(30 * time.Millisecond)
+    
+    buf = make([]byte, 65)
     n, err := dev.GetFeatureReport(buf)
-    if err != nil || n < 9 {
-        if logger != nil && err != nil {
-            logger.Printf("[WORKER] probeD2W: GetFeatureReport failed: %v", err)
-        }
-        return -1, false, false
-    }
-    if buf[1] == 0x84 && buf[2] == 0x14 {
-        level := int(buf[4])
-        charging := buf[5]&0x01 != 0
-        if level <= 100 {
+    if err == nil && n > 0 {
+        level, charging, valid := parseModelD2WirelessBatteryWorker(buf[:n])
+        if valid {
+            if logger != nil {
+                logger.Printf("[WORKER] probeD2W: Success via Feature report: level=%d charging=%v", level, charging)
+            }
             return level, charging, true
         }
+    }
+    
+    if logger != nil {
+        logger.Printf("[WORKER] probeD2W: All methods failed")
+    }
+    return -1, false, false
+}
+
+func parseModelD2WirelessBatteryWorker(data []byte) (int, bool, bool) {
+    if len(data) < 8 {
+        if logger != nil {
+            logger.Printf("[WORKER:D2W] Report too short: %d bytes", len(data))
+        }
+        return -1, false, false
+    }
+    
+    // Log raw data for debugging
+    if logger != nil {
+        logger.Printf("[WORKER:D2W] Raw report: %02x", data[:min(len(data), 16)])
+    }
+    
+    // Try common Model D 2 Wireless report patterns
+    // Pattern 1: Battery at offset 2, charging at offset 3
+    if len(data) >= 4 {
+        level := int(data[2])
+        charging := data[3] == 0x01 || data[3] == 0x02
+        if level >= 0 && level <= 100 {
+            if logger != nil {
+                logger.Printf("[WORKER:D2W] Pattern 1 success: level=%d charging=%v", level, charging)
+            }
+            return level, charging, true
+        }
+    }
+    
+    // Pattern 2: Battery at offset 3, charging flag at offset 4
+    if len(data) >= 5 {
+        level := int(data[3])
+        charging := data[4] == 0x01 || data[4] == 0x02
+        if level >= 0 && level <= 100 {
+            if logger != nil {
+                logger.Printf("[WORKER:D2W] Pattern 2 success: level=%d charging=%v", level, charging)
+            }
+            return level, charging, true
+        }
+    }
+    
+    // Pattern 3: Look for battery percentage in valid range anywhere in report
+    for i := 0; i < len(data)-1; i++ {
+        level := int(data[i])
+        if level >= 0 && level <= 100 {
+            // Check if next byte could be charging flag
+            if i+1 < len(data) {
+                charging := data[i+1] == 0x01 || data[i+1] == 0x02
+                if logger != nil {
+                    logger.Printf("[WORKER:D2W] Pattern 3 success: level=%d at offset %d charging=%v", level, i, charging)
+                }
+                return level, charging, true
+            }
+        }
+    }
+    
+    if logger != nil {
+        logger.Printf("[WORKER:D2W] No valid battery pattern found")
     }
     return -1, false, false
 }
