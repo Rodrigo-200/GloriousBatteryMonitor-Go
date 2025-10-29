@@ -117,6 +117,7 @@ func parseModelD2WirelessBattery(data []byte) (int, bool, bool) {
     return -1, false, false
 }
 
+
 func isModelD2Wireless(info *hid.DeviceInfo) bool {
     return info.VendorID == 0x093A && info.ProductID == 0x824D
 }

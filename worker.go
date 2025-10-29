@@ -1067,7 +1067,6 @@ func probeD2W(dev *hid.Device) (int, bool, bool) {
     
     // Try Input reports first (read-only approach)
     buf := make([]byte, 65)
-    dev.SetNonblocking(true)
     
     // Try to read multiple times to get a battery report
     for attempt := 0; attempt < 5; attempt++ {
