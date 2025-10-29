@@ -302,10 +302,9 @@ func reconnect() {
             lastKnownCharging = charging
             lastKnownMu.Unlock()
 
+            tooltipText := formatTrayTooltip(level, charging, false, deviceModel)
             trayInvoke(func() {
-                tooltipText := formatTrayTooltip(level, charging, true, deviceModel)
-                batteryText = tooltipText
-                updateTrayTooltip(tooltipText)
+                applyTrayTooltip(tooltipText)
                 updateTrayIcon(level, charging, false)
             })
 
@@ -430,9 +429,8 @@ func reconnect() {
                 batteryLvl = lk
                 isCharging = lkchg
                 trayInvoke(func() {
-                    tooltipText := formatTrayTooltip(lk, lkchg, false, deviceModel)
-                    batteryText = tooltipText
-                    updateTrayTooltip(tooltipText)
+                    tooltipText := formatTrayTooltip(lk, lkchg, true, deviceModel)
+                    applyTrayTooltip(tooltipText)
                     updateTrayIcon(lk, lkchg, true)
                 })
                 broadcast(map[string]interface{}{"status": "disconnected", "level": lk, "charging": lkchg, "lastKnown": true})
@@ -441,8 +439,7 @@ func reconnect() {
                 isCharging = false
                 trayInvoke(func() {
                     tooltipText := formatTrayTooltip(-1, false, false, deviceModel)
-                    batteryText = tooltipText
-                    updateTrayTooltip(tooltipText)
+                    applyTrayTooltip(tooltipText)
                     updateTrayIcon(0, false, false)
                 })
                 broadcast(map[string]interface{}{"status": "disconnected", "level": 0, "charging": false, "lastKnown": false})
@@ -464,9 +461,8 @@ func reconnect() {
         lastKnownMu.Unlock()
 
         trayInvoke(func() {
-            tooltipText := formatTrayTooltip(batteryLvl, isCharging, true, deviceModel)
-            batteryText = tooltipText
-            updateTrayTooltip(tooltipText)
+            tooltipText := formatTrayTooltip(batteryLvl, isCharging, false, deviceModel)
+            applyTrayTooltip(tooltipText)
             updateTrayIcon(batteryLvl, isCharging, false)
         })
         broadcast(map[string]interface{}{"status": "connected", "level": batteryLvl, "charging": isCharging, "lastKnown": false})
@@ -578,7 +574,7 @@ func logBlockedWrite(path string, reason string) {
 }
 
 // Stubs
-func tryImmediateWorkerQuickProbe() bool                            { return false }
+func tryImmediateWorkerQuickProbe() bool { return false }
 func findDeviceInfoByPath(path string) *hid.DeviceInfo {
     if path == "" {
         return nil
@@ -642,12 +638,12 @@ func safeDeviceRead(d *hid.Device, buf []byte) (int, error) {
 func safeGetFeatureReport(d *hid.Device, buf []byte) (int, error) {
     return d.GetFeatureReport(buf)
 }
-func quickValidate(d *hid.Device) (int, bool, bool)                 { return -1, false, false }
-func likelyNoMouse(data []byte) bool                                { return false }
-func tryProbeDevice(d *hid.Device) (int, bool, bool, byte)          { return -1, false, false, 0x00 }
-func allProbeRIDsIncorrect(d *hid.Device) bool                      { return false }
-func sendBatteryCommandWithReportID(d *hid.Device, rid byte) error  { return nil }
-func sendBatteryCommand(d *hid.Device) error                        { return nil }
+func quickValidate(d *hid.Device) (int, bool, bool)                { return -1, false, false }
+func likelyNoMouse(data []byte) bool                               { return false }
+func tryProbeDevice(d *hid.Device) (int, bool, bool, byte)         { return -1, false, false, 0x00 }
+func allProbeRIDsIncorrect(d *hid.Device) bool                     { return false }
+func sendBatteryCommandWithReportID(d *hid.Device, rid byte) error { return nil }
+func sendBatteryCommand(d *hid.Device) error                       { return nil }
 func getBatteryFromInputReports(d *hid.Device, rid byte, quick bool) (int, bool, bool) {
     return -1, false, false
 }
