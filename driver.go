@@ -1,8 +1,10 @@
+//go:build windows
+// +build windows
+
 package main
 
 import (
     "fmt"
-    "log"
     "strings"
     "sync"
     "time"
@@ -162,7 +164,6 @@ func findAndConnectMouse() (*MouseDevice, error) {
             
             // Try to read Input reports directly without sending Feature commands
             buf := make([]byte, 65)
-            dev.SetNonblocking(true)
             
             // Try to read multiple times to get a battery report
             for attempt := 0; attempt < 5; attempt++ {
@@ -321,7 +322,6 @@ func (m *MouseDevice) readModelD2WirelessBattery() (int, bool, error) {
     
     // Try Input reports first (read-only approach)
     buf := make([]byte, 65)
-    m.handle.SetNonblocking(true)
     
     // Try to read multiple times to get a battery report
     for attempt := 0; attempt < 3; attempt++ {
