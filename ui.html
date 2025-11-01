@@ -261,7 +261,10 @@
                             <div class="text-xs font-semibold text-fluent-muted dark:text-fluent-dark-muted uppercase tracking-wide">Battery History</div>
                             <div id="historySummary" class="text-sm text-fluent-muted dark:text-fluent-dark-muted mt-1">Waiting for data…</div>
                         </div>
-                        <div class="flex gap-2">
+                        <div class="flex gap-2 flex-wrap">
+                            <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="1h">1h</button>
+                            <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="6h">6h</button>
+                            <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="12h">12h</button>
                             <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="24h">24h</button>
                             <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="72h">72h</button>
                             <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="7d">7d</button>
@@ -425,7 +428,7 @@
         // ======================
         let currentSettings = {};
         let historyState = {
-            range: '72h',
+            range: '24h',
             currentVersion: 0,
             renderedVersion: 0,
             points: [],
@@ -662,6 +665,9 @@
         // History Graph
         // ======================
         const HISTORY_RANGE_LABELS = {
+            '1h': 'Last hour',
+            '6h': 'Last 6 hours',
+            '12h': 'Last 12 hours',
             '24h': 'Last 24 hours',
             '72h': 'Last 72 hours',
             '7d': 'Last 7 days'
@@ -692,8 +698,9 @@
             historyCanvas.addEventListener('mouseleave', hideHistoryTooltip);
             window.addEventListener('resize', () => renderHistory());
             highlightHistoryRange(historyState.range);
+            highlightHistoryRange('24h');
+            fetchHistory('24h', true);
             renderHistory();
-            fetchHistory(historyState.range, true);
         }
 
         function highlightHistoryRange(range) {
@@ -782,7 +789,7 @@
 
             historyCtx.clearRect(0, 0, width, height);
 
-            const padding = { top: 16, right: 24, bottom: 28, left: 28 };
+            const padding = { top: 16, right: 50, bottom: 28, left: 28 };
             const drawWidth = Math.max(10, width - padding.left - padding.right);
             const drawHeight = Math.max(10, height - padding.top - padding.bottom);
 
@@ -883,6 +890,54 @@
             historyCtx.strokeStyle = isDark ? '#60a5fa' : '#2563eb';
             historyCtx.lineWidth = 2;
             historyCtx.stroke();
+
+            const latestPoint = points[points.length - 1];
+            const latestX = xFor(latestPoint.ts);
+            const latestY = yFor(smoothed[smoothed.length - 1]);
+            const latestLevel = Number.isFinite(Number(latestPoint.level)) ? Math.round(Number(latestPoint.level)) : null;
+
+            historyCtx.beginPath();
+            historyCtx.fillStyle = isDark ? '#60a5fa' : '#1d4ed8';
+            historyCtx.arc(latestX, latestY, 4, 0, Math.PI * 2);
+            historyCtx.fill();
+
+            if (latestLevel !== null) {
+                const labelText = `${latestLevel}%`;
+                historyCtx.font = '11px "Segoe UI", system-ui, sans-serif';
+                const textMetrics = historyCtx.measureText(labelText);
+                const labelPadding = 8;
+                const labelWidth = textMetrics.width + labelPadding * 2;
+                const labelHeight = 20;
+                let labelX = latestX + 12;
+                if (labelX + labelWidth > width - padding.right) {
+                    labelX = latestX - labelWidth - 12;
+                }
+                if (labelX < padding.left) {
+                    labelX = padding.left;
+                }
+                let labelY = latestY - labelHeight / 2 - 6;
+                if (labelY < padding.top) {
+                    labelY = padding.top;
+                }
+                if (labelY + labelHeight > height - padding.bottom) {
+                    labelY = height - padding.bottom - labelHeight;
+                }
+
+                historyCtx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.95)';
+                historyCtx.strokeStyle = isDark ? 'rgba(96,165,250,0.45)' : 'rgba(37,99,235,0.35)';
+                historyCtx.lineWidth = 1;
+                historyCtx.beginPath();
+                historyCtx.roundRect(labelX, labelY, labelWidth, labelHeight, 6);
+                historyCtx.fill();
+                historyCtx.stroke();
+
+                historyCtx.fillStyle = isDark ? '#e2e8f0' : '#1e293b';
+                historyCtx.textBaseline = 'middle';
+                historyCtx.textAlign = 'left';
+                const textX = labelX + labelPadding;
+                const textY = labelY + labelHeight / 2;
+                historyCtx.fillText(labelText, textX, textY);
+            }
 
             if (historyState.hoverIndex !== null && points[historyState.hoverIndex]) {
                 const index = historyState.hoverIndex;
