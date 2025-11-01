@@ -28,9 +28,6 @@ func loadChargeData() {
 	if len(cd.Devices) > 0 && batteryEstimator != nil {
 		batteryEstimator.Restore(cd.Devices)
 	}
-	if len(cd.HistorySamples) > 0 || len(cd.HistoryEvents) > 0 {
-		loadHistoryFromChargeData(cd.HistorySamples, cd.HistoryEvents)
-	}
 }
 
 func saveChargeData() {
@@ -38,8 +35,6 @@ func saveChargeData() {
 	if batteryEstimator != nil {
 		snapshot = batteryEstimator.Snapshot()
 	}
-
-	samples, events := getHistorySnapshot()
 
 	cd := ChargeData{
 		LastChargeTime:  lastChargeTime,
@@ -49,8 +44,6 @@ func saveChargeData() {
 		LastLevel:       batteryLvl,
 		LastLevelTime:   time.Now().Format(time.RFC3339),
 		LastCharging:    isCharging,
-		HistorySamples:  samples,
-		HistoryEvents:   events,
 	}
 	data, err := json.MarshalIndent(cd, "", "  ")
 	if err != nil {

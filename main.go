@@ -68,8 +68,6 @@ type ChargeData struct {
 	LastLevelTime       string                          `json:"lastLevelTime,omitempty"`
 	LastCharging        bool                            `json:"lastCharging,omitempty"`
 	Devices             map[string]PersistedDeviceModel `json:"devices,omitempty"`
-	HistorySamples      []HistorySample                 `json:"historySamples,omitempty"`
-	HistoryEvents       []HistoryEvent                  `json:"historyEvents,omitempty"`
 }
 
 type Settings struct {
@@ -440,7 +438,6 @@ func serveHTML(w http.ResponseWriter, r *http.Request) {
 func startWebServer() {
 	http.HandleFunc("/", serveHTML)
 	http.HandleFunc("/api/status", handleStatus)
-	http.HandleFunc("/api/history", handleHistory)
 	http.HandleFunc("/events", handleSSE)
 	http.HandleFunc("/api/settings", handleSettings)
 	http.HandleFunc("/api/update", handleUpdate)
@@ -486,7 +483,6 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 			"deviceModel":     deviceModelName,
 			"updateAvailable": updateAvailable,
 			"updateVersion":   updateVersion,
-			"historyVersion":  getHistoryVersion(),
 		}
 		initState["reading"] = isReading()
 		initState["lastKnown"] = showLK
@@ -539,7 +535,7 @@ func broadcast(data map[string]interface{}) {
 	showLK := showLastKnown
 	lastKnownMu.Unlock()
 
-	out := make(map[string]interface{}, len(data)+3)
+	out := make(map[string]interface{}, len(data)+2)
 	for k, v := range data {
 		out[k] = v
 	}
@@ -549,9 +545,6 @@ func broadcast(data map[string]interface{}) {
 	if _, ok := out["reading"]; !ok {
 		out["reading"] = isReading()
 	}
-
-	updateHistoryFromPayload(out)
-	out["historyVersion"] = getHistoryVersion()
 
 	if logger != nil {
 		logger.Printf("[SSE] broadcast lastKnown=%v reading=%v status=%v level=%v",
@@ -2043,19 +2036,8 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		"updateAvailable": updateAvailable,
 		"updateVersion":   updateVersion,
 		"path":            curPath,
-		"historyVersion":  getHistoryVersion(),
 	}
 	_ = json.NewEncoder(w).Encode(resp)
-}
-
-func handleHistory(w http.ResponseWriter, r *http.Request) {
-	rangeKey := r.URL.Query().Get("range")
-	if rangeKey == "" {
-		rangeKey = "72h"
-	}
-	payload := buildHistoryResponse(rangeKey)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func sanitizeString(s string) string {
