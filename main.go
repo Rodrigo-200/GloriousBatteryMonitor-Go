@@ -59,14 +59,15 @@ const (
 )
 
 type ChargeData struct {
-    LastChargeTime  string  `json:"lastChargeTime"`
-    LastChargeLevel int     `json:"lastChargeLevel"`
-    DischargeRate   float64 `json:"dischargeRate"`
-    ChargeRate      float64 `json:"chargeRate"`
-    Timestamp       string  `json:"timestamp"`
-    LastLevel       int     `json:"lastLevel"`
-    LastLevelTime   string  `json:"lastLevelTime"`
-    LastCharging    bool    `json:"lastCharging"`
+    LastChargeTime      string                          `json:"lastChargeTime"`
+    LastChargeLevel     int                             `json:"lastChargeLevel"`
+    LegacyDischargeRate float64                        `json:"dischargeRate,omitempty"`
+    LegacyChargeRate    float64                        `json:"chargeRate,omitempty"`
+    Timestamp           string                          `json:"timestamp,omitempty"`
+    LastLevel           int                             `json:"lastLevel,omitempty"`
+    LastLevelTime       string                          `json:"lastLevelTime,omitempty"`
+    LastCharging        bool                            `json:"lastCharging,omitempty"`
+    Devices             map[string]PersistedDeviceModel `json:"devices,omitempty"`
 }
 
 type Settings struct {
@@ -145,18 +146,14 @@ var (
     notifiedLow             bool
     notifiedCritical        bool
     notifiedFull            bool
-    lastBatteryLevel        = -1
-    lastBatteryTime         time.Time
-    dischargeRate           float64
-    lastChargeLevel2        = -1
-    lastChargeTime2         time.Time
     lastKnownLevel          = -1
     lastKnownCharging       bool
     lastKnownMu             sync.Mutex
     showLastKnown           bool
-    chargeRate              float64
-    rateHistory             []float64
-    chargeRateHistory       []float64
+    batteryEstimator        = NewBatteryEstimator()
+    currentDeviceKey        DeviceKey
+    etaLastPersist          time.Time
+    etaPersistMu            sync.Mutex
     animationFrame          int
     stopAnimation           chan bool
     updateAvailable         bool
@@ -3018,6 +3015,15 @@ func finishConnect(path string, lvl int, chg bool) {
             lastKnownMu.Unlock()
         }
     }
+    var est BatteryEstimate
+    var etaPayload map[string]interface{}
+    if !preserveLastKnown {
+        est, etaPayload = computeEtaForPath(path, batteryLvl, isCharging, true)
+        if logger != nil && (est.Samples > 0 || est.Paused) {
+            logger.Printf("[ETA] (finishConnect) level=%d charging=%v valid=%v paused=%v hours=%.2f conf=%.2f samples=%d", batteryLvl, isCharging, est.Valid, est.Paused, est.Hours, est.Confidence, est.Samples)
+        }
+    }
+
     displayLevel := batteryLvl
     tooltipText := formatTrayTooltip(displayLevel, isCharging, preserveLastKnown, deviceModel)
     applyTrayTooltip(tooltipText)
@@ -3058,6 +3064,9 @@ func finishConnect(path string, lvl int, chg bool) {
         "updateVersion":   updateVersion,
         "reading":         readingFlag,
     }
+    if etaPayload != nil {
+        bcast["timeRemaining"] = etaPayload
+    }
     if preserveLastKnown {
         bcast["lastKnown"] = true
     }
@@ -3084,10 +3093,18 @@ func finishConnect(path string, lvl int, chg bool) {
                     tooltipText := formatTrayTooltip(wlvl, wchg, false, deviceModel)
                     applyTrayTooltip(tooltipText)
                     updateTrayIcon(wlvl, wchg, false)
+                    est2, eta2 := computeEtaForPath(path, batteryLvl, isCharging, true)
                     if logger != nil {
                         logger.Printf("[CONNECT] worker-confirmed level=%d chg=%v (updated UI)", wlvl, wchg)
+                        if est2.Samples > 0 || est2.Paused {
+                            logger.Printf("[ETA] (worker-confirmed) level=%d charging=%v valid=%v paused=%v hours=%.2f conf=%.2f samples=%d", batteryLvl, isCharging, est2.Valid, est2.Paused, est2.Hours, est2.Confidence, est2.Samples)
+                        }
                     }
-                    broadcast(map[string]interface{}{"status": "connected", "reading": false, "level": batteryLvl, "charging": isCharging})
+                    payload := map[string]interface{}{"status": "connected", "reading": false, "level": batteryLvl, "charging": isCharging}
+                    if eta2 != nil {
+                        payload["timeRemaining"] = eta2
+                    }
+                    broadcast(payload)
                 }
             }
         }

@@ -44,6 +44,158 @@ type MouseDevice struct {
     path       string
     modelName  string
     isWireless bool
+    vendorID   uint16
+    productID  uint16
+    release    uint16
+}
+
+func deviceKeyFromInfo(info *hid.DeviceInfo, isWireless bool) DeviceKey {
+    if info == nil {
+        return DeviceKey{}
+    }
+    return DeviceKey{
+        VendorID:  info.VendorID,
+        ProductID: info.ProductID,
+        Release:   info.ReleaseNbr,
+        Wireless:  isWireless,
+    }
+}
+
+func deviceKeyFromMouse(m *MouseDevice) DeviceKey {
+    if m == nil {
+        return DeviceKey{}
+    }
+    return DeviceKey{
+        VendorID:  m.vendorID,
+        ProductID: m.productID,
+        Release:   m.release,
+        Wireless:  m.isWireless,
+    }
+}
+
+func recordBatteryEstimate(level int, charging bool, mouse *MouseDevice) BatteryEstimate {
+    if batteryEstimator == nil {
+        return BatteryEstimate{}
+    }
+    key := currentDeviceKey
+    if key == (DeviceKey{}) {
+        if mouse != nil {
+            key = deviceKeyFromMouse(mouse)
+            currentDeviceKey = key
+        } else if currentHIDPath != "" {
+            if info := findDeviceInfoByPath(currentHIDPath); info != nil {
+                key = deviceKeyFromInfo(info, isWirelessInterface(info.Path))
+                currentDeviceKey = key
+            }
+        }
+    }
+    if key == (DeviceKey{}) {
+        return BatteryEstimate{}
+    }
+    return batteryEstimator.RecordSample(key, level, charging, time.Now())
+}
+
+func persistEstimator(est BatteryEstimate) {
+    if !est.Valid || est.Samples < 3 {
+        return
+    }
+    etaPersistMu.Lock()
+    if !etaLastPersist.IsZero() && time.Since(etaLastPersist) < 2*time.Minute {
+        etaPersistMu.Unlock()
+        return
+    }
+    etaLastPersist = time.Now()
+    etaPersistMu.Unlock()
+    saveChargeData()
+}
+
+func formatHours(hours float64) string {
+    if hours <= 0 {
+        return ""
+    }
+    totalMinutes := int(hours*60 + 0.5)
+    if totalMinutes <= 0 {
+        return "<1m"
+    }
+    days := totalMinutes / (60 * 24)
+    if days > 0 {
+        remaining := totalMinutes - days*24*60
+        hoursPart := remaining / 60
+        if hoursPart > 0 {
+            return fmt.Sprintf("%dd %dh", days, hoursPart)
+        }
+        return fmt.Sprintf("%dd", days)
+    }
+    hoursPart := totalMinutes / 60
+    minutesPart := totalMinutes % 60
+    if hoursPart > 0 {
+        if minutesPart > 0 {
+            return fmt.Sprintf("%dh %dm", hoursPart, minutesPart)
+        }
+        return fmt.Sprintf("%dh", hoursPart)
+    }
+    return fmt.Sprintf("%dm", minutesPart)
+}
+
+func buildEtaPayload(est BatteryEstimate, level int, charging bool) map[string]interface{} {
+    if est.Samples == 0 && !est.Paused {
+        return nil
+    }
+    payload := map[string]interface{}{
+        "paused":     est.Paused,
+        "confidence": int(est.Confidence*100 + 0.5),
+        "samples":    est.Samples,
+        "phase":      string(est.Phase),
+        "generatedAt": est.GeneratedAt.Format(time.RFC3339),
+        "rate":       est.RawRate,
+        "level":      level,
+        "charging":   charging,
+    }
+    if est.Mode != "" {
+        payload["mode"] = est.Mode
+    }
+    if !est.Paused && est.Valid {
+        valueMinutes := int(est.Hours*60 + 0.5)
+        lowerMinutes := int(est.Lower*60 + 0.5)
+        upperMinutes := int(est.Upper*60 + 0.5)
+        payload["value"] = formatHours(est.Hours)
+        payload["valueMinutes"] = valueMinutes
+        payload["lowerMinutes"] = lowerMinutes
+        payload["upperMinutes"] = upperMinutes
+        payload["lower"] = formatHours(est.Lower)
+        payload["upper"] = formatHours(est.Upper)
+    } else if est.Paused {
+        payload["value"] = "Paused"
+    }
+    return payload
+}
+
+func recordEstimateForPath(path string, level int, charging bool) BatteryEstimate {
+    if batteryEstimator == nil {
+        return BatteryEstimate{}
+    }
+    key := currentDeviceKey
+    if key == (DeviceKey{}) && path != "" {
+        if info := findDeviceInfoByPath(path); info != nil {
+            key = deviceKeyFromInfo(info, isWirelessInterface(info.Path))
+            currentDeviceKey = key
+        }
+    }
+    if key == (DeviceKey{}) {
+        return BatteryEstimate{}
+    }
+    return batteryEstimator.RecordSample(key, level, charging, time.Now())
+}
+
+func computeEtaForPath(path string, level int, charging bool, actual bool) (BatteryEstimate, map[string]interface{}) {
+    if !actual {
+        return BatteryEstimate{}, nil
+    }
+    est := recordEstimateForPath(path, level, charging)
+    if est.Valid {
+        persistEstimator(est)
+    }
+    return est, buildEtaPayload(est, level, charging)
 }
 
 var (
@@ -177,7 +329,11 @@ func findAndConnectMouse() (*MouseDevice, error) {
                             path:       info.Path,
                             modelName:  modelName,
                             isWireless: isWirelessInterface(info.Path),
+                            vendorID:   info.VendorID,
+                            productID:  info.ProductID,
+                            release:    info.ReleaseNbr,
                         }
+                        currentDeviceKey = deviceKeyFromMouse(mouse)
                         if logger != nil {
                             logger.Printf("[D2W] Connected via Input reports: %s (wireless:%v) %d%% charging:%v", mouse.modelName, mouse.isWireless, level, charging)
                         }
@@ -199,7 +355,11 @@ func findAndConnectMouse() (*MouseDevice, error) {
                         path:       info.Path,
                         modelName:  modelName,
                         isWireless: isWirelessInterface(info.Path),
+                        vendorID:   info.VendorID,
+                        productID:  info.ProductID,
+                        release:    info.ReleaseNbr,
                     }
+                    currentDeviceKey = deviceKeyFromMouse(mouse)
                     if logger != nil {
                         logger.Printf("[D2W] Connected via Feature report: %s (wireless:%v) %d%% charging=%v", mouse.modelName, mouse.isWireless, level, charging)
                     }
@@ -250,7 +410,11 @@ func findAndConnectMouse() (*MouseDevice, error) {
                 path:       info.Path,
                 modelName:  modelName,
                 isWireless: isWirelessInterface(info.Path),
+                vendorID:   info.VendorID,
+                productID:  info.ProductID,
+                release:    info.ReleaseNbr,
             }
+            currentDeviceKey = deviceKeyFromMouse(mouse)
             if logger != nil {
                 logger.Printf("[DRIVER] Connected: %s (wireless:%v) %d%% charging:%v", mouse.modelName, mouse.isWireless, level, charging)
             }
@@ -385,63 +549,6 @@ func reconnect() {
                 }
             }
 
-            if charging {
-                if lastChargeLevel2 < 0 {
-                    lastChargeLevel2 = level
-                    lastChargeTime2 = time.Now()
-                    if logger != nil {
-                        logger.Printf("[RATE] Initialized charge tracking: level=%d", level)
-                    }
-                } else if level > lastChargeLevel2 {
-                    if (level - lastChargeLevel2) >= 1 {
-                        elapsed := time.Since(lastChargeTime2).Hours()
-                        if elapsed > 0.01 {
-                            newRate := float64(level-lastChargeLevel2) / elapsed
-                            chargeRateHistory = append(chargeRateHistory, newRate)
-                            if len(chargeRateHistory) > 10 {
-                                chargeRateHistory = chargeRateHistory[1:]
-                            }
-                            chargeRate = calculateEMA(chargeRateHistory)
-                            if logger != nil {
-                                logger.Printf("[RATE] Charge rate updated: delta=%d%%, elapsed=%.2fh, newRate=%.2f%%/h, EMA=%.2f%%/h, samples=%d", level-lastChargeLevel2, elapsed, newRate, chargeRate, len(chargeRateHistory))
-                            }
-                            lastChargeLevel2 = level
-                            lastChargeTime2 = time.Now()
-                            if len(chargeRateHistory) >= 3 {
-                                saveChargeData()
-                            }
-                        }
-                    }
-                }
-            } else {
-                if lastBatteryLevel < 0 {
-                    lastBatteryLevel = level
-                    lastBatteryTime = time.Now()
-                    if logger != nil {
-                        logger.Printf("[RATE] Initialized discharge tracking: level=%d", level)
-                    }
-                } else if lastBatteryLevel > level {
-                    if (lastBatteryLevel - level) >= 1 {
-                        elapsed := time.Since(lastBatteryTime).Hours()
-                        if elapsed > 0.01 {
-                            newRate := float64(lastBatteryLevel-level) / elapsed
-                            rateHistory = append(rateHistory, newRate)
-                            if len(rateHistory) > 10 {
-                                rateHistory = rateHistory[1:]
-                            }
-                            dischargeRate = calculateEMA(rateHistory)
-                            if logger != nil {
-                                logger.Printf("[RATE] Discharge rate updated: delta=%d%%, elapsed=%.2fh, newRate=%.2f%%/h, EMA=%.2f%%/h, samples=%d", lastBatteryLevel-level, elapsed, newRate, dischargeRate, len(rateHistory))
-                            }
-                            lastBatteryLevel = level
-                            lastBatteryTime = time.Now()
-                            if len(rateHistory) >= 3 {
-                                saveChargeData()
-                            }
-                        }
-                    }
-                }
-            }
 
             batteryLvl = level
             isCharging = charging
@@ -461,75 +568,20 @@ func reconnect() {
                 updateTrayIcon(level, charging, false)
             })
 
-            timeRemaining := ""
-            if !charging && dischargeRate > 0.5 && level > 0 {
-                hoursLeft := float64(level) / dischargeRate
-                if logger != nil {
-                    logger.Printf("[TIME] Discharge: level=%d, rate=%.2f, hoursLeft=%.2f", level, dischargeRate, hoursLeft)
-                }
-                if hoursLeft < 100 && hoursLeft > 0 {
-                    hours := int(hoursLeft)
-                    minutes := int((hoursLeft - float64(hours)) * 60)
-                    if hours >= 24 {
-                        days := hours / 24
-                        remainingHours := hours % 24
-                        if remainingHours > 0 {
-                            timeRemaining = fmt.Sprintf("%dd %dh", days, remainingHours)
-                        } else {
-                            timeRemaining = fmt.Sprintf("%dd", days)
-                        }
-                    } else if hours > 0 {
-                        timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
-                    } else if minutes > 0 {
-                        timeRemaining = fmt.Sprintf("%dm", minutes)
-                    }
-                    if logger != nil {
-                        logger.Printf("[TIME] Discharge result: timeRemaining='%s'", timeRemaining)
-                    }
-                }
-            } else if charging && chargeRate > 0.5 && level < 100 {
-                hoursLeft := float64(100-level) / chargeRate
-                if logger != nil {
-                    logger.Printf("[TIME] Charge: level=%d, rate=%.2f, hoursLeft=%.2f", level, chargeRate, hoursLeft)
-                }
-                if hoursLeft < 100 && hoursLeft > 0 {
-                    hours := int(hoursLeft)
-                    minutes := int((hoursLeft - float64(hours)) * 60)
-                    if hours >= 24 {
-                        days := hours / 24
-                        remainingHours := hours % 24
-                        if remainingHours > 0 {
-                            timeRemaining = fmt.Sprintf("%dd %dh", days, remainingHours)
-                        } else {
-                            timeRemaining = fmt.Sprintf("%dd", days)
-                        }
-                    } else if hours > 0 {
-                        timeRemaining = fmt.Sprintf("%dh %dm", hours, minutes)
-                    } else if minutes > 0 {
-                        timeRemaining = fmt.Sprintf("%dm", minutes)
-                    }
-                    if logger != nil {
-                        logger.Printf("[TIME] Charge result: timeRemaining='%s'", timeRemaining)
-                    }
-                }
-            } else {
-                if logger != nil {
-                    logger.Printf("[TIME] No calculation: charging=%v, dischargeRate=%.2f, chargeRate=%.2f, level=%d", charging, dischargeRate, chargeRate, level)
-                }
+            est := recordBatteryEstimate(level, charging, mouse)
+            if est.Valid {
+                persistEstimator(est)
             }
+            if logger != nil && (est.Samples > 0 || est.Paused) {
+                logger.Printf("[ETA] level=%d charging=%v valid=%v paused=%v hours=%.2f conf=%.2f samples=%d", level, charging, est.Valid, est.Paused, est.Hours, est.Confidence, est.Samples)
+            }
+            etaPayload := buildEtaPayload(est, level, charging)
 
             payload := map[string]interface{}{
                 "status": "connected", "level": level, "charging": charging, "lastKnown": false,
             }
-            if timeRemaining != "" {
-                payload["timeRemaining"] = timeRemaining
-                if logger != nil {
-                    logger.Printf("[TIME] Including timeRemaining in broadcast: '%s'", timeRemaining)
-                }
-            } else {
-                if logger != nil {
-                    logger.Printf("[TIME] NOT including timeRemaining in broadcast (empty string)")
-                }
+            if etaPayload != nil {
+                payload["timeRemaining"] = etaPayload
             }
             broadcast(payload)
             return
