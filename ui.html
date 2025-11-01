@@ -254,16 +254,26 @@
                     <div id="timeRemaining" class="text-2xl font-bold text-fluent-text dark:text-fluent-dark-text">--</div>
                 </div>
 
-                <!-- Charge History Sparkline -->
+                <!-- Charge History Graph -->
                 <div id="historyCard" class="bg-fluent-card dark:bg-fluent-dark-card rounded-xl shadow-sm border border-fluent-border dark:border-fluent-dark-border p-4">
-                    <div class="text-xs font-semibold text-fluent-muted dark:text-fluent-dark-muted uppercase tracking-wide mb-3">Battery History</div>
-                    <svg id="sparkline" class="w-full h-16" viewBox="0 0 400 60" preserveAspectRatio="none">
-                        <path id="sparklinePath" class="sparkline-path fill-none stroke-fluent-accent dark:stroke-fluent-dark-accent stroke-2" d=""/>
-                        <path id="sparklineArea" class="sparkline-path fill-fluent-accent/10 dark:fill-fluent-dark-accent/10" d=""/>
-                    </svg>
-                    <div class="flex justify-between mt-2 text-xs text-fluent-muted dark:text-fluent-dark-muted">
-                        <span id="historyRange">No data yet</span>
-                        <span id="historyPoints"></span>
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <div class="text-xs font-semibold text-fluent-muted dark:text-fluent-dark-muted uppercase tracking-wide">Battery History</div>
+                            <div id="historySummary" class="text-sm text-fluent-muted dark:text-fluent-dark-muted mt-1">Waiting for data…</div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="24h">24h</button>
+                            <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="72h">72h</button>
+                            <button class="history-range-btn px-3 py-1.5 text-xs font-semibold rounded-lg border border-fluent-border dark:border-fluent-dark-border text-fluent-muted dark:text-fluent-dark-muted hover:text-fluent-text dark:hover:text-fluent-dark-text hover:bg-fluent-border/30 dark:hover:bg-fluent-dark-border/30 transition focus-ring" data-history-range="7d">7d</button>
+                        </div>
+                    </div>
+                    <div id="historyGraphContainer" class="relative mt-4">
+                        <canvas id="historyCanvas" class="block w-full h-48 rounded-xl bg-fluent-bg dark:bg-fluent-dark-bg"></canvas>
+                        <div id="historyGraphTooltip" class="hidden absolute z-20 px-3 py-2 text-xs font-semibold text-fluent-text dark:text-fluent-dark-text bg-fluent-card dark:bg-fluent-dark-card border border-fluent-border dark:border-fluent-dark-border rounded-lg shadow-lg pointer-events-none"></div>
+                    </div>
+                    <div class="flex justify-between mt-3 text-xs text-fluent-muted dark:text-fluent-dark-muted">
+                        <span id="historyDetail">Waiting for data…</span>
+                        <span id="historyUpdated"></span>
                     </div>
                 </div>
             </div>
@@ -414,7 +424,27 @@
         // State Management
         // ======================
         let currentSettings = {};
-        let batteryHistory = [];
+        let historyState = {
+            range: '72h',
+            currentVersion: 0,
+            renderedVersion: 0,
+            points: [],
+            events: [],
+            from: 0,
+            to: 0,
+            hoverIndex: null,
+            fetching: false,
+            pendingVersion: false,
+        };
+        let historyFetchTimer = null;
+        let historyCanvas = null;
+        let historyCtx = null;
+        let historyTooltip = null;
+        let historySummaryEl = null;
+        let historyDetailEl = null;
+        let historyUpdatedEl = null;
+        let historyRangeButtons = [];
+        let historyContainer = null;
         let lastHidDump = '';
         let lastHidHex = '';
         let lastHidPath = '';
@@ -455,6 +485,7 @@
                 document.body.classList.add('dark');
                 localStorage.setItem('theme', 'dark');
             }
+            renderHistory();
         }
 
         // Listen for system theme changes
@@ -470,6 +501,7 @@
                     document.body.classList.remove('dark');
                 }
             }
+            renderHistory();
         });
 
         // ======================
@@ -627,53 +659,420 @@
         }
 
         // ======================
-        // Sparkline Chart
+        // History Graph
         // ======================
-        function updateSparkline() {
-            if (batteryHistory.length < 2) {
-                document.getElementById('historyRange').textContent = 'No data yet';
-                document.getElementById('historyPoints').textContent = '';
+        const HISTORY_RANGE_LABELS = {
+            '24h': 'Last 24 hours',
+            '72h': 'Last 72 hours',
+            '7d': 'Last 7 days'
+        };
+
+        const HISTORY_EVENT_STYLES = {
+            connect: { light: '#22c55e', dark: '#4ade80', label: 'Connected' },
+            disconnect: { light: '#ef4444', dark: '#f87171', label: 'Disconnected' },
+            notification_low: { light: '#f97316', dark: '#fb923c', label: 'Low battery alert' },
+            notification_critical: { light: '#ef4444', dark: '#f87171', label: 'Critical battery alert' },
+            notification_full: { light: '#60a5fa', dark: '#93c5fd', label: 'Fully charged' },
+            notification: { light: '#f59e0b', dark: '#fbbf24', label: 'Notification' },
+        };
+
+        function initHistory() {
+            historyCanvas = document.getElementById('historyCanvas');
+            if (!historyCanvas) {
                 return;
             }
-            
-            const path = document.getElementById('sparklinePath');
-            const area = document.getElementById('sparklineArea');
-            const width = 400;
-            const height = 60;
-            const padding = 5;
-            
-            const max = Math.max(...batteryHistory, 100);
-            const min = Math.min(...batteryHistory, 0);
-            const range = max - min || 1;
-            
-            let pathData = '';
-            let areaData = '';
-            
-            batteryHistory.forEach((level, i) => {
-                const x = (i / (batteryHistory.length - 1)) * width;
-                const y = height - padding - ((level - min) / range) * (height - padding * 2);
-                
-                if (i === 0) {
-                    pathData = `M ${x} ${y}`;
-                    areaData = `M ${x} ${height - padding} L ${x} ${y}`;
-                } else {
-                    pathData += ` L ${x} ${y}`;
-                    areaData += ` L ${x} ${y}`;
+            historyCtx = historyCanvas.getContext('2d');
+            historyTooltip = document.getElementById('historyGraphTooltip');
+            historySummaryEl = document.getElementById('historySummary');
+            historyDetailEl = document.getElementById('historyDetail');
+            historyUpdatedEl = document.getElementById('historyUpdated');
+            historyContainer = document.getElementById('historyGraphContainer');
+            historyRangeButtons = Array.from(document.querySelectorAll('.history-range-btn'));
+            historyRangeButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const range = btn.dataset.historyRange;
+                    if (!range || range === historyState.range) return;
+                    historyState.range = range;
+                    highlightHistoryRange(range);
+                    fetchHistory(range, true);
+                });
+            });
+            historyCanvas.addEventListener('mousemove', handleHistoryHover);
+            historyCanvas.addEventListener('mouseleave', hideHistoryTooltip);
+            window.addEventListener('resize', () => renderHistory());
+            highlightHistoryRange(historyState.range);
+            renderHistory();
+            fetchHistory(historyState.range, true);
+        }
+
+        function highlightHistoryRange(range) {
+            historyRangeButtons.forEach(btn => {
+                const isActive = btn.dataset.historyRange === range;
+                btn.classList.toggle('bg-fluent-accent', isActive);
+                btn.classList.toggle('dark:bg-fluent-dark-accent', isActive);
+                btn.classList.toggle('text-white', isActive);
+                btn.classList.toggle('border-transparent', isActive);
+                btn.classList.toggle('text-fluent-muted', !isActive);
+                btn.classList.toggle('dark:text-fluent-dark-muted', !isActive);
+                btn.classList.toggle('border-fluent-border', !isActive);
+                btn.classList.toggle('dark:border-fluent-dark-border', !isActive);
+                btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+            });
+        }
+
+        function scheduleHistoryFetch(delay = 240) {
+            if (historyFetchTimer) {
+                clearTimeout(historyFetchTimer);
+            }
+            historyFetchTimer = setTimeout(() => {
+                fetchHistory(historyState.range);
+            }, delay);
+        }
+
+        async function fetchHistory(range = historyState.range, force = false) {
+            if (historyState.fetching && !force) {
+                return;
+            }
+            if (historyFetchTimer) {
+                clearTimeout(historyFetchTimer);
+                historyFetchTimer = null;
+            }
+            historyState.fetching = true;
+            try {
+                const response = await fetch(`/api/history?range=${encodeURIComponent(range)}`);
+                if (!response.ok) {
+                    throw new Error('Failed to load history');
+                }
+                const payload = await response.json();
+                historyState.points = Array.isArray(payload.points) ? payload.points : [];
+                historyState.events = Array.isArray(payload.events) ? payload.events : [];
+                historyState.from = Number(payload.from) || 0;
+                historyState.to = Number(payload.to) || Date.now();
+                historyState.renderedVersion = Number(payload.version) || historyState.renderedVersion;
+                historyState.currentVersion = Math.max(historyState.currentVersion, historyState.renderedVersion);
+                historyState.range = payload.range || range;
+                historyState.hoverIndex = null;
+                if (historyTooltip) {
+                    historyTooltip.classList.add('hidden');
+                }
+                highlightHistoryRange(historyState.range);
+                updateHistorySummary();
+                renderHistory();
+            } catch (err) {
+                if (historyDetailEl) {
+                    historyDetailEl.textContent = 'Unable to load history';
+                }
+                console.error(err);
+            } finally {
+                historyState.fetching = false;
+                if (historyState.pendingVersion) {
+                    historyState.pendingVersion = false;
+                    scheduleHistoryFetch(120);
+                }
+            }
+        }
+
+        function renderHistory() {
+            if (!historyCanvas || !historyCtx) {
+                return;
+            }
+            const isDark = document.body.classList.contains('dark');
+
+            const width = historyCanvas.clientWidth || historyCanvas.offsetWidth || 320;
+            const height = historyCanvas.clientHeight || historyCanvas.offsetHeight || 160;
+            const dpr = window.devicePixelRatio || 1;
+
+            if (historyCanvas.width !== Math.floor(width * dpr) || historyCanvas.height !== Math.floor(height * dpr)) {
+                historyCanvas.width = Math.floor(width * dpr);
+                historyCanvas.height = Math.floor(height * dpr);
+            }
+            historyCtx.setTransform(1, 0, 0, 1, 0, 0);
+            historyCtx.scale(dpr, dpr);
+
+            historyCtx.clearRect(0, 0, width, height);
+
+            const padding = { top: 16, right: 24, bottom: 28, left: 28 };
+            const drawWidth = Math.max(10, width - padding.left - padding.right);
+            const drawHeight = Math.max(10, height - padding.top - padding.bottom);
+
+            historyCtx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.35)' : 'rgba(255, 255, 255, 0.9)';
+            historyCtx.fillRect(0, 0, width, height);
+
+            const points = historyState.points;
+            if (!points || points.length < 2) {
+                historyCtx.fillStyle = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(15,23,42,0.6)';
+                historyCtx.font = '12px "Segoe UI", system-ui, sans-serif';
+                historyCtx.textBaseline = 'middle';
+                historyCtx.fillText('Waiting for more battery data…', padding.left, height / 2);
+                return;
+            }
+
+            const levels = points.map(p => Number(p.level) || 0);
+            let minLevel = Math.min(...levels, 0);
+            let maxLevel = Math.max(...levels, 100);
+
+            if (maxLevel - minLevel < 8) {
+                const center = (maxLevel + minLevel) / 2;
+                minLevel = center - 4;
+                maxLevel = center + 4;
+            }
+            minLevel = Math.max(0, minLevel - 2);
+            maxLevel = Math.min(100, maxLevel + 2);
+            const levelRange = maxLevel - minLevel || 1;
+
+            const minTs = historyState.from || points[0].ts;
+            const maxTs = historyState.to || points[points.length - 1].ts || (minTs + 60_000);
+            const span = Math.max(1, maxTs - minTs);
+
+            const xFor = (ts) => padding.left + ((ts - minTs) / span) * drawWidth;
+            const yFor = (level) => padding.top + (1 - ((level - minLevel) / levelRange)) * drawHeight;
+
+            // Grid lines
+            const gridLevels = [0, 25, 50, 75, 100];
+            historyCtx.strokeStyle = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)';
+            historyCtx.lineWidth = 1;
+            historyCtx.setLineDash([4, 4]);
+            gridLevels.forEach(lvl => {
+                const y = yFor(lvl);
+                historyCtx.beginPath();
+                historyCtx.moveTo(padding.left, y);
+                historyCtx.lineTo(width - padding.right, y);
+                historyCtx.stroke();
+            });
+            historyCtx.setLineDash([]);
+
+            // Charging segments
+            let idx = 0;
+            while (idx < points.length) {
+                if (!points[idx].charging) {
+                    idx++;
+                    continue;
+                }
+                const startTs = points[idx].ts;
+                let endIndex = idx + 1;
+                while (endIndex < points.length && points[endIndex].charging) {
+                    endIndex++;
+                }
+                const endTs = points[Math.min(endIndex, points.length - 1)].ts;
+                const xStart = xFor(startTs);
+                const xEnd = xFor(endTs);
+                historyCtx.fillStyle = isDark ? 'rgba(96,165,250,0.16)' : 'rgba(59,130,246,0.14)';
+                historyCtx.fillRect(xStart, padding.top, Math.max(2, xEnd - xStart), drawHeight);
+                idx = endIndex;
+            }
+
+            const smoothed = points.map((p, i) => {
+                let sum = 0;
+                let count = 0;
+                for (let j = Math.max(0, i - 2); j <= Math.min(points.length - 1, i + 2); j++) {
+                    sum += Number(points[j].level) || 0;
+                    count++;
+                }
+                return count ? sum / count : Number(p.level) || 0;
+            });
+
+            // Area fill
+            historyCtx.beginPath();
+            historyCtx.moveTo(xFor(points[0].ts), yFor(smoothed[0]));
+            for (let i = 1; i < points.length; i++) {
+                historyCtx.lineTo(xFor(points[i].ts), yFor(smoothed[i]));
+            }
+            historyCtx.lineTo(xFor(points[points.length - 1].ts), padding.top + drawHeight);
+            historyCtx.lineTo(xFor(points[0].ts), padding.top + drawHeight);
+            historyCtx.closePath();
+            historyCtx.fillStyle = isDark ? 'rgba(96,165,250,0.12)' : 'rgba(37,99,235,0.14)';
+            historyCtx.fill();
+
+            // Line stroke
+            historyCtx.beginPath();
+            historyCtx.moveTo(xFor(points[0].ts), yFor(smoothed[0]));
+            for (let i = 1; i < points.length; i++) {
+                historyCtx.lineTo(xFor(points[i].ts), yFor(smoothed[i]));
+            }
+            historyCtx.strokeStyle = isDark ? '#60a5fa' : '#2563eb';
+            historyCtx.lineWidth = 2;
+            historyCtx.stroke();
+
+            // Events
+            historyState.events.forEach(evt => {
+                const style = HISTORY_EVENT_STYLES[evt.type] || HISTORY_EVENT_STYLES.notification;
+                const color = isDark ? style.dark : style.light;
+                const level = evt.level >= 0 ? evt.level : minLevel;
+                const x = xFor(evt.ts);
+                const y = yFor(level);
+                historyCtx.beginPath();
+                historyCtx.fillStyle = color;
+                historyCtx.arc(x, y - 6, 4, 0, Math.PI * 2);
+                historyCtx.fill();
+            });
+
+            if (historyState.hoverIndex !== null && points[historyState.hoverIndex]) {
+                const index = historyState.hoverIndex;
+                const x = xFor(points[index].ts);
+                const y = yFor(smoothed[index]);
+                historyCtx.beginPath();
+                historyCtx.fillStyle = isDark ? '#f8fafc' : '#0f172a';
+                historyCtx.arc(x, y, 4.5, 0, Math.PI * 2);
+                historyCtx.fill();
+                historyCtx.beginPath();
+                historyCtx.strokeStyle = isDark ? '#60a5fa' : '#1d4ed8';
+                historyCtx.lineWidth = 2;
+                historyCtx.arc(x, y, 6, 0, Math.PI * 2);
+                historyCtx.stroke();
+            }
+        }
+
+        function handleHistoryHover(event) {
+            if (!historyCanvas || !historyContainer || !historyState.points.length) {
+                return;
+            }
+            const rect = historyCanvas.getBoundingClientRect();
+            const containerRect = historyContainer.getBoundingClientRect();
+            const relativeX = event.clientX - rect.left;
+            const ratio = Math.min(Math.max(relativeX / rect.width, 0), 1);
+            const minTs = historyState.from || 0;
+            const span = Math.max(1, (historyState.to || Date.now()) - minTs);
+            const ts = minTs + ratio * span;
+
+            let nearestIndex = 0;
+            let minDiff = Number.POSITIVE_INFINITY;
+            historyState.points.forEach((point, idx) => {
+                const diff = Math.abs(point.ts - ts);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    nearestIndex = idx;
                 }
             });
-            
-            areaData += ` L ${width} ${height - padding} Z`;
-            
-            path.setAttribute('d', pathData);
-            area.setAttribute('d', areaData);
-            
-            const first = batteryHistory[0];
-            const last = batteryHistory[batteryHistory.length - 1];
-            const diff = last - first;
-            const sign = diff > 0 ? '+' : '';
-            
-            document.getElementById('historyRange').textContent = `${first}% → ${last}% (${sign}${diff}%)`;
-            document.getElementById('historyPoints').textContent = `${batteryHistory.length} readings`;
+            historyState.hoverIndex = nearestIndex;
+            renderHistory();
+
+            const point = historyState.points[nearestIndex];
+            if (!point) {
+                hideHistoryTooltip();
+                return;
+            }
+
+            let nearestEvent = null;
+            let closestPixels = 18;
+            historyState.events.forEach(evt => {
+                const eventRatio = Math.min(Math.max((evt.ts - minTs) / span, 0), 1);
+                const eventX = eventRatio * rect.width;
+                const diffPx = Math.abs(eventX - relativeX);
+                if (diffPx < closestPixels) {
+                    closestPixels = diffPx;
+                    nearestEvent = evt;
+                }
+            });
+
+            const level = Number(point.level) || 0;
+            const rate = Number(point.rate) || 0;
+            const chargingText = point.charging ? 'Charging' : (rate < -0.2 ? 'Discharging' : 'Stable');
+
+            const title = new Date(point.ts).toLocaleString(undefined, {
+                hour12: true,
+                hour: 'numeric',
+                minute: '2-digit',
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric'
+            });
+            let tooltipHtml = `<div class="font-semibold">${title}</div>`;
+            tooltipHtml += `<div class="mt-1 text-sm">Level: ${level.toFixed(1).replace(/\.0$/, '')}%<br>Rate: ${formatRate(rate)}<br>Status: ${chargingText}</div>`;
+            if (nearestEvent) {
+                const style = HISTORY_EVENT_STYLES[nearestEvent.type] || HISTORY_EVENT_STYLES.notification;
+                const color = document.body.classList.contains('dark') ? style.dark : style.light;
+                tooltipHtml += `<div class="mt-2 text-xs" style="color:${color}">${style.label}${nearestEvent.message ? ` · ${nearestEvent.message}` : ''}</div>`;
+            }
+
+            historyTooltip.innerHTML = tooltipHtml;
+            historyTooltip.classList.remove('hidden');
+            const tooltipRect = historyTooltip.getBoundingClientRect();
+            let left = event.clientX - containerRect.left + 12;
+            let top = event.clientY - containerRect.top - tooltipRect.height - 12;
+
+            if (left + tooltipRect.width > containerRect.width) {
+                left = containerRect.width - tooltipRect.width - 12;
+            }
+            if (top < 0) {
+                top = 0;
+            }
+            historyTooltip.style.left = `${left}px`;
+            historyTooltip.style.top = `${top}px`;
+        }
+
+        function hideHistoryTooltip() {
+            historyState.hoverIndex = null;
+            if (historyTooltip) {
+                historyTooltip.classList.add('hidden');
+            }
+            renderHistory();
+        }
+
+        function updateHistorySummary() {
+            if (!historySummaryEl || !historyDetailEl || !historyUpdatedEl) {
+                return;
+            }
+            const label = HISTORY_RANGE_LABELS[historyState.range] || 'History';
+            const count = historyState.points.length;
+            if (!count) {
+                historySummaryEl.textContent = `${label} · collecting data`;
+                historyDetailEl.textContent = 'Waiting for telemetry…';
+                historyUpdatedEl.textContent = '';
+                return;
+            }
+            const startLevel = Number(historyState.points[0].level) || 0;
+            const endLevel = Number(historyState.points[count - 1].level) || 0;
+            const delta = endLevel - startLevel;
+            const deltaText = `${delta >= 0 ? '+' : ''}${delta.toFixed(1).replace(/\.0$/, '')}%`;
+            historySummaryEl.textContent = `${label} · ${count} sample${count === 1 ? '' : 's'}`;
+            historyDetailEl.textContent = `${Math.round(startLevel)}% → ${Math.round(endLevel)}% (${deltaText})`;
+            const relative = formatRelativeTime(historyState.to);
+            historyUpdatedEl.textContent = relative ? `Updated ${relative}` : '';
+        }
+
+        function formatRate(value) {
+            if (!Number.isFinite(value) || Math.abs(value) < 0.05) {
+                return '±0%/h';
+            }
+            const rounded = value.toFixed(1);
+            return `${value > 0 ? '+' : ''}${rounded}%/h`;
+        }
+
+        function formatRelativeTime(ts) {
+            const timestamp = Number(ts);
+            if (!timestamp) {
+                return '';
+            }
+            const delta = Date.now() - timestamp;
+            if (delta < 60_000) {
+                return 'just now';
+            }
+            if (delta < 3_600_000) {
+                const mins = Math.round(delta / 60_000);
+                return `${mins} min ago`;
+            }
+            if (delta < 86_400_000) {
+                const hrs = Math.round(delta / 3_600_000);
+                return `${hrs} hr${hrs === 1 ? '' : 's'} ago`;
+            }
+            const date = new Date(timestamp);
+            return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        }
+
+        function handleHistoryVersion(version) {
+            if (!Number.isFinite(version) || version <= 0) {
+                return;
+            }
+            if (version > historyState.currentVersion) {
+                historyState.currentVersion = version;
+            }
+            if (historyState.fetching) {
+                historyState.pendingVersion = true;
+                return;
+            }
+            if (historyState.renderedVersion === 0 || version > historyState.renderedVersion) {
+                scheduleHistoryFetch();
+            }
         }
 
         // ======================
@@ -703,6 +1102,10 @@
                 if (age < 6000) {
                     return;
                 }
+            }
+            
+            if (data && typeof data.historyVersion === 'number') {
+                handleHistoryVersion(Number(data.historyVersion));
             }
             
             const batteryLevel = document.getElementById('batteryLevel');
@@ -772,13 +1175,6 @@
             if (level > 0) lastPositiveUpdate = Date.now();
             
             setBatteryLevel(level, data.charging);
-            
-            // Add to history
-            if (batteryHistory.length === 0 || batteryHistory[batteryHistory.length - 1] !== level) {
-                batteryHistory.push(level);
-                if (batteryHistory.length > 20) batteryHistory.shift();
-                updateSparkline();
-            }
             
             // Update charge info
             if (data.lastChargeTime && data.lastChargeTime !== 'Never') {
@@ -1208,6 +1604,7 @@
         // Initialize
         // ======================
         initTheme();
+        initHistory();
         
         // Initialize battery ring
         const ring = document.getElementById('batteryRing');

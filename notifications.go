@@ -164,6 +164,18 @@ func checkAndNotifyBatteryThresholds(key DeviceKey, level int, charging bool) {
 	// Send notification if needed
 	if shouldNotify {
 		go sendNotification(notifTitle, notifMessage, isCritical)
+
+		eventType := "notification"
+		switch currentState {
+		case NotifStateCritical:
+			eventType = "notification_critical"
+		case NotifStateLow:
+			eventType = "notification_low"
+		case NotifStateFull:
+			eventType = "notification_full"
+		}
+		recordHistoryEvent(eventType, level, charging, notifTitle)
+
 		state.lastNotifiedTime = now
 		state.lastNotifiedLevel = level
 		state.state = currentState
