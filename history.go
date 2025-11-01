@@ -305,6 +305,12 @@ func buildHistoryResponse(rangeKey string) HistoryResponse {
 
 func parseHistoryRange(rangeKey string) time.Duration {
 	switch rangeKey {
+	case "1h":
+		return time.Hour
+	case "6h":
+		return 6 * time.Hour
+	case "12h":
+		return 12 * time.Hour
 	case "24h":
 		return 24 * time.Hour
 	case "72h", "3d":
