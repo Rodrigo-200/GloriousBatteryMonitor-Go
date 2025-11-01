@@ -125,9 +125,22 @@ func loadHistoryFromChargeData(samples []HistorySample, events []HistoryEvent) {
 	lastHistoryStatus = ""
 	atomic.StoreUint64(&historyVersion, uint64(len(historySamples)))
 
+	if len(historySamples) > 0 {
+		last := historySamples[len(historySamples)-1]
+		idleDetectedMu.Lock()
+		lastRecordedLevel = last.Level
+		lastRecordedCharging = last.Charging
+		lastRecordedTime = time.Now()
+		consecutiveZeros = 0
+		lastIdleTrigger = time.Time{}
+		idleDetectedMu.Unlock()
+	}
+
 	if logger != nil {
 		logger.Printf("[HISTORY] loaded %d samples and %d events from storage", len(historySamples), len(historyEvents))
 	}
+
+	noteHistoryActivity()
 }
 
 func recordHistorySample(level int, charging bool) {
@@ -138,6 +151,7 @@ func recordHistorySample(level int, charging bool) {
 		level = 100
 	}
 	now := time.Now()
+	noteHistoryActivity()
 
 	historyMu.Lock()
 	var rate float64
@@ -182,6 +196,8 @@ func recordHistoryEvent(eventType string, level int, charging bool, message stri
 		return
 	}
 	now := time.Now()
+	noteHistoryActivity()
+
 	evt := HistoryEvent{
 		Timestamp: now,
 		Type:      eventType,
@@ -197,6 +213,10 @@ func recordHistoryEvent(eventType string, level int, charging bool, message stri
 
 	atomic.AddUint64(&historyVersion, 1)
 	scheduleHistoryPersist()
+
+	if eventType == "idle_detected" || eventType == "idle_timeout" {
+		go saveChargeData()
+	}
 }
 
 func scheduleHistoryPersist() {
@@ -481,14 +501,16 @@ func updateHistoryFromPayload(payload map[string]interface{}) {
 	if payload == nil {
 		return
 	}
+	noteHistoryActivity()
 	level, haveLevel := extractLevel(payload["level"])
 	charging := extractBool(payload["charging"])
 	status, _ := payload["status"].(string)
 	lastKnown := extractBool(payload["lastKnown"])
+	reading := extractBool(payload["reading"])
 
-	if haveLevel && level >= 0 && level <= 100 {
+	if haveLevel && level >= 0 && level <= 100 && !reading {
 		if status == "" || status == "connected" || (status == "disconnected" && lastKnown) {
-			recordHistorySample(level, charging)
+			detectAndRecordIdleState(level, charging, status)
 		}
 	}
 
@@ -499,6 +521,118 @@ func updateHistoryFromPayload(payload map[string]interface{}) {
 		}
 		markStatusTransition(status, levelForEvent, charging)
 	}
+}
+
+var (
+	lastRecordedLevel    int
+	lastRecordedTime     time.Time
+	lastRecordedCharging bool
+	consecutiveZeros     int
+	lastIdleTrigger      time.Time
+	idleDetectedMu       sync.Mutex
+
+	historyInactivityMu        sync.Mutex
+	lastHistoryActivity        time.Time
+	startInactivityMonitorOnce sync.Once
+)
+
+func detectAndRecordIdleState(level int, charging bool, status string) {
+	now := time.Now()
+	noteHistoryActivity()
+
+	var triggerIdle bool
+	var idleLevel int
+	var idleCharging bool
+
+	idleDetectedMu.Lock()
+	if level == 0 && lastRecordedLevel > 0 && status == "connected" {
+		consecutiveZeros++
+		if consecutiveZeros >= 2 {
+			if !lastRecordedTime.IsZero() && now.Sub(lastRecordedTime) < 30*time.Second && time.Since(lastIdleTrigger) > 30*time.Second {
+				triggerIdle = true
+				idleLevel = lastRecordedLevel
+				idleCharging = lastRecordedCharging
+				lastIdleTrigger = now
+				consecutiveZeros = 0
+			}
+		}
+	} else {
+		consecutiveZeros = 0
+	}
+
+	shouldRecordSample := level >= 0 && (level > 0 || status == "connected")
+	if shouldRecordSample {
+		lastRecordedLevel = level
+		lastRecordedTime = now
+		lastRecordedCharging = charging
+	}
+	idleDetectedMu.Unlock()
+
+	if triggerIdle {
+		recordHistoryEvent("idle_detected", idleLevel, idleCharging, "Mouse entered idle/sleep mode")
+		if logger != nil {
+			logger.Printf("[HISTORY] detected mouse idle: level dropped from %d to 0", idleLevel)
+		}
+	}
+
+	if shouldRecordSample {
+		recordHistorySample(level, charging)
+	}
+}
+
+func noteHistoryActivity() {
+	startHistoryInactivityMonitor()
+	historyInactivityMu.Lock()
+	lastHistoryActivity = time.Now()
+	historyInactivityMu.Unlock()
+}
+
+func startHistoryInactivityMonitor() {
+	startInactivityMonitorOnce.Do(func() {
+		historyInactivityMu.Lock()
+		lastHistoryActivity = time.Now()
+		historyInactivityMu.Unlock()
+
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				historyInactivityMu.Lock()
+				last := lastHistoryActivity
+				historyInactivityMu.Unlock()
+
+				if time.Since(last) < 2*time.Minute {
+					continue
+				}
+
+				historyMu.RLock()
+				status := lastHistoryStatus
+				historyMu.RUnlock()
+
+				idleDetectedMu.Lock()
+				lastLevel := lastRecordedLevel
+				lastChg := lastRecordedCharging
+				lastIdle := lastIdleTrigger
+				idleDetectedMu.Unlock()
+
+				if status != "connected" || lastLevel <= 0 {
+					continue
+				}
+				if time.Since(lastIdle) < 2*time.Minute {
+					continue
+				}
+
+				idleDetectedMu.Lock()
+				lastIdleTrigger = time.Now()
+				idleDetectedMu.Unlock()
+
+				recordHistoryEvent("idle_timeout", lastLevel, lastChg, "No telemetry for 2 minutes")
+				if logger != nil {
+					logger.Printf("[HISTORY] inactivity monitor recorded idle timeout event")
+				}
+			}
+		}()
+	})
 }
 
 func extractLevel(value interface{}) (int, bool) {
