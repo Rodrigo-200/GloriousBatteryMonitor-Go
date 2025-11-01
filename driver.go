@@ -566,6 +566,18 @@ func reconnect() {
 				updateTrayIcon(level, charging, false)
 			})
 
+			// Check battery thresholds and send notifications if needed
+			key := currentDeviceKey
+			if key == (DeviceKey{}) && mouse != nil {
+				key = deviceKeyFromMouse(mouse)
+				if key != (DeviceKey{}) {
+					currentDeviceKey = key
+				}
+			}
+			if key != (DeviceKey{}) {
+				checkAndNotifyBatteryThresholds(key, level, charging)
+			}
+
 			est := recordBatteryEstimate(level, charging, mouse)
 			if est.Valid {
 				persistEstimator(est)
@@ -576,13 +588,16 @@ func reconnect() {
 			etaPayload := buildEtaPayload(est, level, charging)
 
 			payload := map[string]interface{}{
-				"status": "connected", "level": level, "charging": charging, "lastKnown": false,
+				"status":    "connected",
+				"level":     level,
+				"charging":  charging,
+				"lastKnown": false,
 			}
 			if etaPayload != nil {
 				payload["timeRemaining"] = etaPayload
 			}
 			broadcast(payload)
-			return
+
 		}
 
 		failCount++
@@ -668,6 +683,18 @@ func reconnect() {
 			applyTrayTooltip(tooltipText)
 			updateTrayIcon(batteryLvl, isCharging, false)
 		})
+
+		key := currentDeviceKey
+		if key == (DeviceKey{}) {
+			key = deviceKeyFromMouse(newMouse)
+			if key != (DeviceKey{}) {
+				currentDeviceKey = key
+			}
+		}
+		if key != (DeviceKey{}) {
+			checkAndNotifyBatteryThresholds(key, level, charging)
+		}
+
 		broadcast(map[string]interface{}{"status": "connected", "level": batteryLvl, "charging": isCharging, "lastKnown": false})
 	}
 }
