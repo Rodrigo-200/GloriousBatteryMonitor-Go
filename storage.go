@@ -15,37 +15,31 @@ func loadChargeData() {
         return
     }
     var cd ChargeData
-    if err := json.Unmarshal(data, &cd); err == nil {
+    if err := json.Unmarshal(data, &cd); err != nil {
+        return
+    }
+
+    if cd.LastChargeTime != "" {
         lastChargeTime = cd.LastChargeTime
+    }
+    if cd.LastChargeLevel > 0 {
         lastChargeLevel = cd.LastChargeLevel
-        if cd.Timestamp != "" {
-            if savedTime, err := time.Parse(time.RFC3339, cd.Timestamp); err == nil {
-                if time.Since(savedTime) < 7*24*time.Hour {
-                    dischargeRate = cd.DischargeRate
-                    chargeRate = cd.ChargeRate
-                    if cd.LastLevelTime != "" {
-                        if lastTime, err := time.Parse(time.RFC3339, cd.LastLevelTime); err == nil {
-                            if cd.LastCharging {
-                                lastChargeLevel2 = cd.LastLevel
-                                lastChargeTime2 = lastTime
-                            } else {
-                                lastBatteryLevel = cd.LastLevel
-                                lastBatteryTime = lastTime
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    }
+    if len(cd.Devices) > 0 && batteryEstimator != nil {
+        batteryEstimator.Restore(cd.Devices)
     }
 }
 
 func saveChargeData() {
+    snapshot := make(map[string]PersistedDeviceModel)
+    if batteryEstimator != nil {
+        snapshot = batteryEstimator.Snapshot()
+    }
+
     cd := ChargeData{
         LastChargeTime:  lastChargeTime,
         LastChargeLevel: lastChargeLevel,
-        DischargeRate:   dischargeRate,
-        ChargeRate:      chargeRate,
+        Devices:         snapshot,
         Timestamp:       time.Now().Format(time.RFC3339),
         LastLevel:       batteryLvl,
         LastLevelTime:   time.Now().Format(time.RFC3339),
