@@ -53,11 +53,14 @@ type HistoryResponse struct {
 }
 
 var (
-	historyMu         sync.RWMutex
-	historySamples    []HistorySample
-	historyEvents     []HistoryEvent
-	historyVersion    uint64
-	lastHistoryStatus string
+	historyMu             sync.RWMutex
+	historySamples        []HistorySample
+	historyEvents         []HistoryEvent
+	historyVersion        uint64
+	lastHistoryStatus     string
+	historyPersistMu      sync.Mutex
+	historyLastPersist    time.Time
+	historyPersistPending bool
 )
 
 const (
@@ -68,6 +71,7 @@ const (
 	maxHistoryEvents        = 256
 	historyDefaultMaxPoints = 480
 	maxRateMagnitude        = 50.0
+	historyPersistInterval  = 45 * time.Second
 )
 
 func loadHistoryFromChargeData(samples []HistorySample, events []HistoryEvent) {
@@ -148,6 +152,9 @@ func recordHistorySample(level int, charging bool) {
 			last.Rate = clampRate(rate)
 			historySamples[len(historySamples)-1] = last
 			historyMu.Unlock()
+
+			atomic.AddUint64(&historyVersion, 1)
+			scheduleHistoryPersist()
 			return
 		}
 	}
@@ -163,6 +170,7 @@ func recordHistorySample(level int, charging bool) {
 	historyMu.Unlock()
 
 	atomic.AddUint64(&historyVersion, 1)
+	scheduleHistoryPersist()
 }
 
 func recordHistoryEvent(eventType string, level int, charging bool, message string) {
@@ -184,6 +192,38 @@ func recordHistoryEvent(eventType string, level int, charging bool, message stri
 	historyMu.Unlock()
 
 	atomic.AddUint64(&historyVersion, 1)
+	scheduleHistoryPersist()
+}
+
+func scheduleHistoryPersist() {
+	historyPersistMu.Lock()
+	now := time.Now()
+	since := now.Sub(historyLastPersist)
+	if since >= historyPersistInterval {
+		historyLastPersist = now
+		historyPersistMu.Unlock()
+		go saveChargeData()
+		return
+	}
+	if historyPersistPending {
+		historyPersistMu.Unlock()
+		return
+	}
+
+	delay := historyPersistInterval - since
+	if delay < 2*time.Second {
+		delay = 2 * time.Second
+	}
+	historyPersistPending = true
+	historyPersistMu.Unlock()
+
+	time.AfterFunc(delay, func() {
+		historyPersistMu.Lock()
+		historyLastPersist = time.Now()
+		historyPersistPending = false
+		historyPersistMu.Unlock()
+		saveChargeData()
+	})
 }
 
 func markStatusTransition(status string, level int, charging bool) {

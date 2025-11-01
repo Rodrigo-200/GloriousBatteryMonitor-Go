@@ -964,24 +964,51 @@
                 }
             });
 
-            const level = Number(point.level) || 0;
+            const levelValue = Number(point.level);
+            const level = Number.isFinite(levelValue) ? levelValue : 0;
             const rate = Number(point.rate) || 0;
-            const chargingText = point.charging ? 'Charging' : (rate < -0.2 ? 'Discharging' : 'Stable');
 
-            const title = new Date(point.ts).toLocaleString(undefined, {
-                hour12: true,
-                hour: 'numeric',
-                minute: '2-digit',
-                weekday: 'short',
-                month: 'short',
-                day: 'numeric'
-            });
-            let tooltipHtml = `<div class="font-semibold">${title}</div>`;
-            tooltipHtml += `<div class="mt-1 text-sm">Level: ${level.toFixed(1).replace(/\.0$/, '')}%<br>Rate: ${formatRate(rate)}<br>Status: ${chargingText}</div>`;
+            let statusLabel = 'Idle';
+            if (point.charging) {
+                statusLabel = 'Charging';
+            } else if (rate <= -0.2) {
+                statusLabel = 'Discharging';
+            }
+
+            let prevPoint = null;
+            for (let i = nearestIndex - 1; i >= 0; i--) {
+                if (historyState.points[i].ts < point.ts) {
+                    prevPoint = historyState.points[i];
+                    break;
+                }
+            }
+
+            const timestamp = new Date(point.ts);
+            const dateLabel = timestamp.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+            const timeLabel = timestamp.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
+            const levelDisplay = Number.isFinite(levelValue) ? level.toFixed(1).replace(/\.0$/, '') : '--';
+
+            let changeLine = '';
+            if (prevPoint && prevPoint.ts < point.ts) {
+                const prevLevel = Number(prevPoint.level) || 0;
+                const diff = level - prevLevel;
+                const diffText = `${diff >= 0 ? '+' : ''}${diff.toFixed(1).replace(/\.0$/, '')}%`;
+                const deltaMs = point.ts - prevPoint.ts;
+                const durationText = deltaMs > 0 ? formatDuration(deltaMs) : '';
+                changeLine = `Change since last sample: ${diffText}${durationText ? ` over ${durationText}` : ''}`;
+            }
+
+            let tooltipHtml = `<div class="text-sm font-semibold">${levelDisplay}% · ${statusLabel}</div>`;
+            tooltipHtml += `<div class="text-xs opacity-80">${dateLabel} · ${timeLabel}</div>`;
+            tooltipHtml += `<div class="mt-2 text-xs">Trend per hour: ${formatRate(rate)}</div>`;
+            if (changeLine) {
+                tooltipHtml += `<div class="text-xs opacity-80 mt-1">${changeLine}</div>`;
+            }
             if (nearestEvent) {
                 const style = HISTORY_EVENT_STYLES[nearestEvent.type] || HISTORY_EVENT_STYLES.notification;
                 const color = document.body.classList.contains('dark') ? style.dark : style.light;
-                tooltipHtml += `<div class="mt-2 text-xs" style="color:${color}">${style.label}${nearestEvent.message ? ` · ${nearestEvent.message}` : ''}</div>`;
+                tooltipHtml += `<div class="mt-2 text-xs" style="color:${color}">Event: ${style.label}${nearestEvent.message ? ` · ${nearestEvent.message}` : ''}</div>`;
             }
 
             historyTooltip.innerHTML = tooltipHtml;
@@ -1036,6 +1063,36 @@
             }
             const rounded = value.toFixed(1);
             return `${value > 0 ? '+' : ''}${rounded}%/h`;
+        }
+
+        function formatDuration(ms) {
+            if (!Number.isFinite(ms) || ms <= 0) {
+                return 'under a minute';
+            }
+            const totalMinutes = Math.round(ms / 60000);
+            if (totalMinutes <= 0) {
+                return 'under a minute';
+            }
+            if (totalMinutes === 1) {
+                return '1 min';
+            }
+            if (totalMinutes < 60) {
+                return `${totalMinutes} min`;
+            }
+            const totalHours = Math.floor(totalMinutes / 60);
+            const remainingMinutes = totalMinutes % 60;
+            if (totalHours < 24) {
+                if (remainingMinutes === 0) {
+                    return `${totalHours} hr${totalHours === 1 ? '' : 's'}`;
+                }
+                return `${totalHours} hr ${remainingMinutes} min`;
+            }
+            const totalDays = Math.floor(totalHours / 24);
+            const remainingHours = totalHours % 24;
+            if (remainingHours === 0) {
+                return `${totalDays} day${totalDays === 1 ? '' : 's'}`;
+            }
+            return `${totalDays}d ${remainingHours}h`;
         }
 
         function formatRelativeTime(ts) {
