@@ -445,6 +445,7 @@ func startWebServer() {
 	http.HandleFunc("/api/resize", handleResize)
 	http.HandleFunc("/api/scan-hid", handleScanHID)
 	http.HandleFunc("/api/diagnostics", handleDiagnostics)
+	http.HandleFunc("/api/test-notifications", handleTestNotifications)
 
 	addr := ":" + serverPort
 	if logger != nil {
@@ -1877,8 +1878,21 @@ func handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		prevSafe := settings.SafeMode
 		prevPercentage := settings.ShowPercentageOnIcon
+		prevNotifEnabled := settings.NotificationsEnabled
+		prevLowThreshold := settings.LowBatteryThreshold
+		prevCriticalThreshold := settings.CriticalBatteryThreshold
 		settings = newSettings
 		saveSettings()
+
+		// Clear notification state when thresholds change or notifications are toggled
+		if prevNotifEnabled != settings.NotificationsEnabled ||
+			prevLowThreshold != settings.LowBatteryThreshold ||
+			prevCriticalThreshold != settings.CriticalBatteryThreshold {
+			clearAllNotificationStates()
+			if logger != nil {
+				logger.Printf("[SETTINGS] Notification settings changed - cleared all notification states")
+			}
+		}
 		if logger != nil && prevSafe != settings.SafeMode {
 			logger.Printf("[SETTINGS] SafeMode toggled to %v via UI", settings.SafeMode)
 		}
@@ -1977,6 +1991,18 @@ func handleScanHID(w http.ResponseWriter, r *http.Request) {
 	if logger != nil {
 		logger.Printf("[HTTP] HID scan completed: %d total devices, %d Glorious devices", result.TotalCount, result.GloriousCount)
 	}
+}
+
+func handleTestNotifications(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	testNotifications()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "triggered"})
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -3029,6 +3055,22 @@ func finishConnect(path string, lvl int, chg bool) {
 	tooltipText := formatTrayTooltip(displayLevel, isCharging, preserveLastKnown)
 	applyTrayTooltip(tooltipText)
 	updateTrayIcon(displayLevel, isCharging, preserveLastKnown)
+
+	// Check battery thresholds and send notifications if needed
+	if !preserveLastKnown && batteryLvl >= 0 && batteryLvl <= 100 {
+		key := currentDeviceKey
+		if key == (DeviceKey{}) && path != "" {
+			if info := findDeviceInfoByPath(path); info != nil {
+				key = deviceKeyFromInfo(info, isWirelessInterface(info.Path))
+				if key != (DeviceKey{}) {
+					currentDeviceKey = key
+				}
+			}
+		}
+		if key != (DeviceKey{}) {
+			checkAndNotifyBatteryThresholds(key, batteryLvl, isCharging)
+		}
+	}
 
 	if logger != nil {
 		logger.Printf("[CONNECT] finishConnect path=%s lvl=%d chg=%v", path, lvl, chg)
