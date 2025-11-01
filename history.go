@@ -124,6 +124,10 @@ func loadHistoryFromChargeData(samples []HistorySample, events []HistoryEvent) {
 
 	lastHistoryStatus = ""
 	atomic.StoreUint64(&historyVersion, uint64(len(historySamples)))
+
+	if logger != nil {
+		logger.Printf("[HISTORY] loaded %d samples and %d events from storage", len(historySamples), len(historyEvents))
+	}
 }
 
 func recordHistorySample(level int, charging bool) {

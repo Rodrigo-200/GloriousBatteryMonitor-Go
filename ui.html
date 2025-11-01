@@ -664,6 +664,23 @@
         // ======================
         // History Graph
         // ======================
+        function drawRoundedRect(ctx, x, y, width, height, radius) {
+            if (typeof ctx.roundRect === 'function') {
+                ctx.roundRect(x, y, width, height, radius);
+            } else {
+                ctx.moveTo(x + radius, y);
+                ctx.lineTo(x + width - radius, y);
+                ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+                ctx.lineTo(x + width, y + height - radius);
+                ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+                ctx.lineTo(x + radius, y + height);
+                ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+                ctx.lineTo(x, y + radius);
+                ctx.quadraticCurveTo(x, y, x + radius, y);
+                ctx.closePath();
+            }
+        }
+
         const HISTORY_RANGE_LABELS = {
             '1h': 'Last hour',
             '6h': 'Last 6 hours',
@@ -927,7 +944,7 @@
                 historyCtx.strokeStyle = isDark ? 'rgba(96,165,250,0.45)' : 'rgba(37,99,235,0.35)';
                 historyCtx.lineWidth = 1;
                 historyCtx.beginPath();
-                historyCtx.roundRect(labelX, labelY, labelWidth, labelHeight, 6);
+                drawRoundedRect(historyCtx, labelX, labelY, labelWidth, labelHeight, 6);
                 historyCtx.fill();
                 historyCtx.stroke();
 
