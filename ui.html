@@ -667,15 +667,6 @@
             '7d': 'Last 7 days'
         };
 
-        const HISTORY_EVENT_STYLES = {
-            connect: { light: '#22c55e', dark: '#4ade80', label: 'Connected' },
-            disconnect: { light: '#ef4444', dark: '#f87171', label: 'Disconnected' },
-            notification_low: { light: '#f97316', dark: '#fb923c', label: 'Low battery alert' },
-            notification_critical: { light: '#ef4444', dark: '#f87171', label: 'Critical battery alert' },
-            notification_full: { light: '#60a5fa', dark: '#93c5fd', label: 'Fully charged' },
-            notification: { light: '#f59e0b', dark: '#fbbf24', label: 'Notification' },
-        };
-
         function initHistory() {
             historyCanvas = document.getElementById('historyCanvas');
             if (!historyCanvas) {
@@ -893,19 +884,6 @@
             historyCtx.lineWidth = 2;
             historyCtx.stroke();
 
-            // Events
-            historyState.events.forEach(evt => {
-                const style = HISTORY_EVENT_STYLES[evt.type] || HISTORY_EVENT_STYLES.notification;
-                const color = isDark ? style.dark : style.light;
-                const level = evt.level >= 0 ? evt.level : minLevel;
-                const x = xFor(evt.ts);
-                const y = yFor(level);
-                historyCtx.beginPath();
-                historyCtx.fillStyle = color;
-                historyCtx.arc(x, y - 6, 4, 0, Math.PI * 2);
-                historyCtx.fill();
-            });
-
             if (historyState.hoverIndex !== null && points[historyState.hoverIndex]) {
                 const index = historyState.hoverIndex;
                 const x = xFor(points[index].ts);
@@ -952,64 +930,16 @@
                 return;
             }
 
-            let nearestEvent = null;
-            let closestPixels = 18;
-            historyState.events.forEach(evt => {
-                const eventRatio = Math.min(Math.max((evt.ts - minTs) / span, 0), 1);
-                const eventX = eventRatio * rect.width;
-                const diffPx = Math.abs(eventX - relativeX);
-                if (diffPx < closestPixels) {
-                    closestPixels = diffPx;
-                    nearestEvent = evt;
-                }
-            });
-
             const levelValue = Number(point.level);
             const level = Number.isFinite(levelValue) ? levelValue : 0;
-            const rate = Number(point.rate) || 0;
 
-            let statusLabel = 'Idle';
-            if (point.charging) {
-                statusLabel = 'Charging';
-            } else if (rate <= -0.2) {
-                statusLabel = 'Discharging';
-            }
-
-            let prevPoint = null;
-            for (let i = nearestIndex - 1; i >= 0; i--) {
-                if (historyState.points[i].ts < point.ts) {
-                    prevPoint = historyState.points[i];
-                    break;
-                }
-            }
-
+            const statusLabel = point.charging ? 'Charging' : 'Battery';
             const timestamp = new Date(point.ts);
-            const dateLabel = timestamp.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
             const timeLabel = timestamp.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+            const levelDisplay = Number.isFinite(levelValue) ? level.toFixed(0) : '--';
 
-            const levelDisplay = Number.isFinite(levelValue) ? level.toFixed(1).replace(/\.0$/, '') : '--';
-
-            let changeLine = '';
-            if (prevPoint && prevPoint.ts < point.ts) {
-                const prevLevel = Number(prevPoint.level) || 0;
-                const diff = level - prevLevel;
-                const diffText = `${diff >= 0 ? '+' : ''}${diff.toFixed(1).replace(/\.0$/, '')}%`;
-                const deltaMs = point.ts - prevPoint.ts;
-                const durationText = deltaMs > 0 ? formatDuration(deltaMs) : '';
-                changeLine = `Change since last sample: ${diffText}${durationText ? ` over ${durationText}` : ''}`;
-            }
-
-            let tooltipHtml = `<div class="text-sm font-semibold">${levelDisplay}% · ${statusLabel}</div>`;
-            tooltipHtml += `<div class="text-xs opacity-80">${dateLabel} · ${timeLabel}</div>`;
-            tooltipHtml += `<div class="mt-2 text-xs">Trend per hour: ${formatRate(rate)}</div>`;
-            if (changeLine) {
-                tooltipHtml += `<div class="text-xs opacity-80 mt-1">${changeLine}</div>`;
-            }
-            if (nearestEvent) {
-                const style = HISTORY_EVENT_STYLES[nearestEvent.type] || HISTORY_EVENT_STYLES.notification;
-                const color = document.body.classList.contains('dark') ? style.dark : style.light;
-                tooltipHtml += `<div class="mt-2 text-xs" style="color:${color}">Event: ${style.label}${nearestEvent.message ? ` · ${nearestEvent.message}` : ''}</div>`;
-            }
+            let tooltipHtml = `<div class="text-sm font-semibold">${levelDisplay}% ${statusLabel}</div>`;
+            tooltipHtml += `<div class="text-xs opacity-80">${timeLabel}</div>`;
 
             historyTooltip.innerHTML = tooltipHtml;
             historyTooltip.classList.remove('hidden');
@@ -1063,36 +993,6 @@
             }
             const rounded = value.toFixed(1);
             return `${value > 0 ? '+' : ''}${rounded}%/h`;
-        }
-
-        function formatDuration(ms) {
-            if (!Number.isFinite(ms) || ms <= 0) {
-                return 'under a minute';
-            }
-            const totalMinutes = Math.round(ms / 60000);
-            if (totalMinutes <= 0) {
-                return 'under a minute';
-            }
-            if (totalMinutes === 1) {
-                return '1 min';
-            }
-            if (totalMinutes < 60) {
-                return `${totalMinutes} min`;
-            }
-            const totalHours = Math.floor(totalMinutes / 60);
-            const remainingMinutes = totalMinutes % 60;
-            if (totalHours < 24) {
-                if (remainingMinutes === 0) {
-                    return `${totalHours} hr${totalHours === 1 ? '' : 's'}`;
-                }
-                return `${totalHours} hr ${remainingMinutes} min`;
-            }
-            const totalDays = Math.floor(totalHours / 24);
-            const remainingHours = totalHours % 24;
-            if (remainingHours === 0) {
-                return `${totalDays} day${totalDays === 1 ? '' : 's'}`;
-            }
-            return `${totalDays}d ${remainingHours}h`;
         }
 
         function formatRelativeTime(ts) {
