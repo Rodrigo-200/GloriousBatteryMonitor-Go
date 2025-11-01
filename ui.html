@@ -566,16 +566,20 @@
             info: `${GAUGE_BADGE_BASE} bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300`,
         };
 
-        const ICON_BATTERY = `<svg class="w-12 h-12 text-fluent-text dark:text-fluent-dark-text" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <rect x="2" y="7" width="18" height="11" rx="2"/>
-                    <path d="M22 10v4"/>
-                </svg>`;
+        function getBatteryIconMarkup(level) {
+            const clampedLevel = (level === null || level === undefined) ? 0 : clamp(level, 0, 100);
+            // The battery body is 18 units wide, from x=2. We'll make the fillable area 16 units, from x=3 to x=19.
+            const fillWidth = (clampedLevel / 100) * 16;
+            
+            const isLow = level !== null && level < 20;
 
-        const ICON_BATTERY_LOW = `<svg class="w-12 h-12 text-fluent-text dark:text-fluent-dark-text" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <rect x="2" y="7" width="18" height="11" rx="2"/>
-                    <path d="M22 10v4"/>
-                    <line x1="6" y1="12" x2="10" y2="12" stroke-width="3"/>
-                </svg>`;
+            return `<svg class="w-12 h-12 text-fluent-text dark:text-fluent-dark-text" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <rect x="3" y="8" width="${fillWidth.toFixed(2)}" height="9" rx="1" fill="currentColor"/>
+                        <rect x="2" y="7" width="18" height="11" rx="2"/>
+                        <path d="M22 10v4"/>
+                        ${isLow ? '<line x1="6" y1="12" x2="10" y2="12" stroke-width="3" stroke="currentColor"/>' : ''}
+                    </svg>`;
+        }
 
         const ICON_CHARGING = `<svg class="w-12 h-12 text-blue-500 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
@@ -655,7 +659,7 @@
                     statusText: 'Reading...',
                     badgeClass: BADGE_VARIANTS.neutral,
                     ringClass: previous.ringClass || 'battery-ring text-gray-400 dark:text-gray-600',
-                    iconMarkup: previous.iconMarkup || ICON_BATTERY,
+                    iconMarkup: getBatteryIconMarkup(level),
                 };
             }
 
@@ -696,7 +700,7 @@
                     statusText: 'Good',
                     badgeClass: BADGE_VARIANTS.good,
                     ringClass: 'battery-ring text-green-500 dark:text-green-400',
-                    iconMarkup: ICON_BATTERY,
+                    iconMarkup: getBatteryIconMarkup(100), // Default to a full icon if no level
                 };
             }
 
@@ -706,7 +710,7 @@
                     statusText: 'Good',
                     badgeClass: BADGE_VARIANTS.good,
                     ringClass: 'battery-ring text-green-500 dark:text-green-400',
-                    iconMarkup: ICON_BATTERY,
+                    iconMarkup: getBatteryIconMarkup(level),
                 };
             }
             if (level >= 20) {
@@ -715,7 +719,7 @@
                     statusText: 'Fair',
                     badgeClass: BADGE_VARIANTS.warning,
                     ringClass: 'battery-ring text-yellow-500 dark:text-yellow-400',
-                    iconMarkup: ICON_BATTERY,
+                    iconMarkup: getBatteryIconMarkup(level),
                 };
             }
             return {
@@ -723,7 +727,7 @@
                 statusText: 'Low',
                 badgeClass: BADGE_VARIANTS.danger,
                 ringClass: 'battery-ring text-red-500 dark:text-red-400',
-                iconMarkup: ICON_BATTERY_LOW,
+                iconMarkup: getBatteryIconMarkup(level),
             };
         }
         if (typeof window !== 'undefined') {
