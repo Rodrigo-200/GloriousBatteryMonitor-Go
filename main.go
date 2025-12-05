@@ -206,6 +206,7 @@ var (
 	lastTrayIconShowPercent = false
 	lastTrayIconFrame       = -1
 	lastTrayIconMu          sync.Mutex
+	trayForceRedraw         uint32
 )
 
 func safeDefer(where string) {
@@ -1723,12 +1724,17 @@ func updateTrayIcon(level int, charging bool, dim bool) {
 		}
 	}
 
+	force := atomic.SwapUint32(&trayForceRedraw, 0) == 1
+
 	lastTrayIconMu.Lock()
 	needsRedraw := lastTrayIconDim != dim ||
 		lastTrayIconShowPercent != showPercent ||
 		lastTrayIconCharging != charging ||
 		lastTrayIconBucket != bucket ||
 		(charging && lastTrayIconFrame != frame)
+	if !needsRedraw && force {
+		needsRedraw = true
+	}
 	if needsRedraw {
 		lastTrayIconDim = dim
 		lastTrayIconShowPercent = showPercent
@@ -1835,6 +1841,10 @@ func updateTrayIcon(level int, charging bool, dim bool) {
 			}
 		}
 	})
+}
+
+func requestTrayRedraw() {
+	atomic.StoreUint32(&trayForceRedraw, 1)
 }
 
 func animateChargingIcon() {

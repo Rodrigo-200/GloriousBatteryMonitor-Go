@@ -804,7 +804,10 @@ func suppressTransientZero(level int, charging bool) bool {
 
 	if zeroLevelStreak > 0 {
 		zeroLevelStreak++
-		return false
+		if logger != nil && zeroLevelStreak%6 == 0 {
+			logger.Printf("[DRIVER] Still suppressing stale 0%% reading (streak=%d)", zeroLevelStreak)
+		}
+		return true
 	}
 
 	zeroLevelStreak = 1
@@ -820,6 +823,8 @@ func suppressTransientZero(level int, charging bool) bool {
 		applyTrayTooltip(tooltipText)
 		updateTrayIcon(lk, lkchg, true)
 	})
+
+	requestTrayRedraw()
 
 	setReading(4 * time.Second)
 	payload := map[string]interface{}{
