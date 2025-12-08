@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sstallion/go-hid"
@@ -38,6 +39,11 @@ var knownDevices = map[uint16]map[uint16]string{
 		0x824D: "Model D 2 Wireless",
 	},
 }
+
+const (
+	transientZeroMinLevel = 15
+	transientZeroMaxAge   = 30 * time.Minute
+)
 
 type MouseDevice struct {
 	handle     *hid.Device
@@ -199,9 +205,10 @@ func computeEtaForPath(path string, level int, charging bool, actual bool) (Batt
 }
 
 var (
-	currentMouse *MouseDevice
-	mouseMutex   sync.Mutex
-	failCount    int
+	currentMouse    *MouseDevice
+	mouseMutex      sync.Mutex
+	failCount       int
+	zeroLevelStreak int
 )
 
 func initDriver() { hid.Init() }
@@ -271,6 +278,39 @@ func parseModelD2WirelessBattery(data []byte) (int, bool, bool) {
 	return -1, false, false
 }
 
+func requestBatteryReportWithCommand(dev *hid.Device) ([]byte, error) {
+	cmd := make([]byte, 65)
+	cmd[3], cmd[4], cmd[6] = 0x02, 0x02, 0x83
+	if _, err := dev.SendFeatureReport(cmd); err != nil {
+		return nil, err
+	}
+	time.Sleep(50 * time.Millisecond)
+	buf := make([]byte, 65)
+	n, err := dev.GetFeatureReport(buf)
+	if err != nil {
+		return nil, err
+	}
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid byte count %d", n)
+	}
+	return buf[:n], nil
+}
+
+func requestModelD2BatteryViaCommand(dev *hid.Device) (int, bool, bool) {
+	data, err := requestBatteryReportWithCommand(dev)
+	if err != nil {
+		if logger != nil {
+			logger.Printf("[D2W] Battery command failed: %v", err)
+		}
+		return -1, false, false
+	}
+	level, charging, valid := parseModelD2WirelessBattery(data)
+	if valid && logger != nil {
+		logger.Printf("[D2W] Battery via command: %d%% charging=%v", level, charging)
+	}
+	return level, charging, valid
+}
+
 func isModelD2Wireless(info *hid.DeviceInfo) bool {
 	return info.VendorID == 0x093A && info.ProductID == 0x824D
 }
@@ -308,6 +348,7 @@ func findAndConnectMouse() (*MouseDevice, error) {
 			}
 			continue
 		}
+		allowWrites := canWriteToDevice(&info)
 
 		// For Model D 2 Wireless, use read-only Input reports approach
 		if isModelD2Wireless(&info) {
@@ -366,6 +407,29 @@ func findAndConnectMouse() (*MouseDevice, error) {
 				}
 			}
 
+			if allowWrites {
+				if level, charging, valid := requestModelD2BatteryViaCommand(dev); valid {
+					modelName := knownDevices[info.VendorID][info.ProductID]
+					mouse := &MouseDevice{
+						handle:     dev,
+						path:       info.Path,
+						modelName:  modelName,
+						isWireless: isWirelessInterface(info.Path),
+						vendorID:   info.VendorID,
+						productID:  info.ProductID,
+						release:    info.ReleaseNbr,
+					}
+					currentDeviceKey = deviceKeyFromMouse(mouse)
+					if logger != nil {
+						logger.Printf("[D2W] Connected via command fallback: %s (wireless:%v) %d%% charging:%v",
+							mouse.modelName, mouse.isWireless, level, charging)
+					}
+					return mouse, nil
+				}
+			} else if logger != nil {
+				logger.Printf("[D2W] Write command blocked by SafeMode for %s", info.Path)
+			}
+
 			if logger != nil {
 				logger.Printf("[D2W] Failed to read battery data from Model D 2 Wireless")
 			}
@@ -374,8 +438,7 @@ func findAndConnectMouse() (*MouseDevice, error) {
 		}
 
 		// Standard handling for other devices
-		canWrite := canWriteToDevice(&info)
-		if !canWrite {
+		if !allowWrites {
 			logBlockedWrite(info.Path, "SafeMode enabled or device not whitelisted")
 			dev.Close()
 			continue
@@ -514,6 +577,15 @@ func (m *MouseDevice) readModelD2WirelessBattery() (int, bool, error) {
 		}
 	}
 
+	info := findDeviceInfoByPath(m.path)
+	if info != nil && canWriteToDevice(info) {
+		if level, charging, valid := requestModelD2BatteryViaCommand(m.handle); valid {
+			return level, charging, nil
+		}
+	} else if logger != nil && info != nil {
+		logger.Printf("[D2W] SafeMode blocked command fallback for %s", info.Path)
+	}
+
 	if logger != nil {
 		logger.Printf("[D2W] Failed to read battery: n=%d err=%v", n, err)
 	}
@@ -535,6 +607,13 @@ func reconnect() {
 	if mouse != nil {
 		level, charging, err := mouse.ReadBattery()
 		if err == nil {
+			if suppressTransientZero(level, charging) {
+				failCount = 0
+				return
+			}
+			if level > 0 || charging {
+				zeroLevelStreak = 0
+			}
 			failCount = 0
 
 			if wasCharging && !charging && level > 0 {
@@ -560,6 +639,8 @@ func reconnect() {
 			lastKnownCharging = charging
 			lastKnownMu.Unlock()
 
+			atomic.StoreInt64(&lastGoodReadUnix, time.Now().UnixNano())
+
 			tooltipText := formatTrayTooltip(level, charging, false)
 			trayInvoke(func() {
 				applyTrayTooltip(tooltipText)
@@ -568,7 +649,7 @@ func reconnect() {
 
 			// Check battery thresholds and send notifications if needed
 			key := currentDeviceKey
-			if key == (DeviceKey{}) && mouse != nil {
+			if key == (DeviceKey{}) {
 				key = deviceKeyFromMouse(mouse)
 				if key != (DeviceKey{}) {
 					currentDeviceKey = key
@@ -598,6 +679,7 @@ func reconnect() {
 			}
 			broadcast(payload)
 
+			return
 		}
 
 		failCount++
@@ -609,6 +691,7 @@ func reconnect() {
 			currentMouse = nil
 			device = nil
 			failCount = 0
+			zeroLevelStreak = 0
 		} else {
 			return
 		}
@@ -697,6 +780,66 @@ func reconnect() {
 
 		broadcast(map[string]interface{}{"status": "connected", "level": batteryLvl, "charging": isCharging, "lastKnown": false})
 	}
+}
+
+func suppressTransientZero(level int, charging bool) bool {
+	if level != 0 || charging {
+		return false
+	}
+
+	lastKnownMu.Lock()
+	lk := lastKnownLevel
+	lkchg := lastKnownCharging
+	lastKnownMu.Unlock()
+	if lk < transientZeroMinLevel {
+		zeroLevelStreak = 0
+		return false
+	}
+
+	lastGood := atomic.LoadInt64(&lastGoodReadUnix)
+	if lastGood == 0 || time.Since(time.Unix(0, lastGood)) > transientZeroMaxAge {
+		zeroLevelStreak = 0
+		return false
+	}
+
+	if zeroLevelStreak > 0 {
+		zeroLevelStreak++
+		if logger != nil && zeroLevelStreak%6 == 0 {
+			logger.Printf("[DRIVER] Still suppressing stale 0%% reading (streak=%d)", zeroLevelStreak)
+		}
+		return true
+	}
+
+	zeroLevelStreak = 1
+	batteryLvl = lk
+	isCharging = lkchg
+
+	lastKnownMu.Lock()
+	showLastKnown = true
+	lastKnownMu.Unlock()
+
+	tooltipText := formatTrayTooltip(lk, lkchg, true)
+	trayInvoke(func() {
+		applyTrayTooltip(tooltipText)
+		updateTrayIcon(lk, lkchg, true)
+	})
+
+	requestTrayRedraw()
+
+	setReading(4 * time.Second)
+	payload := map[string]interface{}{
+		"status":      "connected",
+		"statusText":  "Last known",
+		"level":       lk,
+		"charging":    lkchg,
+		"lastKnown":   true,
+		"deviceModel": deviceModelName,
+	}
+	broadcast(payload)
+	if logger != nil {
+		logger.Printf("[DRIVER] Ignoring isolated 0%% reading; keeping last known %d%%", lk)
+	}
+	return true
 }
 
 func readBattery() (int, bool) {

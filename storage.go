@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +25,9 @@ func loadChargeData() {
 	}
 	if cd.LastChargeLevel > 0 {
 		lastChargeLevel = cd.LastChargeLevel
+		if atomic.LoadInt64(&lastGoodReadUnix) == 0 {
+			atomic.StoreInt64(&lastGoodReadUnix, time.Now().UnixNano())
+		}
 	}
 	if len(cd.Devices) > 0 && batteryEstimator != nil {
 		batteryEstimator.Restore(cd.Devices)
