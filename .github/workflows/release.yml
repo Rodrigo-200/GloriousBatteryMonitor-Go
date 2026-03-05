@@ -34,6 +34,24 @@ jobs:
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           echo "TAG=$tag" >> $env:GITHUB_OUTPUT
 
+      - name: Generate changelog from git log
+        id: changelog
+        shell: pwsh
+        run: |
+          $previousTag = git describe --tags --abbrev=0 HEAD~1 2>$null
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($previousTag)) {
+            $log = git log --pretty=format:"- %s (%h)" HEAD
+          } else {
+            $log = git log --pretty=format:"- %s (%h)" "$previousTag..HEAD"
+          }
+          $changelog = $log -join "`n"
+          if ([string]::IsNullOrEmpty($changelog)) {
+            $changelog = "- Release ${{ steps.version.outputs.TAG }}"
+          }
+          # Write to file to avoid multiline env var issues
+          $changelog | Out-File -FilePath changelog.txt -Encoding utf8
+          echo "Generated changelog with $($log.Count) entries"
+
       - name: Restore
         run: dotnet restore
 
@@ -73,17 +91,52 @@ jobs:
           --outputDir releases/
           --icon src/GBM.Desktop/Assets/app-icon.ico
 
-      - name: Generate changelog from commits
-        id: changelog
-        uses: metcalfc/changelog-generator@v4.3.1
-        with:
-          myToken: ${{ secrets.VELOPACK_GITHUB_TOKEN }}
+      - name: Create GitHub Release and upload assets
+        shell: pwsh
+        run: |
+          $changelog = Get-Content changelog.txt -Raw
+          $tag = "${{ steps.version.outputs.TAG }}"
+          $version = "${{ steps.version.outputs.VERSION }}"
 
-      - name: Upload to GitHub Releases
-        run: >
-          vpk upload github
-          --repoUrl https://github.com/${{ github.repository }}
-          --token ${{ secrets.VELOPACK_GITHUB_TOKEN }}
-          --tag ${{ steps.version.outputs.TAG }}
-          --inputDir releases/
-          --releaseName "Glorious Battery Monitor ${{ steps.version.outputs.TAG }}"
+          # Create the release
+          $releaseBody = @{
+            tag_name = $tag
+            name = "Glorious Battery Monitor $tag"
+            body = $changelog
+            draft = $false
+            prerelease = $false
+          } | ConvertTo-Json
+
+          $headers = @{
+            Authorization = "Bearer ${{ secrets.VELOPACK_GITHUB_TOKEN }}"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/releases" `
+            -Method POST `
+            -Headers $headers `
+            -Body $releaseBody `
+            -ContentType "application/json"
+
+          $uploadUrl = $release.upload_url -replace '\{.*\}', ''
+          echo "Release created: $($release.html_url)"
+          echo "Upload URL: $uploadUrl"
+
+          # Upload all files from releases/ directory
+          Get-ChildItem releases/ | ForEach-Object {
+            $file = $_.FullName
+            $fileName = $_.Name
+            $mimeType = "application/octet-stream"
+            echo "Uploading $fileName..."
+            Invoke-RestMethod `
+              -Uri "${uploadUrl}?name=$fileName" `
+              -Method POST `
+              -Headers $headers `
+              -InFile $file `
+              -ContentType $mimeType | Out-Null
+            echo "Uploaded $fileName"
+          }
+
+          echo "All assets uploaded successfully"
