@@ -3,59 +3,87 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  release-windows:
     runs-on: windows-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
-          go-version: '1.21'
+          dotnet-version: '8.0.x'
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk
 
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build icon resource
-        run: windres -o icon.syso icon.rc
-
-      - name: Build binary
+      - name: Extract version from tag
+        id: version
+        shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}"
-          if ($version.StartsWith("v")) { $version = $version.Substring(1) }
-          go build -ldflags "-H=windowsgui -X main.currentVersion=$version" -o GloriousBatteryMonitor-Go.exe
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
 
-      - name: Generate changelog
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build and Test
+        run: |
+          dotnet build --configuration Release --no-restore
+          dotnet test --configuration Release --no-build --verbosity normal
+
+      - name: Publish self-contained Windows x64
+        run: >
+          dotnet publish src/GBM.Desktop/GBM.Desktop.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --output publish/win-x64
+          -p:Version=${{ steps.version.outputs.VERSION }}
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+
+      - name: Download previous release for delta generation
+        run: >
+          vpk download github
+          --repoUrl https://github.com/${{ github.repository }}
+          --token ${{ secrets.VELOPACK_GITHUB_TOKEN }}
+          --outputDir releases/
+        continue-on-error: true
+
+      - name: Pack with Velopack
+        run: >
+          vpk pack
+          --packId GloriousBatteryMonitor
+          --packVersion ${{ steps.version.outputs.VERSION }}
+          --packDir publish/win-x64
+          --mainExe GBM.Desktop.exe
+          --packTitle "Glorious Battery Monitor"
+          --releaseDir releases/
+          --icon src/GBM.Desktop/Assets/app-icon.ico
+
+      - name: Generate changelog from commits
         id: changelog
-        uses: mikepenz/release-changelog-builder-action@v4
+        uses: metcalfc/changelog-generator@v4.3.1
         with:
-          configuration: ".github/changelog-config.json"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          myToken: ${{ secrets.VELOPACK_GITHUB_TOKEN }}
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: GloriousBatteryMonitor-Go.exe
-          name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.changelog }}
-          generate_release_notes: false
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+      - name: Upload to GitHub Releases
+        run: >
+          vpk upload github
+          --repoUrl https://github.com/${{ github.repository }}
+          --token ${{ secrets.VELOPACK_GITHUB_TOKEN }}
+          --tag ${{ steps.version.outputs.TAG }}
+          --releaseDir releases/
+          --releaseName "Glorious Battery Monitor ${{ steps.version.outputs.TAG }}"
