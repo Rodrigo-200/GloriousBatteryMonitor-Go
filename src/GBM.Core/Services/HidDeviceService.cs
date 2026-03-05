@@ -313,6 +313,12 @@ public class HidDeviceService : IHidDeviceService
             if (hidDevice == null)
                 return (false, 0, false);
 
+            // CandidateD and CandidateE open their own streams on the HidDevice directly
+            if (profile.PixartMethod == PixartBatteryMethod.CandidateD)
+                return TryPixartCandidateD(hidDevice, _logger);
+            if (profile.PixartMethod == PixartBatteryMethod.CandidateE)
+                return TryPixartCandidateE(hidDevice, _logger);
+
             using var stream = hidDevice.Open();
             stream.ReadTimeout = 2000;
             stream.WriteTimeout = 2000;
@@ -334,6 +340,8 @@ public class HidDeviceService : IHidDeviceService
                     return TryPixartCandidateC(stream);
                 default:
                     // Unknown method — try all candidates in order
+                    var d = TryPixartCandidateD(hidDevice, _logger);
+                    if (d.Success) return d;
                     var a = TryPixartCandidateA(stream, featureLen);
                     if (a.Success) return a;
                     var b = TryPixartCandidateB(stream, featureLen);
@@ -453,10 +461,98 @@ public class HidDeviceService : IHidDeviceService
         return (false, 0, false);
     }
 
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateD(
+        HidDevice device, ILogger logger)
+    {
+        // GetFeature-only probe: read feature reports WITHOUT a prior SetFeature write.
+        // The mi_01&col01 interface on 0x093A:0x824D rejects SetFeature entirely,
+        // but may respond to GetFeature with battery data already populated by firmware.
+        for (byte reportId = 0x00; reportId <= 0x0F; reportId++)
+        {
+            try
+            {
+                using var stream = device.Open();
+                stream.ReadTimeout = 2000;
+
+                var buf = new byte[65]; // 64 bytes + report ID byte
+                buf[0] = reportId;
+
+                stream.GetFeature(buf);
+
+                logger.LogDebug(
+                    "[Pixart CandidateD] RID=0x{RID:X2} raw: {Bytes}",
+                    reportId,
+                    BitConverter.ToString(buf, 0, Math.Min(16, buf.Length)));
+
+                // Check every byte position 1-10 for a plausible battery level
+                for (int i = 1; i <= 10 && i < buf.Length; i++)
+                {
+                    if (buf[i] >= 1 && buf[i] <= 100)
+                    {
+                        // Tentative hit — also check adjacent byte for charge flag
+                        bool charging = (i + 1 < buf.Length && buf[i + 1] == 0x01)
+                                     || (i - 1 >= 0 && buf[i - 1] == 0x01);
+                        logger.LogInformation(
+                            "[Pixart CandidateD] plausible battery={Level} at byte[{Idx}], " +
+                            "charging={Charging}, RID=0x{RID:X2}",
+                            buf[i], i, charging, reportId);
+                        return (true, buf[i], charging);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(
+                    "[Pixart CandidateD] RID=0x{RID:X2} failed: {Msg}",
+                    reportId, ex.Message);
+            }
+        }
+        return (false, 0, false);
+    }
+
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateE(
+        HidDevice device, ILogger logger)
+    {
+        // Passive input report read on interfaces with MaxInput > 0.
+        // Candidate C was incorrectly attempted on col01 (MaxInput=0).
+        // This targets col05 (MaxInput=8) which can actually stream input reports.
+        try
+        {
+            using var stream = device.Open();
+            stream.ReadTimeout = 2000;
+
+            var buf = stream.Read(); // blocking read, 2s timeout
+
+            logger.LogDebug(
+                "[Pixart CandidateE] passive read raw: {Bytes}",
+                BitConverter.ToString(buf, 0, Math.Min(16, buf.Length)));
+
+            for (int i = 1; i < Math.Min(buf.Length, 10); i++)
+            {
+                if (buf[i] >= 1 && buf[i] <= 100)
+                {
+                    bool charging = i + 1 < buf.Length && buf[i + 1] == 0x01;
+                    logger.LogInformation(
+                        "[Pixart CandidateE] plausible battery={Level} at byte[{Idx}], " +
+                        "charging={Charging}",
+                        buf[i], i, charging);
+                    return (true, buf[i], charging);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug("[Pixart CandidateE] failed: {Msg}", ex.Message);
+        }
+        return (false, 0, false);
+    }
+
     private DeviceProfile? ProbeDevicePixart(HidDevice hidDevice, DeviceInfo device)
     {
         int maxFeatureLen = 0;
+        int maxInputLen = 0;
         try { maxFeatureLen = hidDevice.GetMaxFeatureReportLength(); } catch { }
+        try { maxInputLen = hidDevice.GetMaxInputReportLength(); } catch { }
 
         // Check if this interface has a vendor-specific usage page (0xFF00).
         // Skip standard HID interfaces (mouse 0x0001, consumer 0x000C).
@@ -470,22 +566,22 @@ public class HidDeviceService : IHidDeviceService
         }
 
         _logger.LogDebug(
-            "[Pixart] Probing {Model} at {Path}: UsagePage=0x{UP:X4}, MaxFeature={MF}",
-            device.ModelName, device.DevicePath, usagePage, maxFeatureLen);
+            "[Pixart] Probing {Model} at {Path}: UsagePage=0x{UP:X4}, MaxFeature={MF}, MaxInput={MI}",
+            device.ModelName, device.DevicePath, usagePage, maxFeatureLen, maxInputLen);
 
-        if (maxFeatureLen <= 0)
+        if (maxFeatureLen <= 0 && maxInputLen <= 0)
         {
-            _logger.LogDebug("[Pixart] No feature reports on this interface, skipping");
+            _logger.LogDebug("[Pixart] No feature or input reports on this interface, skipping");
             return null;
         }
 
-        DeviceProfile MakeProfile(PixartBatteryMethod method) => new()
+        DeviceProfile MakeProfile(PixartBatteryMethod method, string path, int reportLen, bool useFeature) => new()
         {
             CompositeKey = device.CompositeKey,
-            DevicePath = device.DevicePath,
+            DevicePath = path,
             ReportId = 0x00,
-            ReportLength = maxFeatureLen,
-            UseFeatureReports = true,
+            ReportLength = reportLen,
+            UseFeatureReports = useFeature,
             VendorId = device.VendorId,
             ProductId = device.ProductId,
             ModelName = device.ModelName,
@@ -494,51 +590,72 @@ public class HidDeviceService : IHidDeviceService
             PixartMethod = method
         };
 
-        try
+        // ── Feature report probes (requires MaxFeature > 0) ──
+        if (maxFeatureLen > 0)
         {
-            using var stream = hidDevice.Open();
-            stream.ReadTimeout = 2000;
-            stream.WriteTimeout = 2000;
-
-            // Try Candidate A
+            // Candidate D first: GetFeature-only (no SetFeature write).
+            // SetFeature is known-rejected on 0x093A:0x824D col01.
             _logger.LogInformation(
-                "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate A on {Path}...",
+                "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate D (GetFeature-only) on {Path}...",
                 device.VendorId, device.ProductId, device.DevicePath);
 
-            var resultA = TryPixartCandidateA(stream, maxFeatureLen);
-            if (resultA.Success && resultA.BatteryLevel >= 1)
+            var resultD = TryPixartCandidateD(hidDevice, _logger);
+            if (resultD.Success && resultD.BatteryLevel >= 1)
             {
                 _logger.LogInformation(
-                    "[Pixart probe] candidate A returned battery={Level}, charging={Charging} — profile saved",
-                    resultA.BatteryLevel, resultA.IsCharging);
-                return MakeProfile(PixartBatteryMethod.CandidateA);
+                    "[Pixart probe] candidate D returned battery={Level}, charging={Charging} — profile saved",
+                    resultD.BatteryLevel, resultD.IsCharging);
+                return MakeProfile(PixartBatteryMethod.CandidateD, device.DevicePath, maxFeatureLen, true);
             }
 
-            // Try Candidate B
-            _logger.LogDebug("[Pixart probe] candidate A no result, trying candidate B...");
-            var resultB = TryPixartCandidateB(stream, maxFeatureLen);
-            if (resultB.Success && resultB.BatteryLevel >= 1)
+            // Candidate A: SetFeature + GetFeature (PAW3395 command 0x11)
+            _logger.LogDebug("[Pixart probe] candidate D no result, trying candidate A...");
+            try
             {
-                _logger.LogInformation(
-                    "[Pixart probe] candidate B returned battery={Level}, charging={Charging} — profile saved",
-                    resultB.BatteryLevel, resultB.IsCharging);
-                return MakeProfile(PixartBatteryMethod.CandidateB);
-            }
+                using var stream = hidDevice.Open();
+                stream.ReadTimeout = 2000;
+                stream.WriteTimeout = 2000;
 
-            // Try Candidate C (passive read)
-            _logger.LogDebug("[Pixart probe] candidate B no result, trying candidate C (passive)...");
-            var resultC = TryPixartCandidateC(stream);
-            if (resultC.Success && resultC.BatteryLevel >= 1)
+                var resultA = TryPixartCandidateA(stream, maxFeatureLen);
+                if (resultA.Success && resultA.BatteryLevel >= 1)
+                {
+                    _logger.LogInformation(
+                        "[Pixart probe] candidate A returned battery={Level}, charging={Charging} — profile saved",
+                        resultA.BatteryLevel, resultA.IsCharging);
+                    return MakeProfile(PixartBatteryMethod.CandidateA, device.DevicePath, maxFeatureLen, true);
+                }
+
+                // Candidate B: SetFeature + GetFeature (command 0x04/0x01)
+                _logger.LogDebug("[Pixart probe] candidate A no result, trying candidate B...");
+                var resultB = TryPixartCandidateB(stream, maxFeatureLen);
+                if (resultB.Success && resultB.BatteryLevel >= 1)
+                {
+                    _logger.LogInformation(
+                        "[Pixart probe] candidate B returned battery={Level}, charging={Charging} — profile saved",
+                        resultB.BatteryLevel, resultB.IsCharging);
+                    return MakeProfile(PixartBatteryMethod.CandidateB, device.DevicePath, maxFeatureLen, true);
+                }
+            }
+            catch (Exception ex)
             {
-                _logger.LogInformation(
-                    "[Pixart probe] candidate C returned battery={Level} — profile saved",
-                    resultC.BatteryLevel);
-                return MakeProfile(PixartBatteryMethod.CandidateC);
+                _logger.LogDebug(ex, "[Pixart probe] Error during A/B probing on {Model}", device.ModelName);
             }
         }
-        catch (Exception ex)
+
+        // ── Input report probes (requires MaxInput > 0) ──
+        if (maxInputLen > 0)
         {
-            _logger.LogDebug(ex, "[Pixart probe] Error probing {Model}", device.ModelName);
+            _logger.LogDebug("[Pixart probe] trying candidate E (passive stream read) on {Path}...",
+                device.DevicePath);
+
+            var resultE = TryPixartCandidateE(hidDevice, _logger);
+            if (resultE.Success && resultE.BatteryLevel >= 1)
+            {
+                _logger.LogInformation(
+                    "[Pixart probe] candidate E returned battery={Level}, charging={Charging} — profile saved",
+                    resultE.BatteryLevel, resultE.IsCharging);
+                return MakeProfile(PixartBatteryMethod.CandidateE, device.DevicePath, maxInputLen, false);
+            }
         }
 
         _logger.LogDebug("[Pixart probe] No working candidate for {Model} at {Path}",
@@ -816,6 +933,15 @@ public class HidDeviceService : IHidDeviceService
                             if (isPixart)
                             {
                                 // Pixart probe — try each candidate
+                                try
+                                {
+                                    var resultD = TryPixartCandidateD(device, _logger);
+                                    sb.AppendLine($"  Pixart Candidate D: {(resultD.Success ? $"battery={resultD.BatteryLevel}%, charging={resultD.IsCharging}" : "no valid response")}");
+                                }
+                                catch (Exception pex)
+                                {
+                                    sb.AppendLine($"  Pixart Candidate D: FAILED ({pex.GetType().Name}: {pex.Message})");
+                                }
                                 try
                                 {
                                     var resultA = TryPixartCandidateA(stream, featureLen);
