@@ -2,7 +2,7 @@ namespace GBM.Core.Models;
 
 public enum ChipProtocol { Sinowealth, Pixart }
 
-public enum PixartBatteryMethod { CandidateA, CandidateB, CandidateC, CandidateD, CandidateE }
+public enum PixartBatteryMethod { CandidateA, CandidateB, CandidateC, CandidateD, CandidateE, CandidateF }
 
 public class DeviceProfile
 {
@@ -17,4 +17,10 @@ public class DeviceProfile
     public DateTime LastSeen { get; set; }
     public ChipProtocol Protocol { get; set; } = ChipProtocol.Sinowealth;
     public PixartBatteryMethod? PixartMethod { get; set; }
+
+    /// <summary>
+    /// For CandidateF: the sibling interface path used for input report reads
+    /// while the primary DevicePath is used for feature report triggers.
+    /// </summary>
+    public string? SiblingDevicePath { get; set; }
 }

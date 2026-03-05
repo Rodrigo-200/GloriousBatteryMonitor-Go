@@ -318,6 +318,8 @@ public class HidDeviceService : IHidDeviceService
                 return TryPixartCandidateD(hidDevice, _logger);
             if (profile.PixartMethod == PixartBatteryMethod.CandidateE)
                 return TryPixartCandidateE(hidDevice, _logger);
+            if (profile.PixartMethod == PixartBatteryMethod.CandidateF)
+                return TryPixartCandidateF(profile, _logger);
 
             using var stream = hidDevice.Open();
             stream.ReadTimeout = 2000;
@@ -547,6 +549,188 @@ public class HidDeviceService : IHidDeviceService
         return (false, 0, false);
     }
 
+    // ── Candidate F: cross-interface request/response ──
+    // The Pixart wireless receiver uses a split-interface design:
+    //   col01 (UsagePage=0xFF00, MaxFeature=64, MaxInput=0) — accepts feature report commands
+    //   col05 (UsagePage=0xFF00, MaxFeature=0,  MaxInput=8)  — streams input report responses
+    // GetFeature on col01 for RIDs 0x00-0x02 takes ~1.6s (the receiver IS processing them),
+    // but the response goes to col05 as an input report rather than back through col01's
+    // feature channel.
+
+    /// <summary>
+    /// Find the sibling vendor-specific input interface (col05) for a given Pixart device.
+    /// Returns null if no suitable sibling is found.
+    /// </summary>
+    private HidDevice? FindPixartSiblingInputDevice(HidDevice triggerDevice, DeviceInfo device)
+    {
+        try
+        {
+            var allDevices = DeviceList.Local.GetHidDevices();
+            foreach (var candidate in allDevices)
+            {
+                if (candidate.VendorID != device.VendorId || candidate.ProductID != device.ProductId)
+                    continue;
+
+                // Skip the same interface
+                if (string.Equals(candidate.DevicePath, triggerDevice.DevicePath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                int usagePage = GetPrimaryUsagePage(candidate);
+                if (usagePage != 0xFF00)
+                    continue;
+
+                int maxInput = 0;
+                try { maxInput = candidate.GetMaxInputReportLength(); } catch { }
+
+                if (maxInput > 0)
+                {
+                    _logger.LogDebug(
+                        "[Pixart CandidateF] Found sibling input interface: {Path} (MaxInput={MI})",
+                        candidate.DevicePath, maxInput);
+                    return candidate;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Pixart CandidateF] Error searching for sibling input device");
+        }
+        return null;
+    }
+
+    // RID 0x03 takes ~5s in CandidateD — the receiver processes it asynchronously and the
+    // response arrives on col05 as an input report.  RIDs 0x00-0x02 fail instantly on col01
+    // but may also trigger a col05 response.  Try 0x03 first (most likely), then fall back.
+    private static readonly (byte Rid, int TimeoutMs)[] CandidateFProbeRids =
+    {
+        (0x03, 6000),  // Primary: device processes this for ~5s
+        (0x00, 2000),  // Fallback
+        (0x01, 2000),
+        (0x02, 2000),
+    };
+
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateF(
+        HidDevice triggerDevice, HidDevice inputDevice, ILogger logger)
+    {
+        // Cross-interface probe: send GetFeature on col01 (trigger), read response on col05 (input).
+        // The Pixart wireless receiver dispatches responses to the input interface (col05),
+        // not back through the feature channel (col01).
+        try
+        {
+            // Open col05 ONCE and keep it alive across all trigger attempts.
+            // Windows queues input reports per-handle; closing and reopening between
+            // RIDs would discard any report that arrived after the handle was closed.
+            using var inputStream = inputDevice.Open();
+
+            foreach (var (reportId, timeoutMs) in CandidateFProbeRids)
+            {
+                inputStream.ReadTimeout = timeoutMs;
+
+                // Trigger: open a fresh col01 stream per RID to avoid state contamination
+                try
+                {
+                    using var triggerStream = triggerDevice.Open();
+                    triggerStream.ReadTimeout = 2000;
+
+                    var triggerBuf = new byte[65]; // 64 bytes + report ID
+                    triggerBuf[0] = reportId;
+
+                    try
+                    {
+                        triggerStream.GetFeature(triggerBuf);
+                        logger.LogDebug(
+                            "[Pixart CandidateF] RID=0x{RID:X2} GetFeature on col01 returned: {Bytes}",
+                            reportId,
+                            BitConverter.ToString(triggerBuf, 0, Math.Min(16, triggerBuf.Length)));
+                    }
+                    catch (IOException)
+                    {
+                        // Expected — col01 rejects the GetFeature but the receiver still processes it.
+                        logger.LogDebug(
+                            "[Pixart CandidateF] RID=0x{RID:X2} GetFeature on col01 threw IOException (expected)",
+                            reportId);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(
+                        "[Pixart CandidateF] RID=0x{RID:X2} trigger failed: {Msg}",
+                        reportId, ex.Message);
+                }
+
+                // Read response from col05 (same handle across all RIDs)
+                try
+                {
+                    var responseBuf = inputStream.Read();
+
+                    logger.LogDebug(
+                        "[Pixart CandidateF] RID=0x{RID:X2} col05 raw: {Bytes}",
+                        reportId,
+                        BitConverter.ToString(responseBuf, 0, Math.Min(16, responseBuf.Length)));
+
+                    // Check bytes 1-10 for a plausible battery percentage
+                    for (int i = 1; i <= 10 && i < responseBuf.Length; i++)
+                    {
+                        if (responseBuf[i] >= 1 && responseBuf[i] <= 100)
+                        {
+                            bool charging = (i + 1 < responseBuf.Length && responseBuf[i + 1] == 0x01)
+                                         || (i - 1 >= 0 && responseBuf[i - 1] == 0x01);
+                            logger.LogInformation(
+                                "[Pixart CandidateF] plausible battery={Level} at byte[{Idx}], " +
+                                "charging={Charging}, trigger RID=0x{RID:X2}",
+                                responseBuf[i], i, charging, reportId);
+                            return (true, responseBuf[i], charging);
+                        }
+                    }
+
+                    // No plausible battery value — log and try next RID
+                    logger.LogDebug(
+                        "[Pixart CandidateF] RID=0x{RID:X2} col05 response had no plausible battery value",
+                        reportId);
+                }
+                catch (TimeoutException)
+                {
+                    logger.LogDebug(
+                        "[Pixart CandidateF] RID=0x{RID:X2} col05 read timed out ({Timeout}ms)",
+                        reportId, timeoutMs);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(
+                        "[Pixart CandidateF] RID=0x{RID:X2} col05 read failed: {Msg}",
+                        reportId, ex.Message);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                "[Pixart CandidateF] failed to open input stream: {Msg}", ex.Message);
+        }
+        return (false, 0, false);
+    }
+
+    /// <summary>
+    /// CandidateF for ongoing reads — uses saved trigger and sibling device paths.
+    /// </summary>
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateF(
+        DeviceProfile profile, ILogger logger)
+    {
+        if (string.IsNullOrEmpty(profile.SiblingDevicePath))
+            return (false, 0, false);
+
+        var triggerDevice = FindDeviceByPath(profile.DevicePath);
+        var inputDevice = FindDeviceByPath(profile.SiblingDevicePath);
+
+        if (triggerDevice == null || inputDevice == null)
+        {
+            logger.LogDebug("[Pixart CandidateF] Could not find trigger or input device for ongoing read");
+            return (false, 0, false);
+        }
+
+        return TryPixartCandidateF(triggerDevice, inputDevice, logger);
+    }
+
     private DeviceProfile? ProbeDevicePixart(HidDevice hidDevice, DeviceInfo device)
     {
         int maxFeatureLen = 0;
@@ -575,7 +759,8 @@ public class HidDeviceService : IHidDeviceService
             return null;
         }
 
-        DeviceProfile MakeProfile(PixartBatteryMethod method, string path, int reportLen, bool useFeature) => new()
+        DeviceProfile MakeProfile(PixartBatteryMethod method, string path, int reportLen, bool useFeature,
+            string? siblingPath = null) => new()
         {
             CompositeKey = device.CompositeKey,
             DevicePath = path,
@@ -587,7 +772,8 @@ public class HidDeviceService : IHidDeviceService
             ModelName = device.ModelName,
             LastSeen = DateTime.UtcNow,
             Protocol = ChipProtocol.Pixart,
-            PixartMethod = method
+            PixartMethod = method,
+            SiblingDevicePath = siblingPath
         };
 
         // ── Feature report probes (requires MaxFeature > 0) ──
@@ -608,8 +794,34 @@ public class HidDeviceService : IHidDeviceService
                 return MakeProfile(PixartBatteryMethod.CandidateD, device.DevicePath, maxFeatureLen, true);
             }
 
+            // Candidate F: cross-interface request/response (col01 trigger → col05 input read).
+            // GetFeature on col01 RID 0x03 takes ~5s (receiver IS processing), RIDs 0x00-0x02
+            // fail instantly. The response goes to col05 as an input report.
+            var siblingInput = FindPixartSiblingInputDevice(hidDevice, device);
+            if (siblingInput != null)
+            {
+                _logger.LogInformation(
+                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate F (cross-interface) " +
+                    "trigger={TriggerPath} input={InputPath}...",
+                    device.VendorId, device.ProductId, device.DevicePath, siblingInput.DevicePath);
+
+                var resultF = TryPixartCandidateF(hidDevice, siblingInput, _logger);
+                if (resultF.Success && resultF.BatteryLevel >= 1)
+                {
+                    _logger.LogInformation(
+                        "[Pixart probe] candidate F returned battery={Level}, charging={Charging} — profile saved",
+                        resultF.BatteryLevel, resultF.IsCharging);
+                    return MakeProfile(PixartBatteryMethod.CandidateF, device.DevicePath, maxFeatureLen, true,
+                        siblingPath: siblingInput.DevicePath);
+                }
+            }
+            else
+            {
+                _logger.LogDebug("[Pixart probe] No sibling input interface found for candidate F");
+            }
+
             // Candidate A: SetFeature + GetFeature (PAW3395 command 0x11)
-            _logger.LogDebug("[Pixart probe] candidate D no result, trying candidate A...");
+            _logger.LogDebug("[Pixart probe] candidates D/F no result, trying candidate A...");
             try
             {
                 using var stream = hidDevice.Open();
@@ -941,6 +1153,32 @@ public class HidDeviceService : IHidDeviceService
                                 catch (Exception pex)
                                 {
                                     sb.AppendLine($"  Pixart Candidate D: FAILED ({pex.GetType().Name}: {pex.Message})");
+                                }
+                                // Candidate F: cross-interface (needs sibling col05)
+                                try
+                                {
+                                    // Build a temporary DeviceInfo for sibling lookup
+                                    var tempInfo = new DeviceInfo
+                                    {
+                                        VendorId = device.VendorID,
+                                        ProductId = device.ProductID,
+                                        DevicePath = device.DevicePath,
+                                        ModelName = SafeGetProductName(device)
+                                    };
+                                    var sibling = FindPixartSiblingInputDevice(device, tempInfo);
+                                    if (sibling != null)
+                                    {
+                                        var resultF = TryPixartCandidateF(device, sibling, _logger);
+                                        sb.AppendLine($"  Pixart Candidate F: {(resultF.Success ? $"battery={resultF.BatteryLevel}%, charging={resultF.IsCharging}" : "no valid response")} (sibling={sibling.DevicePath})");
+                                    }
+                                    else
+                                    {
+                                        sb.AppendLine("  Pixart Candidate F: no sibling input interface found");
+                                    }
+                                }
+                                catch (Exception pex)
+                                {
+                                    sb.AppendLine($"  Pixart Candidate F: FAILED ({pex.GetType().Name}: {pex.Message})");
                                 }
                                 try
                                 {
