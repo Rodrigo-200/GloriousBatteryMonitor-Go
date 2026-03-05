@@ -21,6 +21,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private bool _disposed;
     private bool _rescanRequested;
 
+    // Probe exhaustion: when known devices are present but all probe candidates fail,
+    // avoid re-entering "Connecting" state every poll cycle (which takes 15-20s per attempt
+    // and makes the UI appear stuck on "connecting"). Instead, stay NotConnected and
+    // retry the full probe chain less frequently.
+    private bool _probeExhausted;
+
     // Last valid (non-zero) battery level from a successful read.
     // Used to suppress transient 0% readings when the mouse is sleeping (Status 0xA4).
     private int _lastPositiveLevel;
@@ -47,6 +53,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private const int MaxEstimatedLevel = 99;     // Can't confirm 100% without real reading
 
     private static readonly TimeSpan ReconnectDebounce = TimeSpan.FromMilliseconds(900);
+    private static readonly TimeSpan ExhaustedProbeDebounce = TimeSpan.FromSeconds(60);
     private const int MaxConsecutiveFailuresBeforeReconnect = 3;
 
     public BatteryState CurrentState { get; private set; } = BatteryState.Disconnected;
@@ -151,6 +158,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _lastWiredPresent = false;
         _chargeStartTime = null;
         _chargeStartLevel = 0;
+        _probeExhausted = false;
     }
 
     private async Task PollingLoop(CancellationToken cancellationToken)
@@ -355,13 +363,19 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     {
         try
         {
-            // Debounce reconnection attempts
-            if (DateTime.UtcNow - _lastReconnectAttempt < ReconnectDebounce)
+            // Use longer debounce when all probe candidates have been exhausted,
+            // to avoid burning 15-20s per poll cycle on known-failing probes.
+            TimeSpan debounce = _probeExhausted ? ExhaustedProbeDebounce : ReconnectDebounce;
+            if (DateTime.UtcNow - _lastReconnectAttempt < debounce)
                 return;
 
             _lastReconnectAttempt = DateTime.UtcNow;
 
-            UpdateConnectionState(ConnectionState.Connecting);
+            // Only show "Connecting" on fresh probe attempts.
+            // After exhaustion, stay in NotConnected to avoid a misleading
+            // "connecting" → "not connected" loop every poll cycle.
+            if (!_probeExhausted)
+                UpdateConnectionState(ConnectionState.Connecting);
 
             // Try cached profiles first
             var savedProfiles = _storageService.LoadProfiles();
@@ -370,6 +384,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 var testResult = _hidDeviceService.ReadBattery(profile);
                 if (testResult.Success)
                 {
+                    _probeExhausted = false;
                     _logger.LogInformation("Reconnected using cached profile for {Model}", profile.ModelName);
                     _activeProfile = profile;
                     profile.LastSeen = DateTime.UtcNow;
@@ -385,6 +400,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 var profile = _hidDeviceService.ProbeDevice(device);
                 if (profile != null)
                 {
+                    _probeExhausted = false;
                     _logger.LogInformation("Discovered device: {Model} via probing", profile.ModelName);
                     _activeProfile = profile;
 
@@ -395,6 +411,17 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     _storageService.SaveProfiles(profiles);
                     return;
                 }
+            }
+
+            // If known devices were found but every probe candidate failed, mark exhausted
+            // so subsequent polls don't re-enter "Connecting" state and re-run the full chain.
+            if (devices.Count > 0 && !_probeExhausted)
+            {
+                _logger.LogWarning(
+                    "[MONITOR] Known device(s) found but no working probe candidate — " +
+                    "will retry in {Seconds}s (or on manual rescan)",
+                    (int)ExhaustedProbeDebounce.TotalSeconds);
+                _probeExhausted = true;
             }
 
             _logger.LogDebug("No Glorious devices found during enumeration");
