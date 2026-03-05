@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="GBM.Desktop.Controls.BatteryGauge"
+             Height="270">
+
+    <!-- Centered percentage overlay — arc is rendered in code-behind -->
+    <Panel>
+        <StackPanel HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="2"
+                    Margin="0,0,0,16">
+
+            <!-- Percentage number -->
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Center">
+                <TextBlock Name="PercentText"
+                           Text="{x:Static x:String.Empty}"
+                           FontSize="72"
+                           FontWeight="Bold"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           VerticalAlignment="Bottom" />
+                <TextBlock Name="PercentSuffix"
+                           Text="%"
+                           FontSize="26"
+                           FontWeight="Light"
+                           Foreground="{DynamicResource TextMutedBrush}"
+                           VerticalAlignment="Bottom"
+                           Margin="2,0,0,12" />
+            </StackPanel>
+
+            <!-- Charging bolt icon -->
+            <PathIcon Name="ChargingBolt"
+                      Width="18" Height="18"
+                      IsVisible="False"
+                      HorizontalAlignment="Center"
+                      Foreground="{DynamicResource AccentCyanBrush}"
+                      Data="M11,15H6L13,1V9H18L11,23V15Z" />
+
+        </StackPanel>
+    </Panel>
+
+</UserControl>

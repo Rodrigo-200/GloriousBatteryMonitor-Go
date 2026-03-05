@@ -1,45 +1,30 @@
-# Binaries
-*.exe
-*.dll
-*.so
-*.dylib
-
-# Test binary
-*.test
-
-# Output of the go coverage tool
-*.out
-
-# Go workspace file
-go.work
-
-# Build artifacts
+## .NET
 bin/
-dist/
-
-# IDE
+obj/
+*.user
+*.suo
+.vs/
 .vscode/
-.idea/
-*.swp
-*.swo
-*~
+TestResults/
 
-# OS
+## Publish output
+publish/
+out/
+releases/
+
+## NuGet
+*.nupkg
+packages/
+artifacts/
+
+## OS
 .DS_Store
 Thumbs.db
 
-# Logs
+## Logs
 *.log
 
-# Reference project (no longer needed)
-reference/
-
-# Old files
-battery.log
-GloriousMouseBattery.sln
-
-# Icon build files
-icon.syso
-
-# User data
-charge_data.json
+## Velopack local packaging
+*.nupkg
+*.delta
+RELEASES

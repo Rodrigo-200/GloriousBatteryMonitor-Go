@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:GBM.Desktop.ViewModels"
+        xmlns:views="using:GBM.Desktop.Views"
+        x:Class="GBM.Desktop.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Glorious Battery Monitor"
+        Width="420" Height="640"
+        MinWidth="380" MinHeight="560"
+        Icon="/Assets/app-icon.ico"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        FontFamily="Inter, Segoe UI, Helvetica, Arial, sans-serif"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="PreferSystemChrome"
+        ExtendClientAreaTitleBarHeightHint="-1"
+        WindowStartupLocation="CenterScreen">
+
+    <Panel>
+        <views:DashboardView DataContext="{Binding}" />
+        <views:SettingsView DataContext="{Binding}"
+                            IsVisible="{Binding IsSettingsOpen}" />
+
+        <!-- Invisible drag region at the top for window movement -->
+        <Border Name="TitleBar"
+                Height="44"
+                VerticalAlignment="Top"
+                Background="Transparent" />
+    </Panel>
+
+</Window>
