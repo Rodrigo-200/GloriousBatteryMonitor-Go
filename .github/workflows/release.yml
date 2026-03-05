@@ -70,7 +70,7 @@ jobs:
           --packDir publish/win-x64
           --mainExe GBM.Desktop.exe
           --packTitle "Glorious Battery Monitor"
-          --releaseDir releases/
+          --outputDir releases/
           --icon src/GBM.Desktop/Assets/app-icon.ico
 
       - name: Generate changelog from commits
@@ -85,5 +85,5 @@ jobs:
           --repoUrl https://github.com/${{ github.repository }}
           --token ${{ secrets.VELOPACK_GITHUB_TOKEN }}
           --tag ${{ steps.version.outputs.TAG }}
-          --releaseDir releases/
+          --inputDir releases/
           --releaseName "Glorious Battery Monitor ${{ steps.version.outputs.TAG }}"
