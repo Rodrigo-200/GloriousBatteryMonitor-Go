@@ -1,0 +1,92 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ══════════════════════════════════════════════════
+         GLORIOUS BATTERY MONITOR — DARK THEME
+         Accent: Electric Cyan #00F0FF
+         Background: Dark Charcoal #1B1C23
+         ══════════════════════════════════════════════════ -->
+
+    <!-- ── FluentTheme System Accent Override ── -->
+    <Color x:Key="SystemAccentColor">#00F0FF</Color>
+    <Color x:Key="SystemAccentColorDark1">#00C8D6</Color>
+    <Color x:Key="SystemAccentColorDark2">#00969E</Color>
+    <Color x:Key="SystemAccentColorDark3">#006468</Color>
+    <Color x:Key="SystemAccentColorLight1">#40F3FF</Color>
+    <Color x:Key="SystemAccentColorLight2">#80F7FF</Color>
+    <Color x:Key="SystemAccentColorLight3">#BFFBFF</Color>
+
+    <!-- ── Base Surfaces ── -->
+    <Color x:Key="WindowBackground">#1B1C23</Color>
+    <Color x:Key="Surface">#242530</Color>
+    <Color x:Key="SurfaceBorder">#33343F</Color>
+    <Color x:Key="SurfaceHover">#2D2E38</Color>
+    <Color x:Key="Overlay">#E61B1C23</Color>
+
+    <!-- ── Typography ── -->
+    <Color x:Key="TextPrimary">#E8E8EC</Color>
+    <Color x:Key="TextSecondary">#8A8A98</Color>
+    <Color x:Key="TextMuted">#50505E</Color>
+
+    <!-- ── Accent ── -->
+    <Color x:Key="AccentCyan">#00F0FF</Color>
+    <Color x:Key="AccentCyanDim">#122E32</Color>
+    <Color x:Key="AccentCyanHover">#33F3FF</Color>
+    <Color x:Key="AccentCyanPressed">#00BCC8</Color>
+
+    <!-- ── Battery Arc ── -->
+    <Color x:Key="BatteryGreen">#00F0FF</Color>
+    <Color x:Key="BatteryAmber">#FFAA00</Color>
+    <Color x:Key="BatteryRed">#FF3355</Color>
+    <Color x:Key="BatteryCharging">#00F0FF</Color>
+    <Color x:Key="BatteryDisconnected">#33343F</Color>
+
+    <!-- ── Gauge ── -->
+    <Color x:Key="GaugeTrack">#2A2B34</Color>
+
+    <!-- ── Status Badge ── -->
+    <Color x:Key="BadgeConnected">#122E32</Color>
+    <Color x:Key="BadgeConnectedText">#00F0FF</Color>
+    <Color x:Key="BadgeDisconnected">#2A2830</Color>
+    <Color x:Key="BadgeDisconnectedText">#8A8A98</Color>
+    <Color x:Key="BadgeCharging">#122E32</Color>
+    <Color x:Key="BadgeChargingText">#00F0FF</Color>
+    <Color x:Key="BadgeConnecting">#342E18</Color>
+    <Color x:Key="BadgeConnectingText">#FFAA00</Color>
+    <Color x:Key="BadgeLastKnown">#2A2B34</Color>
+    <Color x:Key="BadgeLastKnownText">#8A8A98</Color>
+    <Color x:Key="BadgeSleeping">#2A2830</Color>
+    <Color x:Key="BadgeSleepingText">#8A8A98</Color>
+
+    <!-- ── Toast ── -->
+    <Color x:Key="ToastBackground">#242530</Color>
+    <Color x:Key="ToastText">#E8E8EC</Color>
+
+    <!-- ══════════════════════════════════════════════════
+         BRUSHES
+         ══════════════════════════════════════════════════ -->
+
+    <!-- Base -->
+    <SolidColorBrush x:Key="WindowBackgroundBrush"  Color="{DynamicResource WindowBackground}" />
+    <SolidColorBrush x:Key="SurfaceBrush"           Color="{DynamicResource Surface}" />
+    <SolidColorBrush x:Key="SurfaceBorderBrush"     Color="{DynamicResource SurfaceBorder}" />
+    <SolidColorBrush x:Key="SurfaceHoverBrush"      Color="{DynamicResource SurfaceHover}" />
+    <SolidColorBrush x:Key="OverlayBrush"           Color="{DynamicResource Overlay}" />
+
+    <!-- Text -->
+    <SolidColorBrush x:Key="TextPrimaryBrush"       Color="{DynamicResource TextPrimary}" />
+    <SolidColorBrush x:Key="TextSecondaryBrush"     Color="{DynamicResource TextSecondary}" />
+    <SolidColorBrush x:Key="TextMutedBrush"         Color="{DynamicResource TextMuted}" />
+
+    <!-- Accent -->
+    <SolidColorBrush x:Key="AccentCyanBrush"        Color="{DynamicResource AccentCyan}" />
+    <SolidColorBrush x:Key="AccentCyanDimBrush"     Color="{DynamicResource AccentCyanDim}" />
+
+    <!-- Gauge -->
+    <SolidColorBrush x:Key="GaugeTrackBrush"        Color="{DynamicResource GaugeTrack}" />
+
+    <!-- Toast -->
+    <SolidColorBrush x:Key="ToastBackgroundBrush"   Color="{DynamicResource ToastBackground}" />
+    <SolidColorBrush x:Key="ToastTextBrush"         Color="{DynamicResource ToastText}" />
+
+</ResourceDictionary>
