@@ -714,6 +714,8 @@ public class HidDeviceService : IHidDeviceService
 
     /// <summary>
     /// CandidateF for ongoing reads — uses saved trigger and sibling device paths.
+    /// The GetFeature trigger only works once after device power-on, so ongoing reads
+    /// use CandidateG's write-trigger approach (SetFeature/Write payloads on col01).
     /// </summary>
     private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateF(
         DeviceProfile profile, ILogger logger)
@@ -730,7 +732,10 @@ public class HidDeviceService : IHidDeviceService
             return (false, 0, false);
         }
 
-        return TryPixartCandidateF(triggerDevice, inputDevice, logger);
+        // Use CandidateG write-trigger approach directly — the bare GetFeature trigger
+        // used during probing only works once after device power-on, then stops producing
+        // responses on col05. Write-based triggers are needed for repeated reads.
+        return TryPixartCandidateG(triggerDevice, inputDevice, logger);
     }
 
     // ── Candidate G: write-triggered cross-interface read ──
