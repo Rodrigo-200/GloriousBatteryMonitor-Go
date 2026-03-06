@@ -350,7 +350,7 @@ public partial class MainViewModel : ViewModelBase
             : $"{(int)elapsed.TotalDays}d ago";
     }
 
-    private void ShowToast(string message)
+    public void ShowToast(string message)
     {
         ToastMessage = message;
         IsToastVisible = true;

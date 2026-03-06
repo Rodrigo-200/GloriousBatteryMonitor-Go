@@ -60,6 +60,23 @@ public partial class App : Application
             _trayService = _serviceProvider.GetRequiredService<TrayIconService>();
             _trayService.Initialize();
 
+            // Wire notification events to UI display
+            var notificationService = _serviceProvider.GetRequiredService<INotificationService>();
+            notificationService.NotificationTriggered += (type, title, message) =>
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    vm.ShowToast($"{title}: {message}");
+
+                    // Bring window to front so the user sees the toast
+                    if (desktop.MainWindow is { } win)
+                    {
+                        win.Show();
+                        win.Activate();
+                    }
+                });
+            };
+
             // Start monitoring
             _ = vm.InitializeAsync();
 
