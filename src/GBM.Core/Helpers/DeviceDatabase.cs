@@ -37,6 +37,8 @@ public static class DeviceDatabase
         { (GloriousVendorId, 0x2016), ("Model I2", true) },
         // Alternate vendor - Model D2 Wireless
         { (AlternateVendorId, 0x824D), ("Model D2", true) },
+        // Alternate vendor - Model D2 Wired/Charging (PID changes when USB cable is plugged in)
+        { (AlternateVendorId, 0x824A), ("Model D2", false) },
     };
 
     public static bool IsKnownVendor(int vendorId) =>
