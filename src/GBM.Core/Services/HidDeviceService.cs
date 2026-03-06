@@ -688,20 +688,9 @@ public class HidDeviceService : IHidDeviceService
                         reportId,
                         BitConverter.ToString(responseBuf, 0, Math.Min(16, responseBuf.Length)));
 
-                    // Check bytes 1-10 for a plausible battery percentage
-                    for (int i = 1; i <= 10 && i < responseBuf.Length; i++)
-                    {
-                        if (responseBuf[i] >= 1 && responseBuf[i] <= 100)
-                        {
-                            bool charging = (i + 1 < responseBuf.Length && responseBuf[i + 1] == 0x01)
-                                         || (i - 1 >= 0 && responseBuf[i - 1] == 0x01);
-                            logger.LogInformation(
-                                "[Pixart CandidateF] plausible battery={Level} at byte[{Idx}], " +
-                                "charging={Charging}, trigger RID=0x{RID:X2}",
-                                responseBuf[i], i, charging, reportId);
-                            return (true, responseBuf[i], charging);
-                        }
-                    }
+                    var parsed = ParsePixartCol05Response(responseBuf, logger, $"CandidateF-RID0x{reportId:X2}");
+                    if (parsed.Success)
+                        return parsed;
 
                     // No plausible battery value — log and try next RID
                     logger.LogDebug(
@@ -762,6 +751,50 @@ public class HidDeviceService : IHidDeviceService
     // CandidateG uses explicit SetFeature/Write commands with known Glorious battery
     // request payloads on col01, then reads the response from col05.
 
+    /// <summary>
+    /// Parse a Pixart col05 input report for battery data.
+    /// Confirmed format from USB captures: 06 FB XX YY 00 00 00 00
+    ///   byte[0] = 0x06 (Report ID — required)
+    ///   byte[1] = 0xFB (signal quality / RSSI — required marker)
+    ///   byte[2] = battery percentage (1-100)
+    ///   byte[3] = ambiguous (0x01 seen in discharging captures — NOT a charge flag)
+    /// Charging is detected via PID change (0x824D wireless → 0x824A wired), not via byte[3].
+    /// </summary>
+    private static (bool Success, int BatteryLevel, bool IsCharging) ParsePixartCol05Response(
+        byte[] buf, ILogger logger, string triggerLabel)
+    {
+        if (buf.Length >= 3 && buf[0] == 0x06 && buf[1] == 0xFB)
+        {
+            int level = buf[2];
+            if (level >= 1 && level <= 100)
+            {
+                // Charging detection is via wired PID presence, not response bytes.
+                // byte[3] = 0x01 appears in discharging captures — do NOT use as charge flag.
+                logger.LogInformation(
+                    "[Pixart col05] battery={Level}%, trigger={Trigger}, raw={Bytes}",
+                    level, triggerLabel,
+                    BitConverter.ToString(buf, 0, Math.Min(8, buf.Length)));
+                return (true, level, false);
+            }
+        }
+
+        // Fallback: scan bytes 1-10 for plausible battery (for unknown response formats)
+        for (int i = 1; i <= 10 && i < buf.Length; i++)
+        {
+            if (buf[i] >= 1 && buf[i] <= 100)
+            {
+                logger.LogInformation(
+                    "[Pixart col05] plausible battery={Level} at byte[{Idx}] (non-standard format), " +
+                    "trigger={Trigger}, raw={Bytes}",
+                    buf[i], i, triggerLabel,
+                    BitConverter.ToString(buf, 0, Math.Min(16, buf.Length)));
+                return (true, buf[i], false);
+            }
+        }
+
+        return (false, 0, false);
+    }
+
     private static readonly byte[][] CandidateGPayloads =
     {
         // Known Glorious battery request (from Go version for Model D)
@@ -781,58 +814,54 @@ public class HidDeviceService : IHidDeviceService
             using var inputStream = inputDevice.Open();
             inputStream.ReadTimeout = 3000;
 
-            // Phase 0: Prime the receiver by sending GetFeature on RID 0x03.
-            // On the Model D2, this causes a ~5s processing delay in the receiver
-            // firmware which "wakes" the battery reporting path. Without this primer,
-            // the SetFeature payloads in Phase 1 produce no col05 response.
-            try
+            // Phase 0: Prime the receiver by sending GET_FEATURE RID=0x03 multiple times.
+            // USB captures show the first attempt produces no response — the response
+            // only arrives on col05 after the 2nd or 3rd GET_FEATURE. Each attempt
+            // causes ~5s processing in the receiver firmware.
+            const int primerAttempts = 3;
+            for (int attempt = 1; attempt <= primerAttempts; attempt++)
             {
-                using var primerStream = triggerDevice.Open();
-                primerStream.ReadTimeout = 6000;
-
-                var primerBuf = new byte[65];
-                primerBuf[0] = 0x03;
-
                 try
                 {
-                    primerStream.GetFeature(primerBuf);
-                    logger.LogDebug("[Pixart CandidateG] RID=0x03 primer GetFeature returned");
-                }
-                catch (IOException)
-                {
-                    logger.LogDebug("[Pixart CandidateG] RID=0x03 primer GetFeature threw IOException (expected)");
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug("[Pixart CandidateG] RID=0x03 primer failed: {Msg}", ex.Message);
-            }
+                    using var primerStream = triggerDevice.Open();
+                    primerStream.ReadTimeout = 6000;
 
-            // Drain any spurious report that the primer may have queued on col05
-            try
-            {
-                inputStream.ReadTimeout = 500;
-                var drain = inputStream.Read();
-                logger.LogDebug(
-                    "[Pixart CandidateG] primer drain col05: {Bytes}",
-                    BitConverter.ToString(drain, 0, Math.Min(16, drain.Length)));
+                    var primerBuf = new byte[65];
+                    primerBuf[0] = 0x03;
 
-                // Check the drained packet — it might already contain battery data
-                for (int i = 1; i <= 10 && i < drain.Length; i++)
-                {
-                    if (drain[i] >= 1 && drain[i] <= 100)
+                    try
                     {
-                        bool charging = (i + 1 < drain.Length && drain[i + 1] == 0x01)
-                                     || (i - 1 >= 0 && drain[i - 1] == 0x01);
-                        logger.LogInformation(
-                            "[Pixart CandidateG] plausible battery={Level} at byte[{Idx}], " +
-                            "charging={Charging}, trigger=RID0x03-primer",
-                            drain[i], i, charging);
-                        return (true, drain[i], charging);
+                        primerStream.GetFeature(primerBuf);
+                        logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} returned",
+                            attempt, primerAttempts);
+                    }
+                    catch (IOException)
+                    {
+                        logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} threw IOException (expected)",
+                            attempt, primerAttempts);
                     }
                 }
+                catch (Exception ex)
+                {
+                    logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} failed: {Msg}",
+                        attempt, primerAttempts, ex.Message);
+                }
+
+                // After each primer attempt, check if a response arrived on col05
+                try
+                {
+                    inputStream.ReadTimeout = 500;
+                    var drain = inputStream.Read();
+                    logger.LogDebug(
+                        "[Pixart CandidateG] primer attempt {Attempt} col05: {Bytes}",
+                        attempt, BitConverter.ToString(drain, 0, Math.Min(16, drain.Length)));
+
+                    var parsed = ParsePixartCol05Response(drain, logger, $"RID0x03-primer-attempt{attempt}");
+                    if (parsed.Success)
+                        return parsed;
+                }
+                catch { /* no queued report after this attempt — try again */ }
             }
-            catch { /* no queued report — that's fine */ }
 
             inputStream.ReadTimeout = 3000;
 
@@ -907,21 +936,10 @@ public class HidDeviceService : IHidDeviceService
                         payload.Length > 1 ? payload[1] : 0,
                         BitConverter.ToString(responseBuf, 0, Math.Min(16, responseBuf.Length)));
 
-                    // e. Check bytes 1-10 for a plausible battery percentage (1-100)
-                    for (int i = 1; i <= 10 && i < responseBuf.Length; i++)
-                    {
-                        if (responseBuf[i] >= 1 && responseBuf[i] <= 100)
-                        {
-                            bool charging = (i + 1 < responseBuf.Length && responseBuf[i + 1] == 0x01)
-                                         || (i - 1 >= 0 && responseBuf[i - 1] == 0x01);
-                            logger.LogInformation(
-                                "[Pixart CandidateG] plausible battery={Level} at byte[{Idx}], " +
-                                "charging={Charging}, payload[1]=0x{Cmd:X2}",
-                                responseBuf[i], i, charging,
-                                payload.Length > 1 ? payload[1] : 0);
-                            return (true, responseBuf[i], charging);
-                        }
-                    }
+                    var payloadLabel = $"payload0x{(payload.Length > 1 ? payload[1] : 0):X2}";
+                    var parsed = ParsePixartCol05Response(responseBuf, logger, payloadLabel);
+                    if (parsed.Success)
+                        return parsed;
 
                     logger.LogDebug(
                         "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 response had no plausible battery value",
