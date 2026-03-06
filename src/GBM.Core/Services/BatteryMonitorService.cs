@@ -613,19 +613,41 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         try
         {
             var profiles = _storageService.LoadProfiles();
-            if (profiles.Count > 0)
+            if (profiles.Count == 0)
+                return;
+
+            // Try the most recently seen profile first
+            var ordered = profiles.OrderByDescending(p => p.LastSeen);
+            foreach (var profile in ordered)
             {
-                // Try the most recently seen profile first
-                var ordered = profiles.OrderByDescending(p => p.LastSeen);
-                foreach (var profile in ordered)
+                // First check if the HID device is still present on the system
+                if (!_hidDeviceService.IsDevicePresent(profile))
                 {
-                    var result = _hidDeviceService.ReadBattery(profile);
-                    if (result.Success)
-                    {
-                        _logger.LogInformation("Restored cached profile for {Model}", profile.ModelName);
-                        _activeProfile = profile;
-                        return;
-                    }
+                    _logger.LogDebug(
+                        "Cached profile for {Model} not present on system, skipping", profile.ModelName);
+                    continue;
+                }
+
+                // Try an immediate battery read — works for Sinowealth and some Pixart methods
+                var result = _hidDeviceService.ReadBattery(profile);
+                if (result.Success)
+                {
+                    _logger.LogInformation("Restored cached profile for {Model} (read OK)", profile.ModelName);
+                    _activeProfile = profile;
+                    return;
+                }
+
+                // For Pixart passive-read methods (CandidateE, CandidateG), the device won't
+                // emit data on cold start until triggered. Trust the saved profile if the
+                // device path is present — the normal poll loop will handle reads.
+                if (profile.Protocol == ChipProtocol.Pixart)
+                {
+                    _logger.LogInformation(
+                        "Restored cached Pixart profile for {Model} (device present, " +
+                        "method={Method}, skipping initial read test)",
+                        profile.ModelName, profile.PixartMethod);
+                    _activeProfile = profile;
+                    return;
                 }
             }
         }
