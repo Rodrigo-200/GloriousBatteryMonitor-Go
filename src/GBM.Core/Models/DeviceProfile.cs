@@ -2,7 +2,7 @@ namespace GBM.Core.Models;
 
 public enum ChipProtocol { Sinowealth, Pixart }
 
-public enum PixartBatteryMethod { CandidateA, CandidateB, CandidateC, CandidateD, CandidateE, CandidateF }
+public enum PixartBatteryMethod { CandidateA, CandidateB, CandidateC, CandidateD, CandidateE, CandidateF, CandidateG }
 
 public class DeviceProfile
 {

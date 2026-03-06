@@ -320,6 +320,8 @@ public class HidDeviceService : IHidDeviceService
                 return TryPixartCandidateE(hidDevice, _logger);
             if (profile.PixartMethod == PixartBatteryMethod.CandidateF)
                 return TryPixartCandidateF(profile, _logger);
+            if (profile.PixartMethod == PixartBatteryMethod.CandidateG)
+                return TryPixartCandidateG(profile, _logger);
 
             using var stream = hidDevice.Open();
             stream.ReadTimeout = 2000;
@@ -731,6 +733,228 @@ public class HidDeviceService : IHidDeviceService
         return TryPixartCandidateF(triggerDevice, inputDevice, logger);
     }
 
+    // ── Candidate G: write-triggered cross-interface read ──
+    // CandidateF proved the device processes requests on col01 (5s delay on RID 0x03)
+    // but a bare GetFeature isn't enough to make it emit a response on col05.
+    // CandidateG uses explicit SetFeature/Write commands with known Glorious battery
+    // request payloads on col01, then reads the response from col05.
+
+    private static readonly byte[][] CandidateGPayloads =
+    {
+        // Known Glorious battery request (from Go version for Model D)
+        new byte[] { 0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x83 },
+        // Alternate with 0x83 command byte in position 1
+        new byte[] { 0x00, 0x83, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+        // Alternate with 0x12
+        new byte[] { 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    };
+
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateG(
+        HidDevice triggerDevice, HidDevice inputDevice, ILogger logger)
+    {
+        try
+        {
+            // Open col05 ONCE for reading — keep alive across all attempts.
+            using var inputStream = inputDevice.Open();
+            inputStream.ReadTimeout = 3000;
+
+            // Phase 1: Try each known payload via SetFeature then Write on col01
+            foreach (var payload in CandidateGPayloads)
+            {
+                try
+                {
+                    using var triggerStream = triggerDevice.Open();
+                    triggerStream.ReadTimeout = 2000;
+                    triggerStream.WriteTimeout = 2000;
+
+                    int featureLen = 0;
+                    try { featureLen = triggerDevice.GetMaxFeatureReportLength(); } catch { }
+                    if (featureLen <= 0) featureLen = 64;
+
+                    // Pad the payload to the feature report length
+                    var featureBuf = new byte[featureLen];
+                    Array.Copy(payload, 0, featureBuf, 0, Math.Min(payload.Length, featureBuf.Length));
+
+                    // a. Try SetFeature — swallow IOException (expected on this device)
+                    try
+                    {
+                        triggerStream.SetFeature(featureBuf);
+                        logger.LogDebug(
+                            "[Pixart CandidateG] payload[1]=0x{Cmd:X2} SetFeature sent",
+                            payload.Length > 1 ? payload[1] : 0);
+                    }
+                    catch (IOException)
+                    {
+                        logger.LogDebug(
+                            "[Pixart CandidateG] payload[1]=0x{Cmd:X2} SetFeature threw IOException (expected)",
+                            payload.Length > 1 ? payload[1] : 0);
+                    }
+
+                    // b. Try Write as output report — swallow IOException
+                    try
+                    {
+                        int outputLen = 0;
+                        try { outputLen = triggerDevice.GetMaxOutputReportLength(); } catch { }
+                        if (outputLen > 0)
+                        {
+                            var outputBuf = new byte[outputLen];
+                            Array.Copy(payload, 0, outputBuf, 0, Math.Min(payload.Length, outputBuf.Length));
+                            triggerStream.Write(outputBuf);
+                            logger.LogDebug(
+                                "[Pixart CandidateG] payload[1]=0x{Cmd:X2} Write sent",
+                                payload.Length > 1 ? payload[1] : 0);
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        logger.LogDebug(
+                            "[Pixart CandidateG] payload[1]=0x{Cmd:X2} Write threw IOException (expected)",
+                            payload.Length > 1 ? payload[1] : 0);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(
+                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} trigger failed: {Msg}",
+                        payload.Length > 1 ? payload[1] : 0, ex.Message);
+                }
+
+                // c. Read response from col05
+                try
+                {
+                    var responseBuf = inputStream.Read();
+
+                    logger.LogDebug(
+                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 raw: {Bytes}",
+                        payload.Length > 1 ? payload[1] : 0,
+                        BitConverter.ToString(responseBuf, 0, Math.Min(16, responseBuf.Length)));
+
+                    // e. Check bytes 1-10 for a plausible battery percentage (1-100)
+                    for (int i = 1; i <= 10 && i < responseBuf.Length; i++)
+                    {
+                        if (responseBuf[i] >= 1 && responseBuf[i] <= 100)
+                        {
+                            bool charging = (i + 1 < responseBuf.Length && responseBuf[i + 1] == 0x01)
+                                         || (i - 1 >= 0 && responseBuf[i - 1] == 0x01);
+                            logger.LogInformation(
+                                "[Pixart CandidateG] plausible battery={Level} at byte[{Idx}], " +
+                                "charging={Charging}, payload[1]=0x{Cmd:X2}",
+                                responseBuf[i], i, charging,
+                                payload.Length > 1 ? payload[1] : 0);
+                            return (true, responseBuf[i], charging);
+                        }
+                    }
+
+                    logger.LogDebug(
+                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 response had no plausible battery value",
+                        payload.Length > 1 ? payload[1] : 0);
+                }
+                catch (TimeoutException)
+                {
+                    logger.LogDebug(
+                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 read timed out (3000ms)",
+                        payload.Length > 1 ? payload[1] : 0);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(
+                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 read failed: {Msg}",
+                        payload.Length > 1 ? payload[1] : 0, ex.Message);
+                }
+            }
+
+            // Phase 2: Try sending RID 0x03 as a SetFeature with zeroed 64-byte buffer,
+            // then read col05.
+            try
+            {
+                using var triggerStream = triggerDevice.Open();
+                triggerStream.ReadTimeout = 2000;
+                triggerStream.WriteTimeout = 2000;
+
+                int featureLen = 0;
+                try { featureLen = triggerDevice.GetMaxFeatureReportLength(); } catch { }
+                if (featureLen <= 0) featureLen = 64;
+
+                var rid03Buf = new byte[featureLen];
+                rid03Buf[0] = 0x03;
+
+                try
+                {
+                    triggerStream.SetFeature(rid03Buf);
+                    logger.LogDebug("[Pixart CandidateG] RID=0x03 SetFeature sent");
+                }
+                catch (IOException)
+                {
+                    logger.LogDebug("[Pixart CandidateG] RID=0x03 SetFeature threw IOException (expected)");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug("[Pixart CandidateG] RID=0x03 trigger failed: {Msg}", ex.Message);
+            }
+
+            // Read response from col05 after the RID 0x03 SetFeature
+            try
+            {
+                inputStream.ReadTimeout = 6000; // RID 0x03 takes ~5s
+                var responseBuf = inputStream.Read();
+
+                logger.LogDebug(
+                    "[Pixart CandidateG] RID=0x03 col05 raw: {Bytes}",
+                    BitConverter.ToString(responseBuf, 0, Math.Min(16, responseBuf.Length)));
+
+                for (int i = 1; i <= 10 && i < responseBuf.Length; i++)
+                {
+                    if (responseBuf[i] >= 1 && responseBuf[i] <= 100)
+                    {
+                        bool charging = (i + 1 < responseBuf.Length && responseBuf[i + 1] == 0x01)
+                                     || (i - 1 >= 0 && responseBuf[i - 1] == 0x01);
+                        logger.LogInformation(
+                            "[Pixart CandidateG] plausible battery={Level} at byte[{Idx}], " +
+                            "charging={Charging}, trigger=RID0x03-SetFeature",
+                            responseBuf[i], i, charging);
+                        return (true, responseBuf[i], charging);
+                    }
+                }
+            }
+            catch (TimeoutException)
+            {
+                logger.LogDebug("[Pixart CandidateG] RID=0x03 col05 read timed out (6000ms)");
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug("[Pixart CandidateG] RID=0x03 col05 read failed: {Msg}", ex.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug("[Pixart CandidateG] failed to open streams: {Msg}", ex.Message);
+        }
+
+        return (false, 0, false);
+    }
+
+    /// <summary>
+    /// CandidateG for ongoing reads — uses saved trigger and sibling device paths.
+    /// </summary>
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateG(
+        DeviceProfile profile, ILogger logger)
+    {
+        if (string.IsNullOrEmpty(profile.SiblingDevicePath))
+            return (false, 0, false);
+
+        var triggerDevice = FindDeviceByPath(profile.DevicePath);
+        var inputDevice = FindDeviceByPath(profile.SiblingDevicePath);
+
+        if (triggerDevice == null || inputDevice == null)
+        {
+            logger.LogDebug("[Pixart CandidateG] Could not find trigger or input device for ongoing read");
+            return (false, 0, false);
+        }
+
+        return TryPixartCandidateG(triggerDevice, inputDevice, logger);
+    }
+
     private DeviceProfile? ProbeDevicePixart(HidDevice hidDevice, DeviceInfo device)
     {
         int maxFeatureLen = 0;
@@ -814,14 +1038,32 @@ public class HidDeviceService : IHidDeviceService
                     return MakeProfile(PixartBatteryMethod.CandidateF, device.DevicePath, maxFeatureLen, true,
                         siblingPath: siblingInput.DevicePath);
                 }
+
+                // Candidate G: write-triggered cross-interface (SetFeature/Write on col01 → read col05).
+                // CandidateF proved the device processes col01 requests but a bare GetFeature
+                // doesn't make it emit a response. CandidateG uses explicit write commands.
+                _logger.LogInformation(
+                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate G (write-trigger) " +
+                    "trigger={TriggerPath} input={InputPath}...",
+                    device.VendorId, device.ProductId, device.DevicePath, siblingInput.DevicePath);
+
+                var resultG = TryPixartCandidateG(hidDevice, siblingInput, _logger);
+                if (resultG.Success && resultG.BatteryLevel >= 1)
+                {
+                    _logger.LogInformation(
+                        "[Pixart probe] candidate G returned battery={Level}, charging={Charging} — profile saved",
+                        resultG.BatteryLevel, resultG.IsCharging);
+                    return MakeProfile(PixartBatteryMethod.CandidateG, device.DevicePath, maxFeatureLen, true,
+                        siblingPath: siblingInput.DevicePath);
+                }
             }
             else
             {
-                _logger.LogDebug("[Pixart probe] No sibling input interface found for candidate F");
+                _logger.LogDebug("[Pixart probe] No sibling input interface found for candidates F/G");
             }
 
             // Candidate A: SetFeature + GetFeature (PAW3395 command 0x11)
-            _logger.LogDebug("[Pixart probe] candidates D/F no result, trying candidate A...");
+            _logger.LogDebug("[Pixart probe] candidates D/F/G no result, trying candidate A...");
             try
             {
                 using var stream = hidDevice.Open();
@@ -1367,6 +1609,19 @@ public class HidDeviceService : IHidDeviceService
         {
             return null;
         }
+    }
+
+    public bool IsDevicePresent(DeviceProfile profile)
+    {
+        var device = FindDeviceByPath(profile.DevicePath);
+        if (device == null)
+            return false;
+
+        // For CandidateF/G, also verify the sibling input device exists
+        if (!string.IsNullOrEmpty(profile.SiblingDevicePath))
+            return FindDeviceByPath(profile.SiblingDevicePath) != null;
+
+        return true;
     }
 
     /// <summary>

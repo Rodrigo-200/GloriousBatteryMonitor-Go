@@ -193,18 +193,47 @@ public class StorageService : IStorageService
     {
         try
         {
-            if (!File.Exists(filePath))
+            string actualPath = filePath;
+
+            if (!File.Exists(actualPath))
             {
-                _logger.LogDebug("File not found for {Description}: {Path}", description, filePath);
-                return null;
+                // The atomic save writes to .tmp then renames. If the app crashed between
+                // deleting the original and renaming the temp file, the data survives in .tmp.
+                string tmpPath = filePath + ".tmp";
+                if (File.Exists(tmpPath))
+                {
+                    _logger.LogWarning(
+                        "{Description} not found at {Path} but .tmp exists — recovering from interrupted save",
+                        description, filePath);
+                    try
+                    {
+                        File.Move(tmpPath, filePath);
+                        actualPath = filePath;
+                    }
+                    catch (Exception moveEx)
+                    {
+                        _logger.LogWarning(moveEx,
+                            "Could not rename .tmp to primary path, reading .tmp directly");
+                        actualPath = tmpPath;
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("File not found for {Description}: {Path}", description, filePath);
+                    return null;
+                }
             }
 
-            string json = File.ReadAllText(filePath);
+            string json = File.ReadAllText(actualPath);
             var result = JsonSerializer.Deserialize(json, typeInfo);
 
             if (result == null)
             {
-                _logger.LogWarning("{Description} deserialized as null from {Path}", description, filePath);
+                _logger.LogWarning("{Description} deserialized as null from {Path}", description, actualPath);
+            }
+            else
+            {
+                _logger.LogDebug("{Description} loaded successfully from {Path}", description, actualPath);
             }
 
             return result;

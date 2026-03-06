@@ -8,6 +8,7 @@ public interface IHidDeviceService
     (bool Success, int BatteryLevel, bool IsCharging) ReadBattery(DeviceProfile profile);
     DeviceProfile? ProbeDevice(DeviceInfo device);
     bool IsWiredDevicePresent(string modelName);
+    bool IsDevicePresent(DeviceProfile profile);
     string GetHidDiagnostics();
     byte[]? CaptureRawReport(DeviceProfile profile);
 }
