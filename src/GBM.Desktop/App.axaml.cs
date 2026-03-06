@@ -99,6 +99,9 @@ public partial class App : Application
         var logPath = System.IO.Path.Combine(settingsPath, "debug.log");
         System.IO.Directory.CreateDirectory(settingsPath);
 
+        // Clear the log file on every startup so it only contains the current session
+        try { if (System.IO.File.Exists(logPath)) System.IO.File.Delete(logPath); } catch { }
+
         var serilogLogger = new LoggerConfiguration()
             .MinimumLevel.Debug()
             .WriteTo.File(logPath,
