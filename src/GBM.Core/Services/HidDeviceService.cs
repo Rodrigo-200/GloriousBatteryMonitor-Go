@@ -488,11 +488,29 @@ public class HidDeviceService : IHidDeviceService
                     reportId,
                     BitConverter.ToString(buf, 0, Math.Min(16, buf.Length)));
 
+                // Count non-zero data bytes (skip byte[0] which is the report ID echo)
+                int nonZeroCount = 0;
+                for (int j = 1; j < buf.Length; j++)
+                    if (buf[j] != 0) nonZeroCount++;
+
                 // Check every byte position 1-10 for a plausible battery level
                 for (int i = 1; i <= 10 && i < buf.Length; i++)
                 {
                     if (buf[i] >= 1 && buf[i] <= 100)
                     {
+                        // Reject false positives: if the response has very few non-zero bytes
+                        // (e.g. just "03-02-00-00-00..."), the matched value is likely a protocol
+                        // status byte, not a battery level. Real battery responses typically have
+                        // multiple non-zero bytes (status, charge flag, level, etc.).
+                        if (nonZeroCount <= 1)
+                        {
+                            logger.LogDebug(
+                                "[Pixart CandidateD] RID=0x{RID:X2} byte[{Idx}]=0x{Val:X2} rejected: " +
+                                "only {Count} non-zero data byte(s), likely protocol artifact",
+                                reportId, i, buf[i], nonZeroCount);
+                            break; // skip to next RID
+                        }
+
                         // Tentative hit — also check adjacent byte for charge flag
                         bool charging = (i + 1 < buf.Length && buf[i + 1] == 0x01)
                                      || (i - 1 >= 0 && buf[i - 1] == 0x01);
@@ -763,6 +781,61 @@ public class HidDeviceService : IHidDeviceService
             using var inputStream = inputDevice.Open();
             inputStream.ReadTimeout = 3000;
 
+            // Phase 0: Prime the receiver by sending GetFeature on RID 0x03.
+            // On the Model D2, this causes a ~5s processing delay in the receiver
+            // firmware which "wakes" the battery reporting path. Without this primer,
+            // the SetFeature payloads in Phase 1 produce no col05 response.
+            try
+            {
+                using var primerStream = triggerDevice.Open();
+                primerStream.ReadTimeout = 6000;
+
+                var primerBuf = new byte[65];
+                primerBuf[0] = 0x03;
+
+                try
+                {
+                    primerStream.GetFeature(primerBuf);
+                    logger.LogDebug("[Pixart CandidateG] RID=0x03 primer GetFeature returned");
+                }
+                catch (IOException)
+                {
+                    logger.LogDebug("[Pixart CandidateG] RID=0x03 primer GetFeature threw IOException (expected)");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug("[Pixart CandidateG] RID=0x03 primer failed: {Msg}", ex.Message);
+            }
+
+            // Drain any spurious report that the primer may have queued on col05
+            try
+            {
+                inputStream.ReadTimeout = 500;
+                var drain = inputStream.Read();
+                logger.LogDebug(
+                    "[Pixart CandidateG] primer drain col05: {Bytes}",
+                    BitConverter.ToString(drain, 0, Math.Min(16, drain.Length)));
+
+                // Check the drained packet — it might already contain battery data
+                for (int i = 1; i <= 10 && i < drain.Length; i++)
+                {
+                    if (drain[i] >= 1 && drain[i] <= 100)
+                    {
+                        bool charging = (i + 1 < drain.Length && drain[i + 1] == 0x01)
+                                     || (i - 1 >= 0 && drain[i - 1] == 0x01);
+                        logger.LogInformation(
+                            "[Pixart CandidateG] plausible battery={Level} at byte[{Idx}], " +
+                            "charging={Charging}, trigger=RID0x03-primer",
+                            drain[i], i, charging);
+                        return (true, drain[i], charging);
+                    }
+                }
+            }
+            catch { /* no queued report — that's fine */ }
+
+            inputStream.ReadTimeout = 3000;
+
             // Phase 1: Try each known payload via SetFeature then Write on col01
             foreach (var payload in CandidateGPayloads)
             {
@@ -866,69 +939,6 @@ public class HidDeviceService : IHidDeviceService
                         "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 read failed: {Msg}",
                         payload.Length > 1 ? payload[1] : 0, ex.Message);
                 }
-            }
-
-            // Phase 2: Try sending RID 0x03 as a SetFeature with zeroed 64-byte buffer,
-            // then read col05.
-            try
-            {
-                using var triggerStream = triggerDevice.Open();
-                triggerStream.ReadTimeout = 2000;
-                triggerStream.WriteTimeout = 2000;
-
-                int featureLen = 0;
-                try { featureLen = triggerDevice.GetMaxFeatureReportLength(); } catch { }
-                if (featureLen <= 0) featureLen = 64;
-
-                var rid03Buf = new byte[featureLen];
-                rid03Buf[0] = 0x03;
-
-                try
-                {
-                    triggerStream.SetFeature(rid03Buf);
-                    logger.LogDebug("[Pixart CandidateG] RID=0x03 SetFeature sent");
-                }
-                catch (IOException)
-                {
-                    logger.LogDebug("[Pixart CandidateG] RID=0x03 SetFeature threw IOException (expected)");
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug("[Pixart CandidateG] RID=0x03 trigger failed: {Msg}", ex.Message);
-            }
-
-            // Read response from col05 after the RID 0x03 SetFeature
-            try
-            {
-                inputStream.ReadTimeout = 6000; // RID 0x03 takes ~5s
-                var responseBuf = inputStream.Read();
-
-                logger.LogDebug(
-                    "[Pixart CandidateG] RID=0x03 col05 raw: {Bytes}",
-                    BitConverter.ToString(responseBuf, 0, Math.Min(16, responseBuf.Length)));
-
-                for (int i = 1; i <= 10 && i < responseBuf.Length; i++)
-                {
-                    if (responseBuf[i] >= 1 && responseBuf[i] <= 100)
-                    {
-                        bool charging = (i + 1 < responseBuf.Length && responseBuf[i + 1] == 0x01)
-                                     || (i - 1 >= 0 && responseBuf[i - 1] == 0x01);
-                        logger.LogInformation(
-                            "[Pixart CandidateG] plausible battery={Level} at byte[{Idx}], " +
-                            "charging={Charging}, trigger=RID0x03-SetFeature",
-                            responseBuf[i], i, charging);
-                        return (true, responseBuf[i], charging);
-                    }
-                }
-            }
-            catch (TimeoutException)
-            {
-                logger.LogDebug("[Pixart CandidateG] RID=0x03 col05 read timed out (6000ms)");
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug("[Pixart CandidateG] RID=0x03 col05 read failed: {Msg}", ex.Message);
             }
         }
         catch (Exception ex)
