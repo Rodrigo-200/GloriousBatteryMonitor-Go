@@ -34,15 +34,7 @@
 
 ## 📸 Screenshots
 
-<div align="center">
 
-### Main Interface
-![Main UI](docs/main-page.png)
-
-### Settings Page
-![Settings](docs/settings-page.png)
-
-</div>
 
 ---
 
