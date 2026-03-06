@@ -502,11 +502,11 @@ public class HidDeviceService : IHidDeviceService
                         // (e.g. just "03-02-00-00-00..."), the matched value is likely a protocol
                         // status byte, not a battery level. Real battery responses typically have
                         // multiple non-zero bytes (status, charge flag, level, etc.).
-                        if (nonZeroCount <= 1)
+                        if (nonZeroCount <= 2)
                         {
                             logger.LogDebug(
                                 "[Pixart CandidateD] RID=0x{RID:X2} byte[{Idx}]=0x{Val:X2} rejected: " +
-                                "only {Count} non-zero data byte(s), likely protocol artifact",
+                                "only {Count} non-zero data byte(s), likely protocol/firmware status",
                                 reportId, i, buf[i], nonZeroCount);
                             break; // skip to next RID
                         }
@@ -1018,27 +1018,20 @@ public class HidDeviceService : IHidDeviceService
         // ── Feature report probes (requires MaxFeature > 0) ──
         if (maxFeatureLen > 0)
         {
-            // Candidate D first: GetFeature-only (no SetFeature write).
-            // SetFeature is known-rejected on 0x093A:0x824D col01.
-            _logger.LogInformation(
-                "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate D (GetFeature-only) on {Path}...",
-                device.VendorId, device.ProductId, device.DevicePath);
-
-            var resultD = TryPixartCandidateD(hidDevice, _logger);
-            if (resultD.Success && resultD.BatteryLevel >= 1)
-            {
-                _logger.LogInformation(
-                    "[Pixart probe] candidate D returned battery={Level}, charging={Charging} — profile saved",
-                    resultD.BatteryLevel, resultD.IsCharging);
-                return MakeProfile(PixartBatteryMethod.CandidateD, device.DevicePath, maxFeatureLen, true);
-            }
-
-            // Candidate F: cross-interface request/response (col01 trigger → col05 input read).
-            // GetFeature on col01 RID 0x03 takes ~5s (receiver IS processing), RIDs 0x00-0x02
-            // fail instantly. The response goes to col05 as an input report.
+            // Check for col05 sibling early — if present, skip CandidateD entirely.
+            // On split-interface devices (col01 cmd + col05 input), GetFeature on col01
+            // returns firmware status bytes (e.g. 03-08-02-00...), not battery data.
+            // Real battery data only comes through col05 via write-triggered payloads.
             var siblingInput = FindPixartSiblingInputDevice(hidDevice, device);
+
             if (siblingInput != null)
             {
+                _logger.LogInformation(
+                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — col05 sibling found, skipping CandidateD " +
+                    "(GetFeature returns firmware status, not battery on split-interface devices)",
+                    device.VendorId, device.ProductId);
+
+                // Candidate F: cross-interface request/response (col01 trigger → col05 input read).
                 _logger.LogInformation(
                     "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate F (cross-interface) " +
                     "trigger={TriggerPath} input={InputPath}...",
@@ -1055,8 +1048,6 @@ public class HidDeviceService : IHidDeviceService
                 }
 
                 // Candidate G: write-triggered cross-interface (SetFeature/Write on col01 → read col05).
-                // CandidateF proved the device processes col01 requests but a bare GetFeature
-                // doesn't make it emit a response. CandidateG uses explicit write commands.
                 _logger.LogInformation(
                     "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate G (write-trigger) " +
                     "trigger={TriggerPath} input={InputPath}...",
@@ -1074,7 +1065,21 @@ public class HidDeviceService : IHidDeviceService
             }
             else
             {
+                // No col05 sibling — CandidateD is the only feature-report-only option.
                 _logger.LogDebug("[Pixart probe] No sibling input interface found for candidates F/G");
+
+                _logger.LogInformation(
+                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate D (GetFeature-only) on {Path}...",
+                    device.VendorId, device.ProductId, device.DevicePath);
+
+                var resultD = TryPixartCandidateD(hidDevice, _logger);
+                if (resultD.Success && resultD.BatteryLevel >= 1)
+                {
+                    _logger.LogInformation(
+                        "[Pixart probe] candidate D returned battery={Level}, charging={Charging} — profile saved",
+                        resultD.BatteryLevel, resultD.IsCharging);
+                    return MakeProfile(PixartBatteryMethod.CandidateD, device.DevicePath, maxFeatureLen, true);
+                }
             }
 
             // Candidate A: SetFeature + GetFeature (PAW3395 command 0x11)

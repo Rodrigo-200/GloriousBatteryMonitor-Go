@@ -637,10 +637,14 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     return;
                 }
 
-                // For Pixart passive-read methods (CandidateE, CandidateG), the device won't
-                // emit data on cold start until triggered. Trust the saved profile if the
-                // device path is present — the normal poll loop will handle reads.
-                if (profile.Protocol == ChipProtocol.Pixart)
+                // For Pixart passive-read methods (CandidateE, CandidateF, CandidateG), the
+                // device won't emit data on cold start until triggered. Trust the saved
+                // profile if the device path is present — the normal poll loop will handle reads.
+                // Do NOT trust CandidateD: it's synchronous GetFeature, so if ReadBattery
+                // failed above it means the response was rejected (false positive filter).
+                // Letting CandidateD fall through forces a re-probe that discovers F/G.
+                if (profile.Protocol == ChipProtocol.Pixart
+                    && profile.PixartMethod != PixartBatteryMethod.CandidateD)
                 {
                     _logger.LogInformation(
                         "Restored cached Pixart profile for {Model} (device present, " +
@@ -649,6 +653,11 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     _activeProfile = profile;
                     return;
                 }
+
+                _logger.LogDebug(
+                    "Cached profile for {Model} (method={Method}) failed read and not eligible " +
+                    "for cold-start trust, will re-probe",
+                    profile.ModelName, profile.PixartMethod);
             }
         }
         catch (Exception ex)
