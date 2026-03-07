@@ -49,6 +49,9 @@ public partial class App : Application
             ApplyTheme(settingsService.Current.Theme);
             settingsService.SettingsChanged += s => ApplyTheme(s.Theme);
 
+            // Prevent auto-shutdown when we close the splash window
+            desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
+
             // Show splash screen immediately
             var splash = new SplashWindow();
             desktop.MainWindow = splash;
@@ -131,17 +134,18 @@ public partial class App : Application
 
             // Switch from splash to main window
             desktop.MainWindow = mainWindow;
+            mainWindow.Show();
+            splash.Close();
 
+            // Now that the main window is the active window, switch to normal
+            // shutdown mode so closing it will exit the app
+            desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
+
+            // Hide after the transition if start-minimized is enabled
             if (settingsService.Current.StartMinimized)
             {
                 mainWindow.Hide();
             }
-            else
-            {
-                mainWindow.Show();
-            }
-
-            splash.Close();
 
             // Start monitoring
             _ = vm.InitializeAsync();
@@ -158,6 +162,7 @@ public partial class App : Application
                 desktop.MainWindow = mainWindow;
                 mainWindow.Show();
                 splash.Close();
+                desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
 
                 _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
                 _trayService.Initialize();
