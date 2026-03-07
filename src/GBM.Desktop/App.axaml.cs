@@ -89,7 +89,11 @@ public partial class App : Application
                         bool applied = await updateService.DownloadAndApplyUpdateAsync(progress);
                         if (applied)
                         {
-                            // Velopack restarts the app — we won't reach here
+                            // Velopack updater is waiting for us to exit,
+                            // then it will apply the update silently and restart.
+                            splash.SetStatus("Applying update...");
+                            await Task.Delay(500);
+                            desktop.Shutdown();
                             return;
                         }
                         // Download/apply failed — continue to normal launch
