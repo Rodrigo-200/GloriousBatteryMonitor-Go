@@ -169,6 +169,11 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         // Seed estimation service with historical rates from disk
         SeedHistoricalRates();
 
+        // Check if USB cable is already plugged in at startup (PID 0x824A present).
+        // Without this, the wired-presence transition only fires on hot-plug events,
+        // so restarting the app while charging would miss the cable.
+        SeedWiredPresenceOnStartup();
+
         // Poll immediately on startup — don't wait for the first timer tick
         await PollOnceAsync(cancellationToken).ConfigureAwait(false);
 
@@ -281,6 +286,34 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 if (result.Success)
                 {
                     _consecutiveFailures = 0;
+
+                    // D2 returns a status packet (e.g. 03-08-02-00) instead of battery %
+                    // when the USB cable is plugged in. The byte that looks like a battery
+                    // level (0x08 = 8%) is actually a mode/status byte. Guard against this
+                    // by re-checking wired presence when the reading looks implausibly low.
+                    if (result.BatteryLevel < 10 && _lastPositiveLevel > 0)
+                    {
+                        bool wiredNow = _hidDeviceService.IsWiredDevicePresent(modelName);
+                        if (wiredNow)
+                        {
+                            _logger.LogDebug(
+                                "[D2] Ignoring suspicious low reading ({Raw}%) while USB cable present " +
+                                "— using last known level {Last}%",
+                                result.BatteryLevel, _lastPositiveLevel);
+                            ProcessSuccessfulRead(_lastPositiveLevel, isCharging: true);
+
+                            // Also fix up wired tracking state so subsequent polls use the estimate path
+                            if (!_lastWiredPresent)
+                            {
+                                _lastWiredPresent = true;
+                                _chargeStartTime = DateTime.UtcNow;
+                                _chargeStartLevel = _lastPositiveLevel;
+                            }
+
+                            return Task.CompletedTask;
+                        }
+                    }
+
                     ProcessSuccessfulRead(result.BatteryLevel, isCharging: false);
                 }
                 else
@@ -684,6 +717,58 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to seed historical rates from storage");
+        }
+    }
+
+    /// <summary>
+    /// On startup, detect if the USB cable (PID 0x824A) is already plugged in.
+    /// Seeds _lastWiredPresent, _chargeStartTime, and _chargeStartLevel so the
+    /// first PollOnceAsync correctly enters the charging path with a valid baseline.
+    /// </summary>
+    private void SeedWiredPresenceOnStartup()
+    {
+        try
+        {
+            string? modelName = _activeProfile?.ModelName;
+            if (string.IsNullOrEmpty(modelName))
+                return;
+
+            bool wiredPresent = _hidDeviceService.IsWiredDevicePresent(modelName);
+            if (!wiredPresent)
+                return;
+
+            _logger.LogInformation(
+                "[D2] PID=0x824A detected on startup — USB cable is plugged in");
+            _lastWiredPresent = true;
+
+            // Seed charge baseline from persisted data so EstimateChargingLevel
+            // has a starting point instead of returning 0%.
+            string deviceKey = _activeProfile?.CompositeKey ?? modelName;
+            var storedData = _storageService.GetDeviceChargeData(deviceKey);
+            int baseline = storedData?.LastKnownLevel ?? 0;
+
+            if (baseline > 0)
+            {
+                _lastPositiveLevel = baseline;
+                _chargeStartLevel = baseline;
+                _chargeStartTime = storedData?.LastChargeTime ?? DateTime.UtcNow;
+                _logger.LogInformation(
+                    "[D2] Seeded charge baseline from storage: {Level}%, chargeStart={Start}",
+                    baseline, _chargeStartTime);
+            }
+            else
+            {
+                // No stored level — we'll report charging with 0% until real data arrives.
+                _chargeStartTime = DateTime.UtcNow;
+                _chargeStartLevel = 0;
+                _logger.LogWarning(
+                    "[D2] USB cable present on startup but no stored battery baseline — " +
+                    "charge estimate will start at 0%");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to seed wired presence on startup");
         }
     }
 

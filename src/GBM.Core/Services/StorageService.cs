@@ -224,7 +224,21 @@ public class StorageService : IStorageService
                 }
             }
 
-            string json = File.ReadAllText(actualPath);
+            // Retry read in case the file is briefly locked by the atomic save (Delete+Move)
+            string json = "";
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    json = File.ReadAllText(actualPath);
+                    break;
+                }
+                catch (IOException) when (attempt < 3)
+                {
+                    Thread.Sleep(50 * attempt);
+                }
+            }
+
             var result = JsonSerializer.Deserialize(json, typeInfo);
 
             if (result == null)
@@ -255,29 +269,40 @@ public class StorageService : IStorageService
     private void SaveToFile<T>(string filePath, T data,
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo, string description)
     {
-        try
+        string json = JsonSerializer.Serialize(data, typeInfo);
+        string directory = Path.GetDirectoryName(filePath)!;
+        Directory.CreateDirectory(directory);
+        string tempPath = filePath + ".tmp";
+
+        // Retry loop: the atomic Delete+Move can race with antivirus or Windows
+        // Search Indexer holding a brief lock on the file, causing IOException.
+        const int maxRetries = 3;
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
-            string directory = Path.GetDirectoryName(filePath)!;
-            Directory.CreateDirectory(directory);
-
-            string json = JsonSerializer.Serialize(data, typeInfo);
-
-            // Atomic write: write to temp file, then rename
-            string tempPath = filePath + ".tmp";
-            File.WriteAllText(tempPath, json);
-
-            if (File.Exists(filePath))
+            try
             {
-                File.Delete(filePath);
+                File.WriteAllText(tempPath, json);
+
+                if (File.Exists(filePath))
+                    File.Delete(filePath);
+
+                File.Move(tempPath, filePath);
+
+                _logger.LogDebug("{Description} saved to {Path}", description, filePath);
+                return;
             }
-
-            File.Move(tempPath, filePath);
-
-            _logger.LogDebug("{Description} saved to {Path}", description, filePath);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to save {Description} to {Path}", description, filePath);
+            catch (IOException ex) when (attempt < maxRetries)
+            {
+                _logger.LogDebug(
+                    "IOException saving {Description} (attempt {Attempt}/{Max}): {Msg}",
+                    description, attempt, maxRetries, ex.Message);
+                Thread.Sleep(50 * attempt); // 50ms, 100ms backoff
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save {Description} to {Path}", description, filePath);
+                return;
+            }
         }
     }
 
