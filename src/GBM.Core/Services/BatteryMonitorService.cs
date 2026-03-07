@@ -45,6 +45,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private DateTime? _chargeStartTime;
     private int _chargeStartLevel;
 
+    // Post-disconnect settling: when the USB cable is unplugged, the device stops
+    // responding to GetFeature for a few seconds while it transitions back to wireless.
+    // Skip polling during this window to avoid accumulating false failures.
+    private DateTime? _cableDisconnectTime;
+    private static readonly TimeSpan PostDisconnectSettlingDelay = TimeSpan.FromSeconds(5);
+
     // Li-ion charge curve constants (typical for 500-700mAh gaming mouse cells)
     private const double CcRatePerHour = 60.0;   // CC phase (<80%): 60%/hr
     private const double CvRateMaxPerHour = 60.0; // CV phase start rate at 80%
@@ -165,6 +171,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _lastWiredPresent = false;
         _chargeStartTime = null;
         _chargeStartLevel = 0;
+        _cableDisconnectTime = null;
         _probeExhausted = false;
     }
 
@@ -273,10 +280,16 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 else if (!wiredPresent)
                 {
                     // Cable unplugged — clear charge tracking.
-                    // CandidateF on PID=0x824D resumes naturally on the next poll tick.
+                    // The device needs a few seconds to settle back into wireless mode
+                    // before it will respond to GetFeature again. Record the disconnect
+                    // time so PollOnceAsync can skip reads during the settling period.
                     _chargeStartTime = null;
                     _chargeStartLevel = 0;
                     _consecutiveFailures = 0;
+                    _cableDisconnectTime = DateTime.UtcNow;
+                    _logger.LogInformation(
+                        "[MONITOR] USB cable disconnected for {Model} — resuming wireless polling after {Delay}s settling delay",
+                        modelName, PostDisconnectSettlingDelay.TotalSeconds);
                 }
 
                 _lastWiredPresent = wiredPresent;
@@ -284,6 +297,9 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
             if (wiredPresent)
             {
+                // Clear settling delay if cable is plugged back in.
+                _cableDisconnectTime = null;
+
                 // Charging: estimate battery level from Li-ion charge curve model.
                 // The wireless dongle returns 0% (mouse sleeping on RF) and the wired
                 // device's voltage-based reading is inflated, so we model it instead.
@@ -293,6 +309,24 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             }
             else
             {
+                // Post-disconnect settling: skip polling while the device transitions
+                // back to wireless mode. Report last known level with IsCharging=false.
+                if (_cableDisconnectTime.HasValue &&
+                    DateTime.UtcNow - _cableDisconnectTime.Value < PostDisconnectSettlingDelay)
+                {
+                    _logger.LogDebug(
+                        "[MONITOR] Skipping poll — post-disconnect settling ({Elapsed:F1}s / {Delay}s)",
+                        (DateTime.UtcNow - _cableDisconnectTime.Value).TotalSeconds,
+                        PostDisconnectSettlingDelay.TotalSeconds);
+                    // Keep state as Connected with last known level, just not charging
+                    if (_lastPositiveLevel > 0)
+                        ProcessSuccessfulRead(_lastPositiveLevel, isCharging: false);
+                    return Task.CompletedTask;
+                }
+
+                // Clear the settling flag once the window has elapsed
+                _cableDisconnectTime = null;
+
                 // Normal wireless mode — read from dongle.
                 var result = _hidDeviceService.ReadBattery(_activeProfile);
                 if (result.Success)
