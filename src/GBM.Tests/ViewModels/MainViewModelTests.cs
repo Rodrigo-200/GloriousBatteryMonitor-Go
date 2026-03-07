@@ -40,9 +40,7 @@ public class MainViewModelTests
         settings.NotificationsEnabled.Should().BeFalse();
         settings.LowBatteryThreshold.Should().Be(20);
         settings.CriticalBatteryThreshold.Should().Be(10);
-        settings.SafeHidMode.Should().BeTrue();
         settings.ShowPercentageOnTrayIcon.Should().BeFalse();
-        settings.NonIntrusiveMode.Should().BeFalse();
         settings.Theme.Should().Be("system");
     }
 

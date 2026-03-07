@@ -49,8 +49,6 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty] private int _refreshInterval = 5;
     [ObservableProperty] private int _lowThreshold = 20;
     [ObservableProperty] private int _criticalThreshold = 10;
-    [ObservableProperty] private bool _nonIntrusiveMode;
-    [ObservableProperty] private bool _safeHidMode = true;
     [ObservableProperty] private bool _isAdvancedExpanded;
     [ObservableProperty] private bool _isDevToolsExpanded;
 
@@ -161,8 +159,6 @@ public partial class MainViewModel : ViewModelBase
         RefreshInterval = s.RefreshIntervalSeconds;
         LowThreshold = s.LowBatteryThreshold;
         CriticalThreshold = s.CriticalBatteryThreshold;
-        NonIntrusiveMode = s.NonIntrusiveMode;
-        SafeHidMode = s.SafeHidMode;
         CurrentTheme = s.Theme;
         IsDarkTheme = s.Theme == "dark";
     }
@@ -192,8 +188,6 @@ public partial class MainViewModel : ViewModelBase
             RefreshIntervalSeconds = Math.Clamp(RefreshInterval, 1, 60),
             LowBatteryThreshold = Math.Clamp(LowThreshold, 5, 50),
             CriticalBatteryThreshold = Math.Clamp(CriticalThreshold, 5, 30),
-            NonIntrusiveMode = NonIntrusiveMode,
-            SafeHidMode = SafeHidMode,
             Theme = CurrentTheme
         };
         _settingsService.Save(settings);

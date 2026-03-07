@@ -10,9 +10,7 @@ public class AppSettings
     public bool NotificationsEnabled { get; set; } = false;
     public int LowBatteryThreshold { get; set; } = 20;
     public int CriticalBatteryThreshold { get; set; } = 10;
-    public bool SafeHidMode { get; set; } = true;
     public bool ShowPercentageOnTrayIcon { get; set; } = false;
-    public bool NonIntrusiveMode { get; set; } = false;
     public string Theme { get; set; } = "system";
 
     public AppSettings Clone() => new()
@@ -23,9 +21,7 @@ public class AppSettings
         NotificationsEnabled = NotificationsEnabled,
         LowBatteryThreshold = LowBatteryThreshold,
         CriticalBatteryThreshold = CriticalBatteryThreshold,
-        SafeHidMode = SafeHidMode,
         ShowPercentageOnTrayIcon = ShowPercentageOnTrayIcon,
-        NonIntrusiveMode = NonIntrusiveMode,
         Theme = Theme
     };
 }

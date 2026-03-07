@@ -141,9 +141,9 @@ public class HidDeviceService : IHidDeviceService
     {
         try
         {
-            if (_settingsService.Current.SafeHidMode && !IsWhitelistedDevice(profile))
+            if (!IsWhitelistedDevice(profile))
             {
-                _logger.LogWarning("[HID] SafeHidMode: device {Key} not whitelisted, skipping",
+                _logger.LogWarning("[HID] Device {Key} not whitelisted, skipping",
                     profile.CompositeKey);
                 return (false, 0, false);
             }
@@ -310,7 +310,7 @@ public class HidDeviceService : IHidDeviceService
     {
         try
         {
-            if (_settingsService.Current.SafeHidMode && !IsWhitelistedDevice(profile))
+            if (!IsWhitelistedDevice(profile))
                 return (false, 0, false);
 
             var hidDevice = FindDeviceByPath(profile.DevicePath);

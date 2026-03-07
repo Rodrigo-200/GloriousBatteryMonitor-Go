@@ -129,30 +129,6 @@
                                                    FormatString="0" />
                                 </Grid>
 
-                                <!-- Non-intrusive Mode -->
-                                <Grid ColumnDefinitions="*,Auto">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Text="Non-intrusive Mode" FontSize="13" FontWeight="Medium"
-                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock Text="Skip HID writes" FontSize="11"
-                                                   Foreground="{DynamicResource TextMutedBrush}" />
-                                    </StackPanel>
-                                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding NonIntrusiveMode}"
-                                                  VerticalAlignment="Center" />
-                                </Grid>
-
-                                <!-- Safe HID Mode -->
-                                <Grid ColumnDefinitions="*,Auto">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Text="Safe HID Mode" FontSize="13" FontWeight="Medium"
-                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock Text="Only access known Glorious devices" FontSize="11"
-                                                   Foreground="{DynamicResource TextMutedBrush}"
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding SafeHidMode}"
-                                                  VerticalAlignment="Center" />
-                                </Grid>
                             </StackPanel>
                         </Expander>
 

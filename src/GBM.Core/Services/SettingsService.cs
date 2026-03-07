@@ -134,29 +134,7 @@ public class SettingsService : ISettingsService
 
     private void ApplyEnvironmentOverrides()
     {
-        try
-        {
-            string? safeMode = Environment.GetEnvironmentVariable("GBM_SAFE_MODE");
-            if (!string.IsNullOrEmpty(safeMode))
-            {
-                if (safeMode.Equals("1", StringComparison.Ordinal) ||
-                    safeMode.Equals("true", StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogInformation("GBM_SAFE_MODE environment variable detected. Forcing SafeHidMode=true.");
-                    _current.SafeHidMode = true;
-                }
-                else if (safeMode.Equals("0", StringComparison.Ordinal) ||
-                         safeMode.Equals("false", StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogInformation("GBM_SAFE_MODE environment variable detected. Forcing SafeHidMode=false.");
-                    _current.SafeHidMode = false;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to read GBM_SAFE_MODE environment variable");
-        }
+        // Reserved for future environment variable overrides.
     }
 
     private static string ComputeAppDataPath()
