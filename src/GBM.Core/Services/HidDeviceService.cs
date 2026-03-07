@@ -1160,6 +1160,15 @@ public class HidDeviceService : IHidDeviceService
     {
         try
         {
+            // Wired-only PIDs (e.g. 0x824A) are charging-presence indicators — they
+            // expose HID interfaces but carry no battery data. Skip them entirely.
+            if (!device.IsWireless)
+            {
+                _logger.LogDebug("[HID] Skipping wired/charging-only PID 0x{PID:X4} for {Model}",
+                    device.ProductId, device.ModelName);
+                return null;
+            }
+
             var hidDevice = FindDeviceByPath(device.DevicePath);
             if (hidDevice == null)
             {
