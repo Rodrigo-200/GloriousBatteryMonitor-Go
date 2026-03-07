@@ -11,6 +11,10 @@ public class HidDeviceService : IHidDeviceService
     private readonly ILogger<HidDeviceService> _logger;
     private readonly ISettingsService _settingsService;
 
+    // Suppress repeated "Wired device detected" log — only log on first detection,
+    // then suppress until the wired device disappears and reappears.
+    private bool _wiredDeviceLoggedOnce;
+
     // Glorious/Sinowealth battery query command placed after the Report ID byte.
     // Wire format: [ReportID] [0] [0] [DevSel=0x02] [CmdType=0x02] [0] [Func=0x83]
     // DevSel 0x02 = wireless mouse via dongle.
@@ -721,8 +725,8 @@ public class HidDeviceService : IHidDeviceService
 
     /// <summary>
     /// CandidateF for ongoing reads — uses saved trigger and sibling device paths.
-    /// The GetFeature trigger only works once after device power-on, so ongoing reads
-    /// use CandidateG's write-trigger approach (SetFeature/Write payloads on col01).
+    /// Reuses the same GetFeature cross-interface approach as the initial probe:
+    /// trigger GetFeature on col01, read the response from col05.
     /// </summary>
     private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateF(
         DeviceProfile profile, ILogger logger)
@@ -739,10 +743,7 @@ public class HidDeviceService : IHidDeviceService
             return (false, 0, false);
         }
 
-        // Use CandidateG write-trigger approach directly — the bare GetFeature trigger
-        // used during probing only works once after device power-on, then stops producing
-        // responses on col05. Write-based triggers are needed for repeated reads.
-        return TryPixartCandidateG(triggerDevice, inputDevice, logger);
+        return TryPixartCandidateF(triggerDevice, inputDevice, logger);
     }
 
     // ── Candidate G: write-triggered cross-interface read ──
@@ -1332,8 +1333,12 @@ public class HidDeviceService : IHidDeviceService
                 {
                     if (vid == wiredVid && pid == wiredPid)
                     {
-                        _logger.LogDebug("[HID] Wired device detected for {Model}: VID=0x{VID:X4} PID=0x{PID:X4}",
-                            modelName, vid, pid);
+                        if (!_wiredDeviceLoggedOnce)
+                        {
+                            _logger.LogDebug("[HID] Wired device detected for {Model}: VID=0x{VID:X4} PID=0x{PID:X4}",
+                                modelName, vid, pid);
+                            _wiredDeviceLoggedOnce = true;
+                        }
                         return true;
                     }
                 }
@@ -1344,6 +1349,8 @@ public class HidDeviceService : IHidDeviceService
             _logger.LogDebug(ex, "[HID] Error checking for wired device presence");
         }
 
+        // Wired device not found — reset the log suppression so the next appearance is logged.
+        _wiredDeviceLoggedOnce = false;
         return false;
     }
 
