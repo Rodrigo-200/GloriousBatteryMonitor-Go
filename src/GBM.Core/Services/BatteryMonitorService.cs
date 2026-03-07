@@ -268,6 +268,31 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 }
 
                 _lastWiredPresent = wiredPresent;
+
+                // Cable state changed — force immediate reconnect cycle.
+                // The HID topology changes when cable is plugged/unplugged, so the
+                // current device path may be stale. Reset the profile to trigger a
+                // fresh probe instead of waiting for 3 consecutive read failures.
+                _activeProfile = null;
+                _consecutiveFailures = 0;
+                _probeExhausted = false;
+                _lastReconnectAttempt = DateTime.MinValue;
+                _logger.LogInformation(
+                    "[MONITOR] Cable state change detected — forcing immediate reconnect for {Model}",
+                    modelName);
+
+                // Re-discover immediately so this poll tick still produces a reading.
+                AttemptDeviceDiscovery();
+                if (_activeProfile == null)
+                {
+                    // If wired cable just appeared, report charging with last known level
+                    // even before the probe completes — the user expects instant feedback.
+                    if (wiredPresent && _lastPositiveLevel > 0)
+                    {
+                        ProcessSuccessfulRead(_lastPositiveLevel, isCharging: true);
+                    }
+                    return Task.CompletedTask;
+                }
             }
 
             if (wiredPresent)
