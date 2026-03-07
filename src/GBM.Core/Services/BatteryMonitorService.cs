@@ -69,6 +69,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     // misses don't cause needless re-probing.
     private const int MaxConsecutiveFailuresCandidateF = 6;
 
+    // CandidateG has a natural 2-fail/1-success heartbeat pattern. The DPI battery
+    // check (holding the DPI button) makes the firmware busy driving LED sequences,
+    // causing the one successful poll to also fail. A threshold of 3 trips on a
+    // single DPI press. Use 10 so only a truly absent device triggers reconnect.
+    private const int MaxConsecutiveFailuresCandidateG = 10;
+
     public BatteryState CurrentState { get; private set; } = BatteryState.Disconnected;
     public BatteryEstimate CurrentEstimate { get; private set; } = BatteryEstimate.Invalid;
     public bool IsRunning => _pollingTask != null && !_pollingTask.IsCompleted;
@@ -460,15 +466,43 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             var savedProfiles = _storageService.LoadProfiles();
             foreach (var profile in savedProfiles)
             {
-                var testResult = _hidDeviceService.ReadBattery(profile);
-                if (testResult.Success)
+                // For CandidateF/G, a single ReadBattery attempt often fails due to
+                // the intermittent response pattern (2 fail / 1 success). Retry up to
+                // 5 times with a short delay before giving up on the saved profile.
+                bool isIntermittent = profile.Protocol == ChipProtocol.Pixart
+                    && (profile.PixartMethod == PixartBatteryMethod.CandidateF
+                        || profile.PixartMethod == PixartBatteryMethod.CandidateG);
+
+                int maxAttempts = isIntermittent ? 5 : 1;
+
+                if (isIntermittent && maxAttempts > 1)
                 {
-                    _probeExhausted = false;
-                    _logger.LogInformation("Reconnected using cached profile for {Model}", profile.ModelName);
-                    _activeProfile = profile;
-                    profile.LastSeen = DateTime.UtcNow;
-                    _storageService.SaveProfiles(savedProfiles);
-                    return;
+                    _logger.LogInformation(
+                        "[MONITOR] Consecutive failure threshold reached — retrying saved {Method} profile before full rescan",
+                        profile.PixartMethod);
+                }
+
+                for (int attempt = 1; attempt <= maxAttempts; attempt++)
+                {
+                    var testResult = _hidDeviceService.ReadBattery(profile);
+                    if (testResult.Success)
+                    {
+                        _probeExhausted = false;
+                        _logger.LogInformation("Reconnected using cached profile for {Model} (attempt {Attempt}/{Max})",
+                            profile.ModelName, attempt, maxAttempts);
+                        _activeProfile = profile;
+                        profile.LastSeen = DateTime.UtcNow;
+                        _storageService.SaveProfiles(savedProfiles);
+                        return;
+                    }
+
+                    if (attempt < maxAttempts)
+                    {
+                        _logger.LogDebug(
+                            "[MONITOR] Saved profile retry {Attempt}/{Max} failed for {Model}, waiting 5s...",
+                            attempt, maxAttempts, profile.ModelName);
+                        Thread.Sleep(5000);
+                    }
                 }
             }
 
@@ -596,11 +630,14 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _consecutiveFailures++;
         _logger.LogDebug("Battery read failed. Consecutive failures: {Count}", _consecutiveFailures);
 
-        // CandidateF has intermittent response patterns — use a higher threshold
-        // to avoid unnecessary reconnect cycles during normal operation.
-        int threshold = (_activeProfile?.PixartMethod == PixartBatteryMethod.CandidateF)
-            ? MaxConsecutiveFailuresCandidateF
-            : MaxConsecutiveFailuresBeforeReconnect;
+        // CandidateF and CandidateG have intermittent response patterns — use higher
+        // thresholds to avoid unnecessary reconnect cycles during normal operation.
+        int threshold = (_activeProfile?.PixartMethod) switch
+        {
+            PixartBatteryMethod.CandidateF => MaxConsecutiveFailuresCandidateF,
+            PixartBatteryMethod.CandidateG => MaxConsecutiveFailuresCandidateG,
+            _ => MaxConsecutiveFailuresBeforeReconnect
+        };
 
         if (_consecutiveFailures >= threshold)
         {
