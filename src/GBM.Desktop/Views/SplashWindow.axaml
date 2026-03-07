@@ -1,0 +1,75 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GBM.Desktop.Views.SplashWindow"
+        Title="Glorious Battery Monitor"
+        Width="340" Height="220"
+        CanResize="False"
+        SystemDecorations="None"
+        WindowStartupLocation="CenterScreen"
+        Topmost="True"
+        Background="#1B1C23"
+        FontFamily="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+
+    <Border BorderBrush="#33343F" BorderThickness="1" CornerRadius="8"
+            Background="#1B1C23" ClipToBounds="True">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Spacing="12" Margin="24">
+
+            <!-- App Icon -->
+            <Image Source="/Assets/app-icon.ico"
+                   Width="48" Height="48"
+                   HorizontalAlignment="Center" />
+
+            <!-- App Name -->
+            <TextBlock Text="Glorious Battery Monitor"
+                       Foreground="#00F0FF"
+                       FontSize="18" FontWeight="SemiBold"
+                       HorizontalAlignment="Center" />
+
+            <!-- Status Text -->
+            <TextBlock Name="StatusText"
+                       Text="Starting..."
+                       Foreground="#8A8A98"
+                       FontSize="12"
+                       HorizontalAlignment="Center" />
+
+            <!-- Indeterminate Progress Bar (shown during loading/checking) -->
+            <ProgressBar Name="IndeterminateProgress"
+                         IsIndeterminate="True"
+                         Height="3"
+                         Width="240"
+                         Foreground="#00F0FF"
+                         Background="#2A2B34"
+                         HorizontalAlignment="Center" />
+
+            <!-- Determinate Progress Bar (shown during download) -->
+            <StackPanel Name="DownloadPanel" IsVisible="False" Spacing="4">
+                <ProgressBar Name="DownloadProgress"
+                             Minimum="0" Maximum="100" Value="0"
+                             Height="6"
+                             Width="240"
+                             Foreground="#00F0FF"
+                             Background="#2A2B34"
+                             HorizontalAlignment="Center" />
+                <TextBlock Name="DownloadPercentText"
+                           Text="0%"
+                           Foreground="#8A8A98"
+                           FontSize="11"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Update Prompt Buttons -->
+            <StackPanel Name="UpdateButtonsPanel" IsVisible="False"
+                        Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
+                <Button Name="UpdateButton" Content="Update"
+                        Classes="accent"
+                        Width="100" />
+                <Button Name="SkipButton" Content="Skip"
+                        Classes="muted"
+                        Width="100" />
+            </StackPanel>
+
+        </StackPanel>
+    </Border>
+
+</Window>

@@ -49,19 +49,71 @@ public partial class App : Application
             ApplyTheme(settingsService.Current.Theme);
             settingsService.SettingsChanged += s => ApplyTheme(s.Theme);
 
+            // Show splash screen immediately
+            var splash = new SplashWindow();
+            desktop.MainWindow = splash;
+            splash.Show();
+
+            // Run startup update check, then launch main window
+            _ = RunStartupAsync(desktop, splash, settingsService);
+        }
+
+        base.OnFrameworkInitializationCompleted();
+    }
+
+    private async Task RunStartupAsync(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        SplashWindow splash,
+        ISettingsService settingsService)
+    {
+        try
+        {
+            // Check for updates
+            splash.SetStatus("Checking for updates...");
+            var updateService = _serviceProvider!.GetRequiredService<IUpdateService>();
+
+            try
+            {
+                var updateResult = await updateService.CheckForUpdateAsync();
+                if (updateResult != null)
+                {
+                    // Ask user whether to update or skip
+                    bool wantsUpdate = await splash.ShowUpdatePromptAsync(updateResult.NewVersion);
+                    if (wantsUpdate)
+                    {
+                        splash.ShowDownloadProgress();
+                        var progress = new Progress<int>(percent => splash.UpdateProgress(percent));
+                        bool applied = await updateService.DownloadAndApplyUpdateAsync(progress);
+                        if (applied)
+                        {
+                            // Velopack restarts the app — we won't reach here
+                            return;
+                        }
+                        // Download/apply failed — continue to normal launch
+                        splash.SetStatus("Update failed. Starting...");
+                        await Task.Delay(1500);
+                    }
+                }
+            }
+            catch
+            {
+                // Update check failed — continue to normal launch
+            }
+
+            splash.SetStatus("Starting...");
+
             // Create MainViewModel
-            var vm = _serviceProvider.GetRequiredService<MainViewModel>();
+            var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
 
             // Create MainWindow
             var mainWindow = new MainWindow { DataContext = vm };
-            desktop.MainWindow = mainWindow;
 
             // Initialize tray
-            _trayService = _serviceProvider.GetRequiredService<TrayIconService>();
+            _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
             _trayService.Initialize();
 
             // Wire notification events to UI display
-            var notificationService = _serviceProvider.GetRequiredService<INotificationService>();
+            var notificationService = _serviceProvider!.GetRequiredService<INotificationService>();
             notificationService.NotificationTriggered += (type, title, message) =>
             {
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
@@ -77,19 +129,47 @@ public partial class App : Application
                 });
             };
 
-            // Start monitoring
-            _ = vm.InitializeAsync();
+            // Switch from splash to main window
+            desktop.MainWindow = mainWindow;
 
-            // Start minimized if configured
             if (settingsService.Current.StartMinimized)
             {
                 mainWindow.Hide();
             }
+            else
+            {
+                mainWindow.Show();
+            }
+
+            splash.Close();
+
+            // Start monitoring
+            _ = vm.InitializeAsync();
 
             desktop.ShutdownRequested += OnShutdown;
         }
+        catch
+        {
+            // If anything goes wrong during startup, still try to launch main window
+            try
+            {
+                var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
+                var mainWindow = new MainWindow { DataContext = vm };
+                desktop.MainWindow = mainWindow;
+                mainWindow.Show();
+                splash.Close();
 
-        base.OnFrameworkInitializationCompleted();
+                _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
+                _trayService.Initialize();
+
+                _ = vm.InitializeAsync();
+                desktop.ShutdownRequested += OnShutdown;
+            }
+            catch
+            {
+                // Fatal — nothing we can do
+            }
+        }
     }
 
     private void ConfigureServices(IServiceCollection services)
