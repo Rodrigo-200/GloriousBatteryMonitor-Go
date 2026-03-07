@@ -56,6 +56,13 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private static readonly TimeSpan ExhaustedProbeDebounce = TimeSpan.FromSeconds(60);
     private const int MaxConsecutiveFailuresBeforeReconnect = 3;
 
+    // CandidateF does not always get a response on every poll cycle — the device
+    // answers intermittently across RIDs, and each full miss (all 4 RIDs timeout)
+    // takes ~12 seconds. A threshold of 3 would trigger reconnect within ~36s even
+    // when the device responds every other cycle. Use a higher threshold so transient
+    // misses don't cause needless re-probing.
+    private const int MaxConsecutiveFailuresCandidateF = 6;
+
     public BatteryState CurrentState { get; private set; } = BatteryState.Disconnected;
     public BatteryEstimate CurrentEstimate { get; private set; } = BatteryEstimate.Invalid;
     public bool IsRunning => _pollingTask != null && !_pollingTask.IsCompleted;
@@ -253,46 +260,26 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
                 if (wiredPresent && !_lastWiredPresent)
                 {
-                    // Cable just plugged in — record charge start for estimation
+                    // Cable just plugged in — record charge start for estimation.
+                    // Do NOT reset _activeProfile or trigger reconnect: the CandidateF
+                    // poll on PID=0x824D remains valid while the cable is in.
                     _chargeStartTime = DateTime.UtcNow;
                     _chargeStartLevel = _lastPositiveLevel > 0 ? _lastPositiveLevel : 0;
+                    _consecutiveFailures = 0;
                     _logger.LogInformation(
                         "[MONITOR] Charge started at {Level}% for {Model}",
                         _chargeStartLevel, modelName);
                 }
                 else if (!wiredPresent)
                 {
-                    // Cable unplugged — clear charge tracking
+                    // Cable unplugged — clear charge tracking.
+                    // CandidateF on PID=0x824D resumes naturally on the next poll tick.
                     _chargeStartTime = null;
                     _chargeStartLevel = 0;
+                    _consecutiveFailures = 0;
                 }
 
                 _lastWiredPresent = wiredPresent;
-
-                // Cable state changed — force immediate reconnect cycle.
-                // The HID topology changes when cable is plugged/unplugged, so the
-                // current device path may be stale. Reset the profile to trigger a
-                // fresh probe instead of waiting for 3 consecutive read failures.
-                _activeProfile = null;
-                _consecutiveFailures = 0;
-                _probeExhausted = false;
-                _lastReconnectAttempt = DateTime.MinValue;
-                _logger.LogInformation(
-                    "[MONITOR] Cable state change detected — forcing immediate reconnect for {Model}",
-                    modelName);
-
-                // Re-discover immediately so this poll tick still produces a reading.
-                AttemptDeviceDiscovery();
-                if (_activeProfile == null)
-                {
-                    // If wired cable just appeared, report charging with last known level
-                    // even before the probe completes — the user expects instant feedback.
-                    if (wiredPresent && _lastPositiveLevel > 0)
-                    {
-                        ProcessSuccessfulRead(_lastPositiveLevel, isCharging: true);
-                    }
-                    return Task.CompletedTask;
-                }
             }
 
             if (wiredPresent)
@@ -575,7 +562,13 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _consecutiveFailures++;
         _logger.LogDebug("Battery read failed. Consecutive failures: {Count}", _consecutiveFailures);
 
-        if (_consecutiveFailures >= MaxConsecutiveFailuresBeforeReconnect)
+        // CandidateF has intermittent response patterns — use a higher threshold
+        // to avoid unnecessary reconnect cycles during normal operation.
+        int threshold = (_activeProfile?.PixartMethod == PixartBatteryMethod.CandidateF)
+            ? MaxConsecutiveFailuresCandidateF
+            : MaxConsecutiveFailuresBeforeReconnect;
+
+        if (_consecutiveFailures >= threshold)
         {
             _logger.LogWarning("Max consecutive failures reached ({Count}). Attempting reconnect.",
                 _consecutiveFailures);
