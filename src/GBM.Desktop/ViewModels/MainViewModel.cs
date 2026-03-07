@@ -311,12 +311,23 @@ public partial class MainViewModel : ViewModelBase
             UpdateStatusText = $"Downloading... {p}%";
         });
         var success = await _updateService.DownloadAndApplyUpdateAsync(progress);
-        if (!success)
+        if (success)
+        {
+            // Velopack updater is waiting for us to exit,
+            // then it will apply the update silently and restart.
+            UpdateStatusText = "Applying update...";
+            if (Avalonia.Application.Current?.ApplicationLifetime
+                is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                desktop.Shutdown();
+            }
+        }
+        else
         {
             UpdateStatusText = "Download failed — try again";
             IsDownloadingUpdate = false;
         }
-        // if success, app restarts — this line never reached
+        // if success, app shuts down — lines below never reached
     }
 
     private System.Timers.Timer? _toastTimer;

@@ -90,9 +90,9 @@ public class UpdateService : IUpdateService
             await mgr.DownloadUpdatesAsync(info, progress != null ? p => progress.Report(p) : null);
 
             _logger.LogInformation(
-                "[UPDATE] Download complete — restarting to apply");
+                "[UPDATE] Download complete — applying silently and restarting");
 
-            mgr.ApplyUpdatesAndRestart(info);
+            mgr.WaitExitThenApplyUpdates(info, silent: true, restart: true);
             return true;
         }
         catch (Exception ex)
