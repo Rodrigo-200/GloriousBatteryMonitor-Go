@@ -21,7 +21,7 @@ In dev we use a sparse MSIX manifest with a self-signed certificate.
    powershell -ExecutionPolicy Bypass -File scripts/register-widget-dev.ps1
    ```
 
-3. Launch the app from `src/GBM.Desktop/bin/Release/net8.0-windows10.0.22621.0/GBM.Desktop.exe`
+3. Launch the app from `src/GBM.Desktop/bin/x64/Release/net8.0-windows10.0.22621.0/win-x64/GBM.Desktop.exe`
 
 4. Open the Widgets board: `Win+W`
 
