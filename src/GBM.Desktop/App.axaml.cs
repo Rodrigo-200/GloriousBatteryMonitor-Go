@@ -21,7 +21,7 @@ public partial class App : Application
     private ServiceProvider? _serviceProvider;
     private TrayIconService? _trayService;
 
-    public static ServiceProvider? Services { get; private set; }
+    public static ServiceProvider? Services { get; internal set; }
 
     public override void Initialize()
     {
@@ -43,6 +43,12 @@ public partial class App : Application
             ConfigureServices(services);
             _serviceProvider = services.BuildServiceProvider();
             Services = _serviceProvider;
+
+            // Register Windows 11 widget COM factory as early as possible.
+            // The widget host may attempt CoCreateInstance immediately when the app starts,
+            // so this must happen before the splash screen and update check.
+            var loggerFactory = _serviceProvider.GetRequiredService<ILoggerFactory>();
+            WidgetRegistration.TryRegister(loggerFactory);
 
             // Apply theme from settings
             var settingsService = _serviceProvider.GetRequiredService<ISettingsService>();
@@ -155,11 +161,6 @@ public partial class App : Application
             // Start monitoring
             _ = vm.InitializeAsync();
 
-            // Register Windows 11 widget provider (best-effort — skipped on older Windows)
-            var monitorService = _serviceProvider!.GetRequiredService<IBatteryMonitorService>();
-            var loggerFactory = _serviceProvider!.GetRequiredService<ILoggerFactory>();
-            WidgetRegistration.TryRegister(monitorService, loggerFactory);
-
             desktop.ShutdownRequested += OnShutdown;
         }
         catch
@@ -178,10 +179,6 @@ public partial class App : Application
                 _trayService.Initialize();
 
                 _ = vm.InitializeAsync();
-
-                var monitorService2 = _serviceProvider!.GetRequiredService<IBatteryMonitorService>();
-                var loggerFactory2 = _serviceProvider!.GetRequiredService<ILoggerFactory>();
-                WidgetRegistration.TryRegister(monitorService2, loggerFactory2);
 
                 desktop.ShutdownRequested += OnShutdown;
             }
@@ -265,6 +262,7 @@ public partial class App : Application
 
     private void OnShutdown(object? sender, ShutdownRequestedEventArgs e)
     {
+        WidgetRegistration.TryRevoke();
         _trayService?.Dispose();
         if (_serviceProvider?.GetService<IBatteryMonitorService>() is BatteryMonitorService monitor)
         {

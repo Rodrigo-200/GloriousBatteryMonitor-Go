@@ -20,7 +20,8 @@
     <!-- Windows App SDK: do not generate a WinUI Main — Avalonia owns the entry point -->
     <WindowsPackageType>None</WindowsPackageType>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <!-- Bundle Windows App SDK runtime DLLs so users don't need a separate install -->
+    <!-- Bundle .NET runtime + Windows App SDK so users need zero prerequisites -->
+    <SelfContained>true</SelfContained>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
   </PropertyGroup>
   <ItemGroup>

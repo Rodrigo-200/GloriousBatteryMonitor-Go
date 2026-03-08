@@ -1,30 +1,42 @@
-using GBM.Core.Services;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Windows.Widgets.Providers;
 
 namespace GBM.Desktop.Widgets;
 
 /// <summary>
-/// Handles conditional widget provider registration at app startup.
+/// Handles widget provider COM registration at app startup.
 /// Widgets require Windows 11 22H2 (build 22621) or later.
 ///
-/// The actual widget activation is handled by the OS via COM:
-///   1. The sparse MSIX manifest registers our COM CLSID
-///   2. When the user adds the widget, Windows activates our COM class
-///   3. We hold a singleton BatteryWidgetProvider in memory so the
-///      BatteryStateChanged subscription keeps it alive and able to push updates
+/// The activation flow:
+///   1. We call CoRegisterClassObject to tell COM "here is my factory for CLSID X"
+///   2. The sparse MSIX manifest tells Windows "CLSID X is a widget provider"
+///   3. When the user adds the widget, Windows calls CoCreateInstance → our factory → new BatteryWidgetProvider()
+///   4. On shutdown we call CoRevokeClassObject to clean up
 /// </summary>
 public static class WidgetRegistration
 {
     private const int MinBuildForWidgets = 22621;
+    private static readonly Guid WidgetProviderClsid = Guid.Parse("7719E9DB-2949-4ABF-977A-15E9E22D5F7B");
 
-    /// <summary>
-    /// The singleton widget provider instance, kept alive for the app lifetime
-    /// so it can receive BatteryStateChanged events and push widget updates.
-    /// </summary>
-    public static BatteryWidgetProvider? Instance { get; private set; }
+    private const uint CLSCTX_LOCAL_SERVER = 0x4;
+    private const uint REGCLS_MULTIPLEUSE = 0x1;
 
-    public static void TryRegister(IBatteryMonitorService monitorService, ILoggerFactory loggerFactory)
+    private static uint _cookie;
+    private static bool _registered;
+
+    [DllImport("ole32.dll")]
+    private static extern int CoRegisterClassObject(
+        [MarshalAs(UnmanagedType.LPStruct)] Guid rclsid,
+        [MarshalAs(UnmanagedType.IUnknown)] object pUnk,
+        uint dwClsContext,
+        uint flags,
+        out uint lpdwRegister);
+
+    [DllImport("ole32.dll")]
+    private static extern int CoRevokeClassObject(uint dwRegister);
+
+    public static void TryRegister(ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("WidgetRegistration");
 
@@ -38,19 +50,47 @@ public static class WidgetRegistration
 
         try
         {
-            // Verify the Widget API is available by trying to access WidgetManager.
-            // This will throw if the sparse manifest isn't registered or the OS doesn't support widgets.
+            // Verify the Widget API is available (will throw if sparse manifest not registered)
             _ = WidgetManager.GetDefault();
 
-            var widgetLogger = loggerFactory.CreateLogger<BatteryWidgetProvider>();
-            Instance = new BatteryWidgetProvider(monitorService, widgetLogger);
+            // Register our COM class factory so Windows can CoCreateInstance our widget provider
+            var factory = new WidgetProviderFactory();
+            int hr = CoRegisterClassObject(
+                WidgetProviderClsid,
+                factory,
+                CLSCTX_LOCAL_SERVER,
+                REGCLS_MULTIPLEUSE,
+                out _cookie);
 
-            logger.LogInformation("[WIDGET] Widget provider initialized — waiting for COM activation from Windows");
+            if (hr != 0)
+            {
+                Marshal.ThrowExceptionForHR(hr);
+            }
+
+            _registered = true;
+            logger.LogInformation(
+                "[WIDGET] COM class factory registered (CLSID={Clsid}, cookie={Cookie}) — widget available in Win+W",
+                WidgetProviderClsid, _cookie);
         }
         catch (Exception ex)
         {
             // Widget registration is best-effort — don't crash the app
-            logger.LogWarning(ex, "[WIDGET] Failed to initialize widget provider — widgets unavailable");
+            logger.LogWarning(ex, "[WIDGET] Failed to register widget COM class factory — widgets unavailable");
+        }
+    }
+
+    public static void TryRevoke()
+    {
+        if (!_registered) return;
+
+        try
+        {
+            CoRevokeClassObject(_cookie);
+            _registered = false;
+        }
+        catch
+        {
+            // Best-effort cleanup
         }
     }
 }

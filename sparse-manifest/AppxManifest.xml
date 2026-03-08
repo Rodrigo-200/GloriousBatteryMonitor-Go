@@ -4,10 +4,10 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
   xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
-  xmlns:com2="http://schemas.microsoft.com/appx/manifest/com/windows10/2"
-  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10">
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="rescap">
 
   <Identity
     Name="GloriousBatteryMonitor"
@@ -19,6 +19,7 @@
     <DisplayName>Glorious Battery Monitor</DisplayName>
     <PublisherDisplayName>GloriousBatteryMonitor</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
   </Properties>
 
   <Dependencies>
@@ -30,6 +31,10 @@
   <Resources>
     <Resource Language="en-us" />
   </Resources>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
 
   <Applications>
     <Application Id="GBM" Executable="GBM.Desktop.exe" EntryPoint="Windows.FullTrustApplication">
@@ -68,6 +73,15 @@
                         <Size Name="medium" />
                       </Capability>
                     </Capabilities>
+                    <ThemeResources>
+                      <Icons>
+                        <Icon Path="Assets\WidgetIcon.png" />
+                      </Icons>
+                      <Screenshots>
+                        <Screenshot Path="Assets\WidgetScreenshot.png"
+                          DisplayAltText="Battery level widget preview" />
+                      </Screenshots>
+                    </ThemeResources>
                   </Definition>
                 </Definitions>
               </WidgetProvider>
@@ -75,13 +89,14 @@
           </uap3:AppExtension>
         </uap3:Extension>
 
-        <!-- COM server for the widget provider -->
+        <!-- COM server so the widget host can find our CLSID -->
         <com:Extension Category="windows.comServer">
           <com:ComServer>
-            <com2:ExeServer Executable="GBM.Desktop.exe"
+            <com:ExeServer Executable="GBM.Desktop.exe"
+              Arguments="-RegisterProcessAsComServer"
               DisplayName="GBM Widget Provider">
               <com:Class Id="7719E9DB-2949-4ABF-977A-15E9E22D5F7B" DisplayName="GBM Widget Provider" />
-            </com2:ExeServer>
+            </com:ExeServer>
           </com:ComServer>
         </com:Extension>
 
