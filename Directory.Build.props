@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <!-- Version comes from the RELEASE_VERSION env var (set by CI from the git tag).
+         Local / dev builds fall back to 0.0.0-dev. -->
+    <Version Condition="'$(RELEASE_VERSION)' != ''">$(RELEASE_VERSION)</Version>
+    <Version Condition="'$(RELEASE_VERSION)' == ''">0.0.0-dev</Version>
+  </PropertyGroup>
+</Project>

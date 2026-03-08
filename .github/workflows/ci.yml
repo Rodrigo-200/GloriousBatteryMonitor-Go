@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main, "rewrite/**", "feature/**", "fix/**" ]
+    branches: [ main, "feature/**", "fix/**", "chore/**" ]
   pull_request:
     branches: [ main ]
 
@@ -12,8 +12,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
