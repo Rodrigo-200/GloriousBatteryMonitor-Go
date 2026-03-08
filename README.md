@@ -121,17 +121,6 @@ dotnet test --verbosity normal
 
 ---
 
-## 🔄 Releases & Auto-Updates
-
-Releases are created automatically via GitHub Actions using **Conventional Commits**:
-
-- `fix:` commit → patch bump (e.g. v3.0.3 → v3.0.4) + new release
-- `feat:` commit → minor bump (e.g. v3.0.3 → v3.1.0) + new release
-
-Installed users receive updates automatically on next launch via Velopack — no manual download needed.
-
----
-
 ## 🔧 Technical Overview
 
 **Architecture**
@@ -159,24 +148,13 @@ Candidate E  →  Passive stream read on col05 (unsolicited reports)
 ### Device not detected / shows "Disconnected"
 
 1. Check the debug log at `%APPDATA%\GloriousBatteryMonitor\debug.log`
-2. Make sure **Safe HID Mode** is enabled in Settings (default)
-3. Try unplugging and re-plugging the USB receiver
-4. If your mouse model shows as "In Progress" in the supported devices table above, battery reading may not yet be implemented for it — check back in a future release
+2. Try unplugging and re-plugging the USB receiver
+3. If your mouse model shows as "In Progress" in the supported devices table above, battery reading may not yet be implemented for it — check back in a future release
 
 ### Antivirus False Positives
 
 Some antivirus software may flag the executable.  
 ✅ **Solution:** Whitelist the executable or report a false positive to your AV vendor.
-
-### Safe HID Mode
-
-By default the app operates in **Safe HID Mode**, which:
-- Only opens HID interfaces with known Glorious vendor IDs (`0x258A`, `0x093A`)
-- Only attempts writes to explicitly allowlisted devices
-- Skips keyboards, headsets, and non-telemetry interfaces
-
-To disable: open Settings and toggle "Safe HID Mode" off, or set `GBM_SAFE_MODE=0` before launching.
-
 ---
 
 ## 🙏 Acknowledgments
