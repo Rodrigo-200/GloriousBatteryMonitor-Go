@@ -70,7 +70,7 @@
 | Model O2 | ❔ | ❔ | Untested |
 | Model D | ✅ | ✅ | ✅ Working |
 | Model D- | ❔ | ❔ | Untested |
-| **Model D2** | ❔ | ❔ | 🔧 In Progress |
+| **Model D2** | ✅ | ✅ | ✅ Working |
 | Model I / I2 | ❔ | ❔ | Untested |
 | Model O Pro | ❔ | ❔ | Untested |
 
