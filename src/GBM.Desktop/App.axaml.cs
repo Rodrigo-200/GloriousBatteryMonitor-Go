@@ -8,6 +8,7 @@ using GBM.Core.Services;
 using GBM.Desktop.Services;
 using GBM.Desktop.ViewModels;
 using GBM.Desktop.Views;
+using GBM.Desktop.Widgets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
@@ -154,6 +155,11 @@ public partial class App : Application
             // Start monitoring
             _ = vm.InitializeAsync();
 
+            // Register Windows 11 widget provider (best-effort — skipped on older Windows)
+            var monitorService = _serviceProvider!.GetRequiredService<IBatteryMonitorService>();
+            var loggerFactory = _serviceProvider!.GetRequiredService<ILoggerFactory>();
+            WidgetRegistration.TryRegister(monitorService, loggerFactory);
+
             desktop.ShutdownRequested += OnShutdown;
         }
         catch
@@ -172,6 +178,11 @@ public partial class App : Application
                 _trayService.Initialize();
 
                 _ = vm.InitializeAsync();
+
+                var monitorService2 = _serviceProvider!.GetRequiredService<IBatteryMonitorService>();
+                var loggerFactory2 = _serviceProvider!.GetRequiredService<ILoggerFactory>();
+                WidgetRegistration.TryRegister(monitorService2, loggerFactory2);
+
                 desktop.ShutdownRequested += OnShutdown;
             }
             catch
