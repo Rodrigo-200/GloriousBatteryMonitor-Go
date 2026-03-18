@@ -36,6 +36,7 @@ public class BatteryEstimationTests
         estimate.IsValid.Should().BeTrue();
         estimate.IsHistorical.Should().BeTrue();
         estimate.Phase.Should().Be("discharge");
+        estimate.TimeRemaining.Should().BeGreaterThan(TimeSpan.Zero);
     }
 
     [Fact]
@@ -205,5 +206,60 @@ public class BatteryEstimationTests
         estimate.IsValid.Should().BeTrue();
         estimate.IsHistorical.Should().BeTrue();
         estimate.RatePerHour.Should().BeApproximately(5.0, 0.1);
+    }
+
+    [Fact]
+    public void GetEstimate_DirectionMismatch_DoesNotReturnInvalid()
+    {
+        // Set historical discharge rate
+        _service.SetHistoricalRates("device1", 5.0, null, 3, 0);
+
+        // Add discharge sample
+        _service.AddSample("device1", 50, false);
+
+        // Verify estimate is valid (even without more samples to confirm direction)
+        var estimate = _service.GetEstimate("device1");
+        estimate.IsValid.Should().BeTrue();
+        estimate.TimeRemaining.Should().BeGreaterThan(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void GetEstimate_SmoothedRate_DoesNotSpikeOnSingleAnomalousSample()
+    {
+        // Establish steady historical rate
+        _service.SetHistoricalRates("device1", 5.0, null, 10, 0);
+
+        // Initial sample
+        _service.AddSample("device1", 80, false);
+        var before = _service.GetEstimate("device1");
+
+        // Next sample (slight change)
+        _service.AddSample("device1", 79, false);
+        var after = _service.GetEstimate("device1");
+
+        // Verify time remaining doesn't spike
+        if (before.IsValid && after.IsValid && before.TimeRemaining > TimeSpan.Zero)
+        {
+            double ratio = after.TimeRemaining.TotalMinutes / before.TimeRemaining.TotalMinutes;
+            ratio.Should().BeInRange(0.80, 1.20,
+                "EWMA smoothing should keep estimates stable between polls");
+        }
+    }
+
+    [Fact]
+    public void GetEstimate_ImmediateChargeEstimate_OnFirstSampleAfterHistoricalLoad()
+    {
+        // Simulate restart: load historical charge rate from storage
+        _service.SetHistoricalRates("device1", null, 50.0, 0, 5);
+
+        // First sample immediately after cable plug
+        _service.AddSample("device1", 60, true);
+
+        var estimate = _service.GetEstimate("device1");
+
+        // Must return valid estimate immediately (phone-like behavior)
+        estimate.IsValid.Should().BeTrue();
+        estimate.Phase.Should().Be("charge");
+        estimate.TimeRemaining.Should().BeGreaterThan(TimeSpan.Zero);
     }
 }

@@ -11,6 +11,8 @@ public class StorageService : IStorageService
     private readonly object _chargeDataLock = new();
     private readonly object _profilesLock = new();
 
+    private ChargeData? _cachedChargeData;
+
     private const string ChargeDataFileName = "charge_data.json";
     private const string ProfilesFileName = "conn_profile.json";
     private const int MaxSamplesPerDevice = 200;
@@ -25,10 +27,18 @@ public class StorageService : IStorageService
     {
         lock (_chargeDataLock)
         {
-            return LoadFromFile(
+            if (_cachedChargeData != null)
+            {
+                // Return shallow copy with new Dictionary wrapping same devices
+                return new ChargeData { Devices = new Dictionary<string, DeviceChargeData>(_cachedChargeData.Devices) };
+            }
+
+            var loaded = LoadFromFile(
                 GetChargeDataPath(),
                 GbmJsonContext.Default.ChargeData,
                 "charge data") ?? new ChargeData();
+            _cachedChargeData = loaded;
+            return loaded;
         }
     }
 
@@ -94,6 +104,7 @@ public class StorageService : IStorageService
                 deviceData.LastKnownLevel = level;
                 deviceData.LastReadTime = DateTime.UtcNow;
 
+                _cachedChargeData = data;
                 SaveChargeDataInternal(data);
             }
             catch (Exception ex)
@@ -138,6 +149,7 @@ public class StorageService : IStorageService
                     deviceData.LastChargeLevel = level;
                 }
 
+                _cachedChargeData = data;
                 SaveChargeDataInternal(data);
             }
             catch (Exception ex)
@@ -162,6 +174,7 @@ public class StorageService : IStorageService
                 deviceData.DischargeSessionCount = dischargeSessions;
                 deviceData.ChargeSessionCount = chargeSessions;
 
+                _cachedChargeData = data;
                 SaveChargeDataInternal(data);
             }
             catch (Exception ex)
@@ -173,10 +186,15 @@ public class StorageService : IStorageService
 
     private ChargeData LoadChargeDataInternal()
     {
-        return LoadFromFile(
+        if (_cachedChargeData != null)
+            return _cachedChargeData;
+
+        var loaded = LoadFromFile(
             GetChargeDataPath(),
             GbmJsonContext.Default.ChargeData,
             "charge data") ?? new ChargeData();
+        _cachedChargeData = loaded;
+        return loaded;
     }
 
     private void SaveChargeDataInternal(ChargeData data)
@@ -256,6 +274,8 @@ public class StorageService : IStorageService
         {
             _logger.LogError(ex, "{Description} file is corrupted at {Path}. Resetting to default.", description,
                 filePath);
+            if (description == "charge data")
+                _cachedChargeData = null;
             TryDeleteFile(filePath);
             return null;
         }

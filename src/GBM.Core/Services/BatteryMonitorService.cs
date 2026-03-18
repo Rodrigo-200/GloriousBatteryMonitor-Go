@@ -27,6 +27,9 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     // retry the full probe chain less frequently.
     private bool _probeExhausted;
 
+    private TimeSpan _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
+    private const int MaxExhaustedProbeDebounceSeconds = 300;
+
     // Last valid (non-zero) battery level from a successful read.
     // Used to suppress transient 0% readings when the mouse is sleeping (Status 0xA4).
     private int _lastPositiveLevel;
@@ -179,6 +182,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _chargeStartLevel = 0;
         _cableDisconnectTime = null;
         _probeExhausted = false;
+        _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
     }
 
     private async Task PollingLoop(CancellationToken cancellationToken)
@@ -326,7 +330,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                         PostDisconnectSettlingDelay.TotalSeconds);
                     // Keep state as Connected with last known level, just not charging
                     if (_lastPositiveLevel > 0)
-                        ProcessSuccessfulRead(_lastPositiveLevel, isCharging: false);
+                        ProcessSuccessfulRead(_lastPositiveLevel, isCharging: false, skipEstimationSample: true);
                     return Task.CompletedTask;
                 }
 
@@ -450,7 +454,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         {
             // Use longer debounce when all probe candidates have been exhausted,
             // to avoid burning 15-20s per poll cycle on known-failing probes.
-            TimeSpan debounce = _probeExhausted ? ExhaustedProbeDebounce : ReconnectDebounce;
+            TimeSpan debounce = _probeExhausted ? _exhaustedProbeDebounce : ReconnectDebounce;
             if (DateTime.UtcNow - _lastReconnectAttempt < debounce)
                 return;
 
@@ -488,6 +492,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     if (testResult.Success)
                     {
                         _probeExhausted = false;
+                        _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
                         _logger.LogInformation("Reconnected using cached profile for {Model} (attempt {Attempt}/{Max})",
                             profile.ModelName, attempt, maxAttempts);
                         _activeProfile = profile;
@@ -514,6 +519,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 if (profile != null)
                 {
                     _probeExhausted = false;
+                    _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
                     _logger.LogInformation("Discovered device: {Model} via probing", profile.ModelName);
                     _activeProfile = profile;
 
@@ -533,8 +539,11 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 _logger.LogWarning(
                     "[MONITOR] Known device(s) found but no working probe candidate — " +
                     "will retry in {Seconds}s (or on manual rescan)",
-                    (int)ExhaustedProbeDebounce.TotalSeconds);
+                    (int)_exhaustedProbeDebounce.TotalSeconds);
                 _probeExhausted = true;
+                // Double the debounce, capped at 300s
+                _exhaustedProbeDebounce = TimeSpan.FromSeconds(
+                    Math.Min(_exhaustedProbeDebounce.TotalSeconds * 2, MaxExhaustedProbeDebounceSeconds));
             }
 
             _logger.LogDebug("No Glorious devices found during enumeration");
@@ -545,7 +554,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         }
     }
 
-    private void ProcessSuccessfulRead(int level, bool isCharging)
+    private void ProcessSuccessfulRead(int level, bool isCharging, bool skipEstimationSample = false)
     {
         // When the mouse is sleeping (Status 0xA4), the dongle returns Level=0%.
         // Use the last known level instead and track consecutive zero reads.
@@ -611,7 +620,10 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _storageService.UpdateChargeInfo(deviceKey, displayLevel, isCharging ? DateTime.UtcNow : null);
 
         // Update estimation
-        _estimationService.AddSample(deviceKey, displayLevel, isCharging);
+        if (!skipEstimationSample)
+        {
+            _estimationService.AddSample(deviceKey, displayLevel, isCharging);
+        }
         var estimate = _estimationService.GetEstimate(deviceKey);
         UpdateEstimate(estimate);
 
