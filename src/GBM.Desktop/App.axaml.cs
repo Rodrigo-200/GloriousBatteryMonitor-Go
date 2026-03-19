@@ -220,6 +220,7 @@ public partial class App : Application
 
         // Desktop services
         services.AddSingleton<TrayIconService>();
+        services.AddSingleton<WindowsToastService>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();
