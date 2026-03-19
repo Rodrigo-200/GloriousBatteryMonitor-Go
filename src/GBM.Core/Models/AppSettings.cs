@@ -7,7 +7,7 @@ public class AppSettings
     public bool StartWithOS { get; set; } = false;
     public bool StartMinimized { get; set; } = false;
     public int RefreshIntervalSeconds { get; set; } = 5;
-    public bool NotificationsEnabled { get; set; } = false;
+    public bool NotificationsEnabled { get; set; } = true;
     public int LowBatteryThreshold { get; set; } = 20;
     public int CriticalBatteryThreshold { get; set; } = 10;
     public bool ShowPercentageOnTrayIcon { get; set; } = false;
