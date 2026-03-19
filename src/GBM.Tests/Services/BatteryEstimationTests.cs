@@ -262,4 +262,20 @@ public class BatteryEstimationTests
         estimate.Phase.Should().Be("charge");
         estimate.TimeRemaining.Should().BeGreaterThan(TimeSpan.Zero);
     }
+
+    [Fact]
+    public void GetLearnedRates_FullChargeDuration_ComputedFromDischargeRate()
+    {
+        // 5%/hr discharge rate → full charge (100%) lasts 20 hours
+        _service.SetHistoricalRates("device1", dischargeRate: 5.0, chargeRate: null,
+            dischargeSessionCount: 5, chargeSessionCount: 0);
+
+        var rates = _service.GetLearnedRates("device1");
+        rates.Should().NotBeNull();
+        rates!.DischargeRate.Should().NotBeNull();
+
+        double totalHours = 100.0 / rates.DischargeRate!.Value;
+        totalHours.Should().BeApproximately(20.0, 0.01,
+            "100% ÷ 5%·hr⁻¹ must equal 20 hours");
+    }
 }
