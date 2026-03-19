@@ -19,6 +19,7 @@ public partial class App : Application
 {
     private ServiceProvider? _serviceProvider;
     private TrayIconService? _trayService;
+    private WindowsToastService? _toastService;
 
     public static ServiceProvider? Services { get; private set; }
 
@@ -119,21 +120,21 @@ public partial class App : Application
             _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
             _trayService.Initialize();
 
-            // Wire notification events to UI display
+            // Initialize toast service
+            _toastService = _serviceProvider!.GetRequiredService<WindowsToastService>();
+
+            // Wire notification events → Windows Action Center toasts.
+            // Do NOT pop the window — use proper OS notifications that are non-intrusive.
             var notificationService = _serviceProvider!.GetRequiredService<INotificationService>();
+            var toastService = _serviceProvider!.GetRequiredService<WindowsToastService>();
+
             notificationService.NotificationTriggered += (type, title, message) =>
             {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                {
-                    vm.ShowToast($"{title}: {message}");
+                // Show OS-level toast notification (appears in Action Center)
+                Task.Run(() => toastService.ShowNotification(type, title, message));
 
-                    // Bring window to front so the user sees the toast
-                    if (desktop.MainWindow is { } win)
-                    {
-                        win.Show();
-                        win.Activate();
-                    }
-                });
+                // Do NOT show in-app toast or pop window for battery events
+                // (Windows notification is non-intrusive and sufficient)
             };
 
             // Switch from splash to main window
@@ -255,7 +256,9 @@ public partial class App : Application
 
     private void OnShutdown(object? sender, ShutdownRequestedEventArgs e)
     {
+        _toastService?.Dispose();
         _trayService?.Dispose();
+
         if (_serviceProvider?.GetService<IBatteryMonitorService>() is BatteryMonitorService monitor)
         {
             _ = monitor.StopAsync();
