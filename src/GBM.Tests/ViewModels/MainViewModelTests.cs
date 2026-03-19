@@ -37,7 +37,7 @@ public class MainViewModelTests
         settings.StartWithOS.Should().BeFalse();
         settings.StartMinimized.Should().BeFalse();
         settings.RefreshIntervalSeconds.Should().Be(5);
-        settings.NotificationsEnabled.Should().BeFalse();
+        settings.NotificationsEnabled.Should().BeTrue();
         settings.LowBatteryThreshold.Should().Be(20);
         settings.CriticalBatteryThreshold.Should().Be(10);
         settings.ShowPercentageOnTrayIcon.Should().BeFalse();
