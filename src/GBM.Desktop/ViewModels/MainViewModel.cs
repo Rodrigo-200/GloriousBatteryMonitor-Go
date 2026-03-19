@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GBM.Core.Models;
@@ -15,6 +16,7 @@ public partial class MainViewModel : ViewModelBase
     private readonly IAutoStartService _autoStartService;
     private readonly IUpdateService _updateService;
     private readonly IStorageService _storageService;
+    private readonly IBatteryEstimationService _estimationService;
 
     // Battery state properties
     [ObservableProperty] private int _batteryLevel;
@@ -33,6 +35,7 @@ public partial class MainViewModel : ViewModelBase
     // Charge history
     [ObservableProperty] private string _lastChargedText = "—";
     [ObservableProperty] private string _chargedToText = "—";
+    [ObservableProperty] private string _fullChargeDurationText = "—";
 
     // Last sync
     [ObservableProperty] private string _lastSyncText = "—";
@@ -78,7 +81,8 @@ public partial class MainViewModel : ViewModelBase
         IHidDeviceService hidService,
         IAutoStartService autoStartService,
         IUpdateService updateService,
-        IStorageService storageService)
+        IStorageService storageService,
+        IBatteryEstimationService estimationService)
     {
         _monitorService = monitorService;
         _settingsService = settingsService;
@@ -86,6 +90,7 @@ public partial class MainViewModel : ViewModelBase
         _autoStartService = autoStartService;
         _updateService = updateService;
         _storageService = storageService;
+        _estimationService = estimationService;
 
         _monitorService.BatteryStateChanged += OnBatteryStateChanged;
         _monitorService.EstimateChanged += OnEstimateChanged;
@@ -127,6 +132,7 @@ public partial class MainViewModel : ViewModelBase
                 ChargedToText = "—";
 
             UpdateLastSyncText();
+            UpdateFullChargeDuration();
         });
     }
 
@@ -146,7 +152,54 @@ public partial class MainViewModel : ViewModelBase
             {
                 TimeRemainingText = "—";
             }
+            UpdateFullChargeDuration();
         });
+    }
+
+    private void UpdateFullChargeDuration()
+    {
+        // Get display name from current state
+        string displayName = _monitorService.CurrentState.DeviceName;
+
+        if (string.IsNullOrEmpty(displayName) || displayName == "Glorious Mouse")
+        {
+            FullChargeDurationText = "—";
+            return;
+        }
+
+        // Load profiles to find the composite key (uses _storageService in-memory cache from previous branch)
+        var profiles = _storageService.LoadProfiles();
+        var profile = profiles.FirstOrDefault(p => p.ModelName == displayName);
+
+        if (profile == null)
+        {
+            FullChargeDurationText = "—";
+            return;
+        }
+
+        // Use composite key to lookup learned rates (matches BatteryMonitorService._activeProfile?.CompositeKey pattern)
+        string deviceKey = profile.CompositeKey;
+        var rates = _estimationService.GetLearnedRates(deviceKey);
+
+        if (rates?.DischargeRate is not double rate || rate <= 0)
+        {
+            FullChargeDurationText = "—";
+            return;
+        }
+
+        double totalHours = 100.0 / rate;
+
+        // Cap at 48h to avoid nonsensical estimates from near-zero rates
+        if (totalHours > 48.0)
+        {
+            FullChargeDurationText = "~48h+";
+            return;
+        }
+
+        var span = TimeSpan.FromHours(totalHours);
+        int hours = (int)span.TotalHours;
+        int mins = span.Minutes;
+        FullChargeDurationText = hours > 0 ? $"~{hours}h {mins}m" : $"~{mins}m";
     }
 
     private void LoadSettings()
