@@ -132,7 +132,6 @@ public partial class MainViewModel : ViewModelBase
                 ChargedToText = "—";
 
             UpdateLastSyncText();
-            UpdateFullChargeDuration();
         });
     }
 
@@ -167,39 +166,34 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        // Load profiles to find the composite key (uses _storageService in-memory cache from previous branch)
-        var profiles = _storageService.LoadProfiles();
-        var profile = profiles.FirstOrDefault(p => p.ModelName == displayName);
-
-        if (profile == null)
+        // Load cached charge data and iterate to find the current device's learned rates
+        // The estimation service only has in-memory state for the currently active device,
+        // so we iterate through all keys and find the one with non-null, positive discharge rate
+        var chargeData = _storageService.LoadChargeData();
+        foreach (var kvp in chargeData.Devices)
         {
-            FullChargeDurationText = "—";
+            var rates = _estimationService.GetLearnedRates(kvp.Key);
+            if (rates?.DischargeRate is not double rate || rate <= 0)
+                continue;
+
+            double totalHours = 100.0 / rate;
+
+            // Cap at 48h to avoid nonsensical estimates from near-zero rates
+            if (totalHours > 48.0)
+            {
+                FullChargeDurationText = "~48h+";
+                return;
+            }
+
+            var span = TimeSpan.FromHours(totalHours);
+            int hours = (int)span.TotalHours;
+            int mins = span.Minutes;
+            FullChargeDurationText = hours > 0 ? $"~{hours}h {mins}m" : $"~{mins}m";
             return;
         }
 
-        // Use composite key to lookup learned rates (matches BatteryMonitorService._activeProfile?.CompositeKey pattern)
-        string deviceKey = profile.CompositeKey;
-        var rates = _estimationService.GetLearnedRates(deviceKey);
-
-        if (rates?.DischargeRate is not double rate || rate <= 0)
-        {
-            FullChargeDurationText = "—";
-            return;
-        }
-
-        double totalHours = 100.0 / rate;
-
-        // Cap at 48h to avoid nonsensical estimates from near-zero rates
-        if (totalHours > 48.0)
-        {
-            FullChargeDurationText = "~48h+";
-            return;
-        }
-
-        var span = TimeSpan.FromHours(totalHours);
-        int hours = (int)span.TotalHours;
-        int mins = span.Minutes;
-        FullChargeDurationText = hours > 0 ? $"~{hours}h {mins}m" : $"~{mins}m";
+        // No device with learned rates found
+        FullChargeDurationText = "—";
     }
 
     private void LoadSettings()
