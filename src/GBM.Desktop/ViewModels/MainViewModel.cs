@@ -8,7 +8,7 @@ using Avalonia.Threading;
 
 namespace GBM.Desktop.ViewModels;
 
-public partial class MainViewModel : ViewModelBase
+public partial class MainViewModel : ViewModelBase, IDisposable
 {
     private readonly IBatteryMonitorService _monitorService;
     private readonly ISettingsService _settingsService;
@@ -52,6 +52,8 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty] private int _refreshInterval = 5;
     [ObservableProperty] private int _lowThreshold = 20;
     [ObservableProperty] private int _criticalThreshold = 10;
+    [ObservableProperty] private int _notificationCooldownMinutes = 5;
+    [ObservableProperty] private bool _debugLogging;
     [ObservableProperty] private bool _isAdvancedExpanded;
     [ObservableProperty] private bool _isDevToolsExpanded;
 
@@ -206,6 +208,8 @@ public partial class MainViewModel : ViewModelBase
         RefreshInterval = s.RefreshIntervalSeconds;
         LowThreshold = s.LowBatteryThreshold;
         CriticalThreshold = s.CriticalBatteryThreshold;
+        NotificationCooldownMinutes = s.NotificationCooldownMinutes;
+        DebugLogging = s.DebugLogging;
         CurrentTheme = s.Theme;
         IsDarkTheme = s.Theme == "dark";
     }
@@ -235,6 +239,8 @@ public partial class MainViewModel : ViewModelBase
             RefreshIntervalSeconds = Math.Clamp(RefreshInterval, 1, 60),
             LowBatteryThreshold = Math.Clamp(LowThreshold, 5, 50),
             CriticalBatteryThreshold = Math.Clamp(CriticalThreshold, 5, 30),
+            NotificationCooldownMinutes = Math.Clamp(NotificationCooldownMinutes, 1, 60),
+            DebugLogging = DebugLogging,
             Theme = CurrentTheme
         };
         _settingsService.Save(settings);
@@ -371,8 +377,21 @@ public partial class MainViewModel : ViewModelBase
         // if success, app shuts down — lines below never reached
     }
 
+    private bool _disposed;
     private System.Timers.Timer? _toastTimer;
     private System.Timers.Timer? _syncTimer;
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _syncTimer?.Stop();
+        _syncTimer?.Dispose();
+        _syncTimer = null;
+        _toastTimer?.Stop();
+        _toastTimer?.Dispose();
+        _toastTimer = null;
+    }
 
     private void StartSyncTimer()
     {
@@ -413,6 +432,7 @@ public partial class MainViewModel : ViewModelBase
         {
             Dispatcher.UIThread.Post(() => IsToastVisible = false);
             _toastTimer?.Dispose();
+            _toastTimer = null;
         };
         _toastTimer.AutoReset = false;
         _toastTimer.Start();

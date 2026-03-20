@@ -12,4 +12,9 @@ public interface IBatteryMonitorService
     void TriggerRescan();
     event Action<BatteryState>? BatteryStateChanged;
     event Action<BatteryEstimate>? EstimateChanged;
+    /// <summary>
+    /// Fired during device discovery to report human-readable probe status.
+    /// Used by the splash screen to show connection progress.
+    /// </summary>
+    event Action<string>? ProbeStatusChanged;
 }

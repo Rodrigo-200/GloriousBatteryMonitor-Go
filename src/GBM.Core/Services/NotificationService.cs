@@ -9,8 +9,6 @@ public class NotificationService : INotificationService
     private readonly Dictionary<string, DeviceNotificationState> _deviceStates = new();
     private readonly object _lock = new();
 
-    private static readonly TimeSpan CooldownPeriod = TimeSpan.FromMinutes(5);
-
     public event Action<NotificationType, string, string>? NotificationTriggered;
 
     public NotificationService(ILogger<NotificationService> logger)
@@ -25,6 +23,8 @@ public class NotificationService : INotificationService
 
         lock (_lock)
         {
+            var cooldown = TimeSpan.FromMinutes(settings.NotificationCooldownMinutes);
+
             try
             {
                 string deviceKey = current.DeviceName;
@@ -37,7 +37,7 @@ public class NotificationService : INotificationService
                     {
                         TryFireNotification(state, NotificationType.Disconnected,
                             "Device Disconnected",
-                            "Your Glorious mouse has been disconnected.");
+                            "Your Glorious mouse has been disconnected.", cooldown);
                     }
 
                     return;
@@ -64,7 +64,7 @@ public class NotificationService : INotificationService
                 {
                     if (TryFireNotification(state, NotificationType.FullCharge,
                             "Charging Complete",
-                            "Your mouse is fully charged!"))
+                            "Your mouse is fully charged!", cooldown))
                     {
                         state.FullChargeFired = true;
                     }
@@ -80,7 +80,7 @@ public class NotificationService : INotificationService
                     {
                         if (TryFireNotification(state, NotificationType.Low,
                                 "Low Battery",
-                                $"Battery is low at {current.Level}%."))
+                                $"Battery is low at {current.Level}%.", cooldown))
                         {
                             state.LowFired = true;
                         }
@@ -97,7 +97,7 @@ public class NotificationService : INotificationService
                     {
                         if (TryFireNotification(state, NotificationType.Critical,
                                 "Critical Battery",
-                                $"Battery is critically low at {current.Level}%!"))
+                                $"Battery is critically low at {current.Level}%!", cooldown))
                         {
                             state.CriticalFired = true;
                         }
@@ -114,14 +114,14 @@ public class NotificationService : INotificationService
         }
     }
 
-    private bool TryFireNotification(DeviceNotificationState state, NotificationType type, string title, string message)
+    private bool TryFireNotification(DeviceNotificationState state, NotificationType type, string title, string message, TimeSpan cooldown)
     {
         DateTime now = DateTime.UtcNow;
 
         // Check cooldown
         if (state.LastNotificationTimes.TryGetValue(type, out var lastTime))
         {
-            if (now - lastTime < CooldownPeriod)
+            if (now - lastTime < cooldown)
             {
                 _logger.LogDebug("Notification {Type} suppressed (cooldown active, last fired {Time})",
                     type, lastTime);

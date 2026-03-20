@@ -124,4 +124,35 @@ public class NotificationServiceTests
         // Should fire again because flag was reset
         _notifications.Should().Contain(n => n.Type == NotificationType.Low);
     }
+
+    [Fact]
+    public void Notifications_RespectCustomCooldown()
+    {
+        var settings = new AppSettings
+        {
+            NotificationsEnabled = true,
+            LowBatteryThreshold = 20,
+            CriticalBatteryThreshold = 10,
+            NotificationCooldownMinutes = 60
+        };
+
+        var previous = new BatteryState
+            { Level = 21, IsCharging = false, Connection = ConnectionState.Connected };
+        var current = new BatteryState
+            { Level = 19, IsCharging = false, Connection = ConnectionState.Connected };
+
+        _service.ProcessBatteryUpdate(current, previous, settings);
+        _notifications.Should().ContainSingle(n => n.Type == NotificationType.Low);
+        _notifications.Clear();
+
+        _service.ProcessBatteryUpdate(current, previous, settings);
+        _notifications.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Notifications_DefaultCooldownIsFiveMinutes()
+    {
+        var settings = new AppSettings();
+        settings.NotificationCooldownMinutes.Should().Be(5);
+    }
 }

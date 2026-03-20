@@ -101,4 +101,31 @@ public class MainViewModelTests
         Enum.IsDefined(NotificationType.FullCharge).Should().BeTrue();
         Enum.IsDefined(NotificationType.Disconnected).Should().BeTrue();
     }
+
+    [Fact]
+    public void AppSettings_NotificationCooldown_DefaultsToFive()
+    {
+        new AppSettings().NotificationCooldownMinutes.Should().Be(5);
+    }
+
+    [Fact]
+    public void AppSettings_DebugLogging_DefaultsToFalse()
+    {
+        new AppSettings().DebugLogging.Should().BeFalse();
+    }
+
+    [Fact]
+    public void AppSettings_Clone_IncludesNewFields()
+    {
+        var original = new AppSettings
+        {
+            NotificationCooldownMinutes = 15,
+            DebugLogging = true
+        };
+        var clone = original.Clone();
+        clone.NotificationCooldownMinutes.Should().Be(15);
+        clone.DebugLogging.Should().BeTrue();
+        clone.NotificationCooldownMinutes = 99;
+        original.NotificationCooldownMinutes.Should().Be(15);
+    }
 }

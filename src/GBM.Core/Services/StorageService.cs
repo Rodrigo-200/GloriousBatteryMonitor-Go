@@ -272,8 +272,26 @@ public class StorageService : IStorageService
         }
         catch (JsonException ex)
         {
-            _logger.LogError(ex, "{Description} file is corrupted at {Path}. Resetting to default.", description,
-                filePath);
+            _logger.LogError(ex,
+                "{Description} file is corrupted at {Path}. Backing up and resetting.",
+                description, filePath);
+
+            string backupPath = filePath +
+                $".corrupted.{DateTime.UtcNow:yyyyMMdd_HHmmss}";
+            try
+            {
+                File.Copy(filePath, backupPath, overwrite: false);
+                _logger.LogWarning(
+                    "[STORAGE] Corrupted {Description} backed up to {Backup}",
+                    description, Path.GetFileName(backupPath));
+            }
+            catch (Exception backupEx)
+            {
+                _logger.LogWarning(backupEx,
+                    "[STORAGE] Could not create backup of corrupted {Description} file",
+                    description);
+            }
+
             if (description == "charge data")
                 _cachedChargeData = null;
             TryDeleteFile(filePath);

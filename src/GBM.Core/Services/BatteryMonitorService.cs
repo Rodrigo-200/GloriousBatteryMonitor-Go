@@ -84,6 +84,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
     public event Action<BatteryState>? BatteryStateChanged;
     public event Action<BatteryEstimate>? EstimateChanged;
+    public event Action<string>? ProbeStatusChanged;
 
     public BatteryMonitorService(
         ILogger<BatteryMonitorService> logger,
@@ -466,6 +467,8 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             if (!_probeExhausted)
                 UpdateConnectionState(ConnectionState.Connecting);
 
+            ReportProbeStatus("Scanning for Glorious devices...");
+
             // Try cached profiles first
             var savedProfiles = _storageService.LoadProfiles();
             foreach (var profile in savedProfiles)
@@ -495,6 +498,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                         _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
                         _logger.LogInformation("Reconnected using cached profile for {Model} (attempt {Attempt}/{Max})",
                             profile.ModelName, attempt, maxAttempts);
+                        ReportProbeStatus($"Found {profile.ModelName}");
                         _activeProfile = profile;
                         profile.LastSeen = DateTime.UtcNow;
                         _storageService.SaveProfiles(savedProfiles);
@@ -521,6 +525,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     _probeExhausted = false;
                     _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
                     _logger.LogInformation("Discovered device: {Model} via probing", profile.ModelName);
+                    ReportProbeStatus($"Found {profile.ModelName}");
                     _activeProfile = profile;
 
                     // Save this profile for faster reconnection
@@ -547,6 +552,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             }
 
             _logger.LogDebug("No Glorious devices found during enumeration");
+            ReportProbeStatus("No Glorious device found");
         }
         catch (Exception ex)
         {
@@ -742,10 +748,17 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         }
     }
 
+    private void ReportProbeStatus(string message)
+    {
+        try { ProbeStatusChanged?.Invoke(message); }
+        catch { }
+    }
+
     private void TryRestoreCachedProfile()
     {
         try
         {
+            ReportProbeStatus("Checking saved device...");
             var profiles = _storageService.LoadProfiles();
             if (profiles.Count == 0)
                 return;
@@ -767,6 +780,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 if (result.Success)
                 {
                     _logger.LogInformation("Restored cached profile for {Model} (read OK)", profile.ModelName);
+                    ReportProbeStatus($"Reconnecting to {profile.ModelName}...");
                     _activeProfile = profile;
                     return;
                 }
@@ -784,6 +798,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                         "Restored cached Pixart profile for {Model} (device present, " +
                         "method={Method}, skipping initial read test)",
                         profile.ModelName, profile.PixartMethod);
+                    ReportProbeStatus($"Reconnecting to {profile.ModelName}...");
                     _activeProfile = profile;
                     return;
                 }

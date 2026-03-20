@@ -110,50 +110,37 @@ public partial class App : Application
 
             splash.SetStatus("Starting...");
 
-            // Create MainViewModel
             var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
-
-            // Create MainWindow
             var mainWindow = new MainWindow { DataContext = vm };
 
-            // Initialize tray
             _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
             _trayService.Initialize();
 
-            // Initialize toast service
             _toastService = _serviceProvider!.GetRequiredService<WindowsToastService>();
 
-            // Wire notification events → Windows Action Center toasts.
-            // Do NOT pop the window — use proper OS notifications that are non-intrusive.
             var notificationService = _serviceProvider!.GetRequiredService<INotificationService>();
             var toastService = _serviceProvider!.GetRequiredService<WindowsToastService>();
-
             notificationService.NotificationTriggered += (type, title, message) =>
             {
-                // Show OS-level toast notification (appears in Action Center)
                 Task.Run(() => toastService.ShowNotification(type, title, message));
-
-                // Do NOT show in-app toast or pop window for battery events
-                // (Windows notification is non-intrusive and sufficient)
             };
 
-            // Switch from splash to main window
+            // Start monitor BEFORE device search so events fire while splash is visible
+            _ = vm.InitializeAsync();
+
+            // Device connection phase on splash — max 20 seconds
+            var monitorService = _serviceProvider!.GetRequiredService<IBatteryMonitorService>();
+            await splash.ShowDeviceSearchAsync(monitorService, TimeSpan.FromSeconds(20));
+
+            // Transition to main window
             desktop.MainWindow = mainWindow;
             mainWindow.Show();
             splash.Close();
 
-            // Now that the main window is the active window, switch to normal
-            // shutdown mode so closing it will exit the app
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
 
-            // Hide after the transition if start-minimized is enabled
             if (settingsService.Current.StartMinimized)
-            {
                 mainWindow.Hide();
-            }
-
-            // Start monitoring
-            _ = vm.InitializeAsync();
 
             desktop.ShutdownRequested += OnShutdown;
         }
@@ -189,8 +176,36 @@ public partial class App : Application
         var logPath = System.IO.Path.Combine(settingsPath, "debug.log");
         System.IO.Directory.CreateDirectory(settingsPath);
 
-        // Clear the log file on every startup so it only contains the current session
-        try { if (System.IO.File.Exists(logPath)) System.IO.File.Delete(logPath); } catch { }
+        // Rename previous session log before overwriting, so crash logs survive
+        string prevLogPath = System.IO.Path.Combine(settingsPath, "debug.prev.log");
+        try
+        {
+            if (System.IO.File.Exists(logPath))
+            {
+                if (System.IO.File.Exists(prevLogPath))
+                    System.IO.File.Delete(prevLogPath);
+                System.IO.File.Move(logPath, prevLogPath);
+            }
+        }
+        catch { }
+
+        // Check debug mode from both env var and persisted settings before DI is built
+        bool debugMode = System.Environment.GetEnvironmentVariable("GBM_DEBUG") == "1";
+        if (!debugMode)
+        {
+            try
+            {
+                string settingsFile = System.IO.Path.Combine(settingsPath, "settings.json");
+                if (System.IO.File.Exists(settingsFile))
+                {
+                    string json = System.IO.File.ReadAllText(settingsFile);
+                    var parsed = System.Text.Json.JsonSerializer.Deserialize(
+                        json, GbmJsonContext.Default.AppSettings);
+                    debugMode = parsed?.DebugLogging ?? false;
+                }
+            }
+            catch { }
+        }
 
         var serilogLogger = new LoggerConfiguration()
             .MinimumLevel.Debug()
@@ -203,10 +218,7 @@ public partial class App : Application
         services.AddLogging(builder =>
         {
             builder.AddSerilog(serilogLogger, dispose: true);
-            if (System.Environment.GetEnvironmentVariable("GBM_DEBUG") == "1")
-                builder.SetMinimumLevel(LogLevel.Trace);
-            else
-                builder.SetMinimumLevel(LogLevel.Information);
+            builder.SetMinimumLevel(debugMode ? LogLevel.Debug : LogLevel.Information);
         });
 
         // Core services
@@ -258,6 +270,9 @@ public partial class App : Application
     {
         _toastService?.Dispose();
         _trayService?.Dispose();
+
+        if (_serviceProvider?.GetService<MainViewModel>() is MainViewModel vm)
+            vm.Dispose();
 
         if (_serviceProvider?.GetService<IBatteryMonitorService>() is BatteryMonitorService monitor)
         {

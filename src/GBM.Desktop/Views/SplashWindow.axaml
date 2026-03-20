@@ -58,6 +58,21 @@
                            HorizontalAlignment="Center" />
             </StackPanel>
 
+            <!-- Device Search Phase -->
+            <StackPanel Name="DeviceSearchPanel" IsVisible="False" Spacing="8">
+                <TextBlock Name="DeviceStatusText"
+                           Text="Searching for mouse..."
+                           Foreground="#8A8A98"
+                           FontSize="11"
+                           HorizontalAlignment="Center" />
+                <Button Name="SkipDeviceButton"
+                        Content="Continue anyway"
+                        Classes="muted"
+                        IsVisible="False"
+                        HorizontalAlignment="Center"
+                        Width="160" />
+            </StackPanel>
+
             <!-- Update Prompt Buttons -->
             <StackPanel Name="UpdateButtonsPanel" IsVisible="False"
                         Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
