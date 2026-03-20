@@ -12,16 +12,13 @@ public class WindowsToastService : IDisposable
 {
     private readonly ILogger<WindowsToastService> _logger;
     private bool _disposed;
+    private const string AppId = "GloriousBatteryMonitor.App";
 
     public WindowsToastService(ILogger<WindowsToastService> logger)
     {
         _logger = logger;
-        // Initialize: Pre-render icons
-        Task.Run(async () =>
-        {
-            await Task.Delay(100); // Let app finish startup
-            PreRenderIcons();
-        });
+        RegisterAppId(); // Must run before first Show() call — synchronous
+        PreRenderIcons(); // Pre-render all icons synchronously before notifications can fire
     }
 
     public void ShowNotification(NotificationType type, string title, string message)
@@ -71,7 +68,7 @@ public class WindowsToastService : IDisposable
             toast.Tag = "battery";
             toast.Group = "battery";
             Windows.UI.Notifications.ToastNotificationManager
-                .CreateToastNotifier("GloriousBatteryMonitor.App")
+                .CreateToastNotifier(AppId)
                 .Show(toast);
 
             _logger.LogDebug("[TOAST] WinRT toast displayed successfully");
@@ -79,6 +76,39 @@ public class WindowsToastService : IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "[TOAST] Exception displaying toast for type {Type}", type);
+        }
+    }
+
+    /// <summary>
+    /// Registers the AppId in the registry so Windows delivers toast notifications
+    /// for this non-packaged app. Required before CreateToastNotifier(AppId).Show().
+    /// Registry path: HKCU\SOFTWARE\Classes\AppUserModelId\{AppId}
+    /// </summary>
+    private void RegisterAppId()
+    {
+        try
+        {
+            string keyPath = $@"SOFTWARE\Classes\AppUserModelId\{AppId}";
+
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(keyPath, writable: true);
+            if (key == null)
+            {
+                _logger.LogWarning("[TOAST] Failed to create AppId registry key — notifications may not appear");
+                return;
+            }
+
+            key.SetValue("DisplayName", "Glorious Battery Monitor", Microsoft.Win32.RegistryValueKind.String);
+
+            // Set the icon to the running executable so Windows shows the correct icon
+            string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
+                             ?? System.AppContext.BaseDirectory + "GBM.Desktop.exe";
+            key.SetValue("IconUri", exePath, Microsoft.Win32.RegistryValueKind.String);
+
+            _logger.LogInformation("[TOAST] AppId registered in registry: {Key}", keyPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[TOAST] Failed to register AppId in registry");
         }
     }
 
