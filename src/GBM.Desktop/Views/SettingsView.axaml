@@ -87,6 +87,18 @@
                                           VerticalAlignment="Center" />
                         </Grid>
 
+                        <!-- Debug Logging -->
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Debug Logging" FontSize="13" FontWeight="Medium"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="Write verbose logs (restart required)" FontSize="11"
+                                           Foreground="{DynamicResource TextMutedBrush}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1" IsChecked="{Binding DebugLogging}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
+
                         <!-- Divider -->
                         <Border Height="1" Background="{DynamicResource SurfaceBorderBrush}" Margin="0,4" />
 
@@ -126,6 +138,17 @@
                                                VerticalAlignment="Center" />
                                     <NumericUpDown Grid.Column="1" Value="{Binding CriticalThreshold}"
                                                    Minimum="5" Maximum="30" Width="110"
+                                                   FormatString="0" />
+                                </Grid>
+
+                                <!-- Notification Cooldown -->
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="Notification Cooldown (min)" FontSize="13"
+                                               Foreground="{DynamicResource TextPrimaryBrush}"
+                                               VerticalAlignment="Center" />
+                                    <NumericUpDown Grid.Column="1"
+                                                   Value="{Binding NotificationCooldownMinutes}"
+                                                   Minimum="1" Maximum="60" Width="110"
                                                    FormatString="0" />
                                 </Grid>
 

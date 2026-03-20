@@ -23,6 +23,7 @@ Thumbs.db
 
 ## Logs
 *.log
+debug.prev.log
 
 ## Velopack local packaging
 *.nupkg
