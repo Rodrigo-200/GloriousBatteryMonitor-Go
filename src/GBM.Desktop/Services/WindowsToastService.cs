@@ -1,5 +1,6 @@
 using GBM.Core.Models;
 using Microsoft.Extensions.Logging;
+using System.Runtime.InteropServices;
 
 namespace GBM.Desktop.Services;
 
@@ -12,12 +13,25 @@ public class WindowsToastService : IDisposable
 {
     private readonly ILogger<WindowsToastService> _logger;
     private bool _disposed;
+    private Windows.UI.Notifications.ToastNotifier? _toastNotifier;
     private const string AppId = "GloriousBatteryMonitor.App";
 
     public WindowsToastService(ILogger<WindowsToastService> logger)
     {
         _logger = logger;
         RegisterAppId(); // Must run before first Show() call — synchronous
+
+        // Initialize ToastNotifier once and reuse it
+        try
+        {
+            _toastNotifier = Windows.UI.Notifications.ToastNotificationManager
+                .CreateToastNotifier(AppId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[TOAST] Failed to create ToastNotifier — notifications may not work");
+        }
+
         PreRenderIcons(); // Pre-render all icons synchronously before notifications can fire
     }
 
@@ -54,6 +68,12 @@ public class WindowsToastService : IDisposable
     {
         try
         {
+            if (_toastNotifier == null)
+            {
+                _logger.LogWarning("[TOAST] ToastNotifier not available");
+                return;
+            }
+
             // Build the XML template with icon if available
             string logoXml = iconUri != null
                 ? $@"<image placement=""appLogoOverride"" hint-crop=""circle"" src=""{EscapeXml(iconUri)}""/>"
@@ -61,15 +81,27 @@ public class WindowsToastService : IDisposable
 
             string toastXml = $@"<toast duration=""short""><visual><binding template=""ToastGeneric"">{logoXml}<text hint-maxLines=""1"">{EscapeXml(title)}</text><text>{EscapeXml(message)}</text><text placement=""attribution"">Glorious Battery Monitor</text></binding></visual><audio src=""{audioSrc}"" loop=""false""/></toast>";
 
-            // Use direct WinRT API
+            // Use direct WinRT API with proper COM object cleanup
             var doc = new Windows.Data.Xml.Dom.XmlDocument();
-            doc.LoadXml(toastXml);
-            var toast = new Windows.UI.Notifications.ToastNotification(doc);
-            toast.Tag = "battery";
-            toast.Group = "battery";
-            Windows.UI.Notifications.ToastNotificationManager
-                .CreateToastNotifier(AppId)
-                .Show(toast);
+            try
+            {
+                doc.LoadXml(toastXml);
+                var toast = new Windows.UI.Notifications.ToastNotification(doc);
+                try
+                {
+                    toast.Tag = "battery";
+                    toast.Group = "battery";
+                    _toastNotifier.Show(toast);
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(toast);
+                }
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(doc);
+            }
 
             _logger.LogDebug("[TOAST] WinRT toast displayed successfully");
         }
@@ -152,5 +184,12 @@ public class WindowsToastService : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        if (_toastNotifier != null)
+        {
+            try { Marshal.ReleaseComObject(_toastNotifier); }
+            catch { }
+            _toastNotifier = null;
+        }
     }
 }

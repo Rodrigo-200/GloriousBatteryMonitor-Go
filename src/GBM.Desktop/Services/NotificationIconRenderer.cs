@@ -1,14 +1,12 @@
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using GBM.Core.Models;
-using Microsoft.Extensions.Logging;
+using SkiaSharp;
 
 namespace GBM.Desktop.Services;
 
 /// <summary>
-/// Renders circular PNG notification icons for each battery alert type.
+/// Renders circular PNG notification icons for each battery alert type using SkiaSharp.
 /// Icons are written to %TEMP%\GBM\icons\ on first use and reused thereafter.
+/// Uses SkiaSharp (already loaded by Avalonia) — zero additional native memory cost.
 /// </summary>
 public static class NotificationIconRenderer
 {
@@ -16,10 +14,10 @@ public static class NotificationIconRenderer
         Path.GetTempPath(), "GBM", "icons");
 
     // Color palette matches the app's dark theme accent colors
-    private static readonly Color CriticalRed   = Color.FromArgb(0xDC, 0x26, 0x26);
-    private static readonly Color LowAmber      = Color.FromArgb(0xD9, 0x77, 0x06);
-    private static readonly Color FullGreen     = Color.FromArgb(0x05, 0x96, 0x69);
-    private static readonly Color DisconnectGray = Color.FromArgb(0x6B, 0x72, 0x80);
+    private static readonly SKColor CriticalRed    = new(0xDC, 0x26, 0x26);
+    private static readonly SKColor LowAmber       = new(0xD9, 0x77, 0x06);
+    private static readonly SKColor FullGreen      = new(0x05, 0x96, 0x69);
+    private static readonly SKColor DisconnectGray = new(0x6B, 0x72, 0x80);
 
     /// <summary>
     /// Returns a file:/// URI to a cached PNG icon for the given notification type.
@@ -36,7 +34,6 @@ public static class NotificationIconRenderer
             if (!File.Exists(filePath))
                 RenderIcon(type, filePath);
 
-            // Toast XML requires forward slashes and triple-slash for file URIs
             string uri = "file:///" + filePath.Replace('\\', '/');
             return uri;
         }
@@ -48,9 +45,9 @@ public static class NotificationIconRenderer
 
     private static void RenderIcon(NotificationType type, string outputPath)
     {
-        const int size = 96; // 96px — crisp at 100% and 200% DPI scaling
+        const int size = 96;
 
-        Color bg = type switch
+        SKColor bg = type switch
         {
             NotificationType.Critical     => CriticalRed,
             NotificationType.Low          => LowAmber,
@@ -59,64 +56,88 @@ public static class NotificationIconRenderer
             _                             => DisconnectGray
         };
 
-        using var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
-        using var g = Graphics.FromImage(bmp);
+        var imageInfo = new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul);
 
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Color.Transparent);
+        using var surface = SKSurface.Create(imageInfo);
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
 
-        // ── Background circle ──
-        using (var bgBrush = new SolidBrush(bg))
-            g.FillEllipse(bgBrush, 0, 0, size - 1, size - 1);
+        // Background circle
+        using (var bgPaint = new SKPaint
+        {
+            Color = bg,
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
+        })
+        {
+            canvas.DrawCircle(size / 2f, size / 2f, size / 2f - 0.5f, bgPaint);
+        }
 
-        // ── Draw content based on type ──
+        // Draw content
         if (type == NotificationType.Disconnected)
-            DrawPlugIcon(g, size);
+            DrawPlugIcon(canvas, size);
         else
-            DrawBatteryIcon(g, size, type);
+            DrawBatteryIcon(canvas, size, type);
 
-        bmp.Save(outputPath, ImageFormat.Png);
+        // Save as PNG
+        using var image = surface.Snapshot();
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        using var stream = File.OpenWrite(outputPath);
+        data.SaveTo(stream);
     }
 
-    /// <summary>
-    /// Draws a battery icon. Fill level and optional bolt vary by type.
-    /// </summary>
-    private static void DrawBatteryIcon(Graphics g, int size, NotificationType type)
+    private static void DrawBatteryIcon(SKCanvas canvas, int size, NotificationType type)
     {
-        // Battery body: horizontally centered, slightly wide
         float margin = size * 0.20f;
-        float termW = size * 0.06f;
-        float termH = size * 0.18f;
-        float bodyX = margin;
-        float bodyY = size * 0.30f;
-        float bodyW = size - margin * 2 - termW;
-        float bodyH = size * 0.40f;
-        float rx = size * 0.06f;
+        float termW  = size * 0.06f;
+        float termH  = size * 0.18f;
+        float bodyX  = margin;
+        float bodyY  = size * 0.30f;
+        float bodyW  = size - margin * 2 - termW;
+        float bodyH  = size * 0.40f;
+        float rx     = size * 0.06f;
+        float strokeW = size * 0.055f;
 
-        using var whitePen = new Pen(Color.White, size * 0.055f)
+        using var whiteFill = new SKPaint
         {
-            LineJoin = LineJoin.Round
+            Color = SKColors.White,
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
         };
-        using var whiteBrush = new SolidBrush(Color.White);
-        using var dimBrush = new SolidBrush(Color.FromArgb(80, 255, 255, 255));
+        using var whiteStroke = new SKPaint
+        {
+            Color = SKColors.White,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = strokeW,
+            StrokeJoin = SKStrokeJoin.Round
+        };
+        using var dimFill = new SKPaint
+        {
+            Color = new SKColor(255, 255, 255, 80),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
+        };
 
-        // Terminal nub (right side)
+        // Terminal nub
         float termX = bodyX + bodyW;
         float termY = bodyY + (bodyH - termH) / 2f;
-        using (var termPath = RoundedRect(termX, termY, termW, termH, rx * 0.5f))
-            g.FillPath(whiteBrush, termPath);
+        canvas.DrawRoundRect(termX, termY, termW, termH, rx * 0.5f, rx * 0.5f, whiteFill);
 
         // Battery outline
-        using (var bodyPath = RoundedRect(bodyX, bodyY, bodyW, bodyH, rx))
-            g.DrawPath(whitePen, bodyPath);
+        canvas.DrawRoundRect(bodyX, bodyY, bodyW, bodyH, rx, rx, whiteStroke);
 
-        // Fill interior
-        float fillPad = size * 0.055f;
+        // Fill track
+        float fillPad  = size * 0.055f;
         float fillMaxW = bodyW - fillPad * 2;
-        float fillH = bodyH - fillPad * 2;
-        float fillX = bodyX + fillPad;
-        float fillY = bodyY + fillPad;
+        float fillH    = bodyH - fillPad * 2;
+        float fillX    = bodyX + fillPad;
+        float fillY    = bodyY + fillPad;
+        float fillRx   = rx * 0.4f;
 
+        canvas.DrawRoundRect(fillX, fillY, fillMaxW, fillH, fillRx, fillRx, dimFill);
+
+        // Fill bar
         float fillFraction = type switch
         {
             NotificationType.Critical   => 0.10f,
@@ -125,105 +146,88 @@ public static class NotificationIconRenderer
             _                           => 0.50f
         };
 
-        // Ghost fill track (shows the unfilled portion)
-        using (var trackPath = RoundedRect(fillX, fillY, fillMaxW, fillH, rx * 0.4f))
-            g.FillPath(dimBrush, trackPath);
-
-        // Solid fill bar
         float fillW = fillMaxW * fillFraction;
-        if (fillW > rx)
-        {
-            using (var fillPath = RoundedRect(fillX, fillY, fillW, fillH, rx * 0.4f))
-                g.FillPath(whiteBrush, fillPath);
-        }
+        if (fillW > fillRx)
+            canvas.DrawRoundRect(fillX, fillY, fillW, fillH, fillRx, fillRx, whiteFill);
 
-        // Charging bolt overlay for FullCharge
+        // Bolt for FullCharge
         if (type == NotificationType.FullCharge)
-            DrawBolt(g, size, bodyX, bodyY, bodyW, bodyH);
+            DrawBolt(canvas, size, bodyX, bodyY, bodyW, bodyH);
     }
 
-    /// <summary>
-    /// Draws a lightning bolt centered in the battery body area.
-    /// </summary>
-    private static void DrawBolt(Graphics g, int size,
+    private static void DrawBolt(SKCanvas canvas, int size,
         float bodyX, float bodyY, float bodyW, float bodyH)
     {
         float cx = bodyX + bodyW * 0.48f;
         float cy = bodyY + bodyH * 0.50f;
-        float s = size * 0.14f;
+        float s  = size * 0.14f;
 
-        PointF[] bolt =
+        var bolt = new SKPath();
+        bolt.MoveTo(cx + s * 0.2f,  cy - s);
+        bolt.LineTo(cx - s * 0.1f,  cy + s * 0.1f);
+        bolt.LineTo(cx + s * 0.3f,  cy + s * 0.1f);
+        bolt.LineTo(cx - s * 0.2f,  cy + s);
+        bolt.LineTo(cx + s * 0.0f,  cy - s * 0.1f);
+        bolt.LineTo(cx - s * 0.1f,  cy - s * 0.1f);
+        bolt.Close();
+
+        using var boltPaint = new SKPaint
         {
-            new(cx + s * 0.2f, cy - s),        // top right
-            new(cx - s * 0.1f, cy + s * 0.1f), // middle left
-            new(cx + s * 0.3f, cy + s * 0.1f), // middle right
-            new(cx - s * 0.2f, cy + s),         // bottom left
-            new(cx + s * 0.0f, cy - s * 0.1f), // middle right upper
-            new(cx - s * 0.1f, cy - s * 0.1f), // middle left upper
+            Color = new SKColor(20, 20, 20, 200),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
         };
-
-        // Draw bolt in the fill color of the battery (dark bg) so it stands out on white fill
-        Color boltColor = Color.FromArgb(200, 20, 20, 20);
-        using var boltBrush = new SolidBrush(boltColor);
-        g.FillPolygon(boltBrush, bolt);
+        canvas.DrawPath(bolt, boltPaint);
     }
 
-    /// <summary>
-    /// Draws a plug/disconnect icon for the Disconnected notification type.
-    /// </summary>
-    private static void DrawPlugIcon(Graphics g, int size)
+    private static void DrawPlugIcon(SKCanvas canvas, int size)
     {
-        using var whitePen = new Pen(Color.White, size * 0.07f)
-        {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round
-        };
-        using var whiteBrush = new SolidBrush(Color.White);
-
         float cx = size * 0.50f;
         float cy = size * 0.50f;
-        float r = size * 0.22f;
+        float r  = size * 0.22f;
+        float strokeW = size * 0.07f;
+
+        using var whitePaint = new SKPaint
+        {
+            Color = SKColors.White,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = strokeW,
+            StrokeCap = SKStrokeCap.Round
+        };
+        using var whiteFill = new SKPaint
+        {
+            Color = SKColors.White,
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill
+        };
 
         // Circle outline
-        g.DrawEllipse(whitePen, cx - r, cy - r, r * 2, r * 2);
+        canvas.DrawCircle(cx, cy, r, whitePaint);
 
-        // Two prongs at top
-        float prongW = size * 0.07f;
-        float prongH = size * 0.15f;
+        // Two prongs
+        float prongW       = size * 0.07f;
+        float prongH       = size * 0.15f;
         float prongSpacing = size * 0.12f;
 
-        using var prongBrush = new SolidBrush(Color.White);
-        g.FillRectangle(prongBrush,
-            cx - prongSpacing - prongW / 2, cy - r - prongH,
-            prongW, prongH);
-        g.FillRectangle(prongBrush,
-            cx + prongSpacing - prongW / 2, cy - r - prongH,
-            prongW, prongH);
+        canvas.DrawRect(cx - prongSpacing - prongW / 2, cy - r - prongH, prongW, prongH, whiteFill);
+        canvas.DrawRect(cx + prongSpacing - prongW / 2, cy - r - prongH, prongW, prongH, whiteFill);
 
-        // Cord line at bottom
-        g.DrawLine(whitePen, cx, cy + r, cx, cy + r + size * 0.12f);
+        // Cord
+        canvas.DrawLine(cx, cy + r, cx, cy + r + size * 0.12f, whitePaint);
 
-        // Diagonal slash (the "disconnected" indicator)
-        using var slashPen = new Pen(Color.FromArgb(220, 255, 255, 255), size * 0.065f)
+        // Slash
+        using var slashPaint = new SKPaint
         {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round
+            Color = new SKColor(255, 255, 255, 220),
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = size * 0.065f,
+            StrokeCap = SKStrokeCap.Round
         };
-        g.DrawLine(slashPen,
+        canvas.DrawLine(
             cx - size * 0.28f, cy - size * 0.28f,
-            cx + size * 0.28f, cy + size * 0.28f);
-    }
-
-    /// <summary>Creates a GraphicsPath for a rounded rectangle.</summary>
-    private static GraphicsPath RoundedRect(float x, float y, float w, float h, float r)
-    {
-        float d = r * 2;
-        var path = new GraphicsPath();
-        path.AddArc(x, y, d, d, 180, 90);
-        path.AddArc(x + w - d, y, d, d, 270, 90);
-        path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
-        path.AddArc(x, y + h - d, d, d, 90, 90);
-        path.CloseFigure();
-        return path;
+            cx + size * 0.28f, cy + size * 0.28f,
+            slashPaint);
     }
 }
