@@ -19,7 +19,7 @@ public partial class App : Application
 {
     private ServiceProvider? _serviceProvider;
     private TrayIconService? _trayService;
-    private WindowsToastService? _toastService;
+    private Lazy<WindowsToastService>? _lazyToastService;
 
     public static ServiceProvider? Services { get; private set; }
 
@@ -116,13 +116,15 @@ public partial class App : Application
             _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
             _trayService.Initialize();
 
-            _toastService = _serviceProvider!.GetRequiredService<WindowsToastService>();
-
             var notificationService = _serviceProvider!.GetRequiredService<INotificationService>();
-            var toastService = _serviceProvider!.GetRequiredService<WindowsToastService>();
+            var lazyToast = _serviceProvider!.GetRequiredService<Lazy<WindowsToastService>>();
+            _lazyToastService = lazyToast;
+
             notificationService.NotificationTriggered += (type, title, message) =>
             {
-                Task.Run(() => toastService.ShowNotification(type, title, message));
+                // Accessing .Value here triggers construction on first notification only.
+                // Subsequent calls reuse the already-constructed singleton.
+                Task.Run(() => lazyToast.Value.ShowNotification(type, title, message));
             };
 
             // Start monitor BEFORE device search so events fire while splash is visible
@@ -234,6 +236,8 @@ public partial class App : Application
         // Desktop services
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<WindowsToastService>();
+        services.AddSingleton<Lazy<WindowsToastService>>(sp =>
+            new Lazy<WindowsToastService>(() => sp.GetRequiredService<WindowsToastService>()));
 
         // ViewModels
         services.AddSingleton<MainViewModel>();
@@ -268,7 +272,10 @@ public partial class App : Application
 
     private void OnShutdown(object? sender, ShutdownRequestedEventArgs e)
     {
-        _toastService?.Dispose();
+        // Only dispose if the lazy was ever initialized (i.e. at least one notification fired)
+        if (_lazyToastService?.IsValueCreated == true)
+            _lazyToastService.Value.Dispose();
+
         _trayService?.Dispose();
 
         if (_serviceProvider?.GetService<MainViewModel>() is MainViewModel vm)
