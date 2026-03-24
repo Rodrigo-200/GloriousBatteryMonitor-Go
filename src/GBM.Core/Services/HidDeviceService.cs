@@ -1050,9 +1050,26 @@ public class HidDeviceService : IHidDeviceService
                     "(GetFeature returns firmware status, not battery on split-interface devices)",
                     device.VendorId, device.ProductId);
 
+                // Candidate E: passive input report read (no request trigger required).
+                // Try E first — if firmware emits battery data unprompted, it's the fastest option (2s timeout).
+                // This is ideal for devices with intermittent RF response patterns.
+                _logger.LogInformation(
+                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate E (passive read on col05) " +
+                    "input={InputPath}...",
+                    device.VendorId, device.ProductId, siblingInput.DevicePath);
+
+                var resultE = TryPixartCandidateE(siblingInput, _logger);
+                if (resultE.Success && resultE.BatteryLevel >= 1)
+                {
+                    _logger.LogInformation(
+                        "[Pixart probe] candidate E returned battery={Level}, charging={Charging} — profile saved",
+                        resultE.BatteryLevel, resultE.IsCharging);
+                    return MakeProfile(PixartBatteryMethod.CandidateE, siblingInput.DevicePath,
+                        siblingInput.GetMaxInputReportLength(), useFeature: false);
+                }
+
                 // Candidate F: cross-interface request/response (col01 trigger → col05 input read).
-                // Try F first during probe since it's less invasive (no priming). G has aggressive priming
-                // that can affect device state. Use G as fallback in ongoing reads (see ReadBatteryPixart).
+                // Try F next since it's moderately invasive. G has aggressive priming.
                 _logger.LogInformation(
                     "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate F (cross-interface) " +
                     "trigger={TriggerPath} input={InputPath}...",

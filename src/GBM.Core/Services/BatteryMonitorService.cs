@@ -84,6 +84,13 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private int _candidateFThresholdHits;
     private const int CandidateFThresholdHitsBeforeClear = 3; // 3 hits ≈ 3-5 minutes of failures
 
+    // Exponential backoff for unreliable devices: when failures detected, gradually increase
+    // polling interval to give the device/RF link time to recover. Resets to 0 on successful read.
+    private int _pollBackoffMultiplier = 1; // 1x, 2x, 4x, etc. the user's configured interval
+    private DateTime _lastSuccessfulRead = DateTime.UtcNow;
+    private const int MaxPollBackoffMultiplier = 4; // Don't exceed 4x user's interval
+    private const int ConsecutiveFailuresBeforeBackoff = 2; // After 2 failures, start backing off
+
     public BatteryState CurrentState { get; private set; } = BatteryState.Disconnected;
     public BatteryEstimate CurrentEstimate { get; private set; } = BatteryEstimate.Invalid;
     public bool IsRunning => _pollingTask != null && !_pollingTask.IsCompleted;
@@ -217,7 +224,10 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 if (intervalSeconds < 1)
                     intervalSeconds = 5;
 
-                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(intervalSeconds));
+                // Apply exponential backoff multiplier when device is unreliable
+                int actualIntervalSeconds = intervalSeconds * _pollBackoffMultiplier;
+
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(actualIntervalSeconds));
 
                 while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
                 {
@@ -253,6 +263,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 _rescanRequested = false;
                 _activeProfile = null;
                 _consecutiveFailures = 0;
+                _pollBackoffMultiplier = 1; // Reset backoff on manual rescan
                 _estimationService.Reset(CurrentState.DeviceName);
             }
 
@@ -569,8 +580,10 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
     private void ProcessSuccessfulRead(int level, bool isCharging, bool skipEstimationSample = false)
     {
-        // Reset CandidateF failure tracking on successful read
+        // Reset failure tracking on successful read
         _candidateFThresholdHits = 0;
+        _pollBackoffMultiplier = 1; // Reset exponential backoff on success
+        _lastSuccessfulRead = DateTime.UtcNow;
 
         // When the mouse is sleeping (Status 0xA4), the dongle returns Level=0%.
         // Use the last known level instead and track consecutive zero reads.
@@ -658,6 +671,19 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _consecutiveFailures++;
         _logger.LogDebug("Battery read failed. Consecutive failures: {Count}", _consecutiveFailures);
 
+        // Apply exponential backoff when failures accumulate — increases poll interval
+        // to give unreliable RF links time to recover. Max 4x user's configured interval.
+        if (_consecutiveFailures >= ConsecutiveFailuresBeforeBackoff)
+        {
+            if (_pollBackoffMultiplier < MaxPollBackoffMultiplier)
+            {
+                _pollBackoffMultiplier++;
+                _logger.LogDebug(
+                    "[BACKOFF] Poll interval increased to {Multiplier}x user setting due to repeated failures",
+                    _pollBackoffMultiplier);
+            }
+        }
+
         // CandidateF and CandidateG have intermittent response patterns — use higher
         // thresholds to avoid unnecessary reconnect cycles during normal operation.
         int threshold = (_activeProfile?.PixartMethod) switch
@@ -694,6 +720,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     _activeProfile = null;
                     _consecutiveFailures = 0;
                     _candidateFThresholdHits = 0;
+                    _pollBackoffMultiplier = 1; // Reset backoff on re-probe
                     return;
                 }
             }
@@ -706,6 +733,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
             _activeProfile = null;
             _consecutiveFailures = 0;
+            _pollBackoffMultiplier = 1; // Reset backoff when clearing active profile
         }
     }
 
