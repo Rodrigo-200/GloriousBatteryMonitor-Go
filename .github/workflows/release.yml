@@ -47,8 +47,17 @@ jobs:
       - name: Generate changelog
         shell: pwsh
         run: |
-          dotnet tool install -g git-cliff
-          git-cliff --config cliff.toml --latest --strip header | Out-File -FilePath RELEASE_NOTES.md -Encoding utf8
+          # Download git-cliff binary
+          $version = "0.13.0"
+          $url = "https://github.com/orhun/git-cliff/releases/download/v${version}/git-cliff-v${version}-x86_64-pc-windows-msvc.zip"
+          $zipPath = "$env:TEMP\git-cliff.zip"
+          $extractPath = "$env:TEMP\git-cliff"
+
+          Invoke-WebRequest -Uri $url -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+
+          # Run git-cliff
+          & "$extractPath\git-cliff.exe" --config cliff.toml --latest --strip header | Out-File -FilePath RELEASE_NOTES.md -Encoding utf8
 
       - name: Install Velopack CLI
         run: dotnet tool install -g vpk
