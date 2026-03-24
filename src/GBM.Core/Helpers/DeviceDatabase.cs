@@ -39,6 +39,10 @@ public static class DeviceDatabase
         { (AlternateVendorId, 0x824D), ("Model D2", true) },
         // Alternate vendor - Model D2 Wired/Charging (PID changes when USB cable is plugged in)
         { (AlternateVendorId, 0x824A), ("Model D2", false) },
+        // Alternate vendor - Model I2 Wireless (Pixart chip)
+        { (AlternateVendorId, 0x821D), ("Model I2", true) },
+        // Alternate vendor - Model I2 Wired/Charging (PID changes when USB cable is plugged in)
+        { (AlternateVendorId, 0x821A), ("Model I2", false) },
     };
 
     public static bool IsKnownVendor(int vendorId) =>
