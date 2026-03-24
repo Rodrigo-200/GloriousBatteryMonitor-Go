@@ -323,7 +323,24 @@ public class HidDeviceService : IHidDeviceService
             if (profile.PixartMethod == PixartBatteryMethod.CandidateE)
                 return TryPixartCandidateE(hidDevice, _logger);
             if (profile.PixartMethod == PixartBatteryMethod.CandidateF)
-                return TryPixartCandidateF(profile, _logger);
+            {
+                var result = TryPixartCandidateF(profile, _logger);
+                // CandidateF is timing-sensitive and can be unreliable on some hardware.
+                // If it fails and we have CandidateG available (sibling device), try that as fallback.
+                if (!result.Success && !string.IsNullOrEmpty(profile.SiblingDevicePath))
+                {
+                    _logger.LogDebug("[Pixart] CandidateF failed, trying CandidateG as fallback...");
+                    var fallback = TryPixartCandidateG(profile, _logger);
+                    if (fallback.Success)
+                    {
+                        _logger.LogInformation(
+                            "[Pixart] CandidateG fallback succeeded (CandidateF was failing). " +
+                            "Consider re-probing this device to update the profile to CandidateG.");
+                        return fallback;
+                    }
+                }
+                return result;
+            }
             if (profile.PixartMethod == PixartBatteryMethod.CandidateG)
                 return TryPixartCandidateG(profile, _logger);
 

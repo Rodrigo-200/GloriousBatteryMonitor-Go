@@ -77,6 +77,26 @@ public class StorageService : IStorageService
         }
     }
 
+    public void ClearProfiles()
+    {
+        lock (_profilesLock)
+        {
+            try
+            {
+                var profilesPath = GetProfilesPath();
+                if (File.Exists(profilesPath))
+                {
+                    File.Delete(profilesPath);
+                    _logger.LogInformation("Cleared device profiles file");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to clear device profiles");
+            }
+        }
+    }
+
     public void AddBatterySample(string deviceKey, int level, bool isCharging)
     {
         lock (_chargeDataLock)

@@ -78,6 +78,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     // single DPI press. Use 10 so only a truly absent device triggers reconnect.
     private const int MaxConsecutiveFailuresCandidateG = 10;
 
+    // CandidateF failure healing: if CandidateF hits its threshold multiple times
+    // in succession, it indicates a hardware incompatibility. Clear the cached profile
+    // to force a re-probe that will pick a more reliable method (CandidateG).
+    private int _candidateFThresholdHits;
+    private const int CandidateFThresholdHitsBeforeClear = 3; // 3 hits ≈ 3-5 minutes of failures
+
     public BatteryState CurrentState { get; private set; } = BatteryState.Disconnected;
     public BatteryEstimate CurrentEstimate { get; private set; } = BatteryEstimate.Invalid;
     public bool IsRunning => _pollingTask != null && !_pollingTask.IsCompleted;
@@ -176,6 +182,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _rescanRequested = true;
         _activeProfile = null;
         _consecutiveFailures = 0;
+        _candidateFThresholdHits = 0;
         _consecutiveZeroReads = 0;
         _lastPositiveLevel = 0;
         _lastWiredPresent = false;
@@ -562,6 +569,9 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
     private void ProcessSuccessfulRead(int level, bool isCharging, bool skipEstimationSample = false)
     {
+        // Reset CandidateF failure tracking on successful read
+        _candidateFThresholdHits = 0;
+
         // When the mouse is sleeping (Status 0xA4), the dongle returns Level=0%.
         // Use the last known level instead and track consecutive zero reads.
         int displayLevel = level;
@@ -661,6 +671,32 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         {
             _logger.LogWarning("Max consecutive failures reached ({Count}). Attempting reconnect.",
                 _consecutiveFailures);
+
+            // CandidateF special handling: if it keeps hitting the threshold repeatedly,
+            // it indicates a hardware incompatibility. Clear the profile to force re-probe
+            // that will pick CandidateG (more reliable for ongoing reads).
+            if (_activeProfile?.PixartMethod == PixartBatteryMethod.CandidateF)
+            {
+                _candidateFThresholdHits++;
+                _logger.LogWarning(
+                    "[Pixart CandidateF] Threshold hit #{HitCount}. " +
+                    "If hit #{ClearThreshold} is reached, profile will be cleared for re-probe.",
+                    _candidateFThresholdHits, CandidateFThresholdHitsBeforeClear);
+
+                if (_candidateFThresholdHits >= CandidateFThresholdHitsBeforeClear)
+                {
+                    _logger.LogError(
+                        "[Pixart CandidateF] Pattern detected: CandidateF is unreliable on this hardware. " +
+                        "Clearing cached profile to force re-probe (will pick CandidateG).");
+
+                    // Delete the cached profile to force a full re-probe
+                    _storageService.ClearProfiles();
+                    _activeProfile = null;
+                    _consecutiveFailures = 0;
+                    _candidateFThresholdHits = 0;
+                    return;
+                }
+            }
 
             // Transition to LastKnown before full disconnect
             if (CurrentState.Connection == ConnectionState.Connected)

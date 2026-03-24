@@ -8,6 +8,7 @@ public interface IStorageService
     void SaveChargeData(ChargeData data);
     List<DeviceProfile> LoadProfiles();
     void SaveProfiles(List<DeviceProfile> profiles);
+    void ClearProfiles();
     void AddBatterySample(string deviceKey, int level, bool isCharging);
     DeviceChargeData? GetDeviceChargeData(string deviceKey);
     void UpdateChargeInfo(string deviceKey, int level, DateTime? chargeTime);
