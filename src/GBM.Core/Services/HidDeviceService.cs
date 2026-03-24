@@ -323,24 +323,7 @@ public class HidDeviceService : IHidDeviceService
             if (profile.PixartMethod == PixartBatteryMethod.CandidateE)
                 return TryPixartCandidateE(hidDevice, _logger);
             if (profile.PixartMethod == PixartBatteryMethod.CandidateF)
-            {
-                var result = TryPixartCandidateF(profile, _logger);
-                // CandidateF is timing-sensitive and can be unreliable on some hardware.
-                // If it fails and we have CandidateG available (sibling device), try that as fallback.
-                if (!result.Success && !string.IsNullOrEmpty(profile.SiblingDevicePath))
-                {
-                    _logger.LogDebug("[Pixart] CandidateF failed, trying CandidateG as fallback...");
-                    var fallback = TryPixartCandidateG(profile, _logger);
-                    if (fallback.Success)
-                    {
-                        _logger.LogInformation(
-                            "[Pixart] CandidateG fallback succeeded (CandidateF was failing). " +
-                            "Consider re-probing this device to update the profile to CandidateG.");
-                        return fallback;
-                    }
-                }
-                return result;
-            }
+                return TryPixartCandidateF(profile, _logger);
             if (profile.PixartMethod == PixartBatteryMethod.CandidateG)
                 return TryPixartCandidateG(profile, _logger);
 
@@ -1067,25 +1050,9 @@ public class HidDeviceService : IHidDeviceService
                     "(GetFeature returns firmware status, not battery on split-interface devices)",
                     device.VendorId, device.ProductId);
 
-                // Candidate G: write-triggered cross-interface (SetFeature/Write on col01 → read col05).
-                // Try G first — it's more robust than F for ongoing reads since it actively triggers the device.
-                _logger.LogInformation(
-                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate G (write-trigger) " +
-                    "trigger={TriggerPath} input={InputPath}...",
-                    device.VendorId, device.ProductId, device.DevicePath, siblingInput.DevicePath);
-
-                var resultG = TryPixartCandidateG(hidDevice, siblingInput, _logger);
-                if (resultG.Success && resultG.BatteryLevel >= 1)
-                {
-                    _logger.LogInformation(
-                        "[Pixart probe] candidate G returned battery={Level}, charging={Charging} — profile saved",
-                        resultG.BatteryLevel, resultG.IsCharging);
-                    return MakeProfile(PixartBatteryMethod.CandidateG, device.DevicePath, maxFeatureLen, true,
-                        siblingPath: siblingInput.DevicePath);
-                }
-
                 // Candidate F: cross-interface request/response (col01 trigger → col05 input read).
-                // Fallback to F if G didn't work.
+                // Try F first during probe since it's less invasive (no priming). G has aggressive priming
+                // that can affect device state. Use G as fallback in ongoing reads (see ReadBatteryPixart).
                 _logger.LogInformation(
                     "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate F (cross-interface) " +
                     "trigger={TriggerPath} input={InputPath}...",
@@ -1098,6 +1065,23 @@ public class HidDeviceService : IHidDeviceService
                         "[Pixart probe] candidate F returned battery={Level}, charging={Charging} — profile saved",
                         resultF.BatteryLevel, resultF.IsCharging);
                     return MakeProfile(PixartBatteryMethod.CandidateF, device.DevicePath, maxFeatureLen, true,
+                        siblingPath: siblingInput.DevicePath);
+                }
+
+                // Candidate G: write-triggered cross-interface (SetFeature/Write on col01 → read col05).
+                // Try G as fallback if F didn't succeed.
+                _logger.LogInformation(
+                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate G (write-trigger) " +
+                    "trigger={TriggerPath} input={InputPath}...",
+                    device.VendorId, device.ProductId, device.DevicePath, siblingInput.DevicePath);
+
+                var resultG = TryPixartCandidateG(hidDevice, siblingInput, _logger);
+                if (resultG.Success && resultG.BatteryLevel >= 1)
+                {
+                    _logger.LogInformation(
+                        "[Pixart probe] candidate G returned battery={Level}, charging={Charging} — profile saved",
+                        resultG.BatteryLevel, resultG.IsCharging);
+                    return MakeProfile(PixartBatteryMethod.CandidateG, device.DevicePath, maxFeatureLen, true,
                         siblingPath: siblingInput.DevicePath);
                 }
             }
