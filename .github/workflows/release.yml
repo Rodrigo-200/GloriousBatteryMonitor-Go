@@ -45,12 +45,10 @@ jobs:
         run: dotnet test --configuration Release --no-build --verbosity normal
 
       - name: Generate changelog
-        uses: orhun/git-cliff-action@v3
-        with:
-          config: cliff.toml
-          args: --latest --strip header
-        env:
-          OUTPUT: RELEASE_NOTES.md
+        shell: pwsh
+        run: |
+          dotnet tool install -g git-cliff
+          git-cliff --config cliff.toml --latest --strip header | Out-File -FilePath RELEASE_NOTES.md -Encoding utf8
 
       - name: Install Velopack CLI
         run: dotnet tool install -g vpk
