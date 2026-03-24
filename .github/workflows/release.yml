@@ -56,8 +56,9 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $zipPath
           Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
 
-          # Run git-cliff
-          & "$extractPath\git-cliff.exe" --config cliff.toml --latest --strip header | Out-File -FilePath RELEASE_NOTES.md -Encoding utf8
+          # Binary is in git-cliff-VERSION subdirectory
+          $exePath = "$extractPath\git-cliff-${version}\git-cliff.exe"
+          & $exePath --config cliff.toml --latest --strip header | Out-File -FilePath RELEASE_NOTES.md -Encoding utf8
 
       - name: Install Velopack CLI
         run: dotnet tool install -g vpk
