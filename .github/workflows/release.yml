@@ -47,9 +47,9 @@ jobs:
       - name: Generate changelog
         shell: pwsh
         run: |
-          # Download git-cliff binary
-          $version = "0.13.0"
-          $url = "https://github.com/orhun/git-cliff/releases/download/v${version}/git-cliff-v${version}-x86_64-pc-windows-msvc.zip"
+          # Download git-cliff binary (latest version)
+          $version = "2.12.0"
+          $url = "https://github.com/orhun/git-cliff/releases/download/v${version}/git-cliff-${version}-x86_64-pc-windows-msvc.zip"
           $zipPath = "$env:TEMP\git-cliff.zip"
           $extractPath = "$env:TEMP\git-cliff"
 
