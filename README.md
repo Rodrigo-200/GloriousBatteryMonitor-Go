@@ -4,7 +4,7 @@
 
 **A lightweight, open-source system tray app for checking real-time battery levels of Glorious wireless mice.**
 
-[![Version](https://img.shields.io/badge/Version-v3.0.3-brightgreen?style=flat)](../../releases)
+[![Version](https://img.shields.io/badge/Version-v3.2.5-brightgreen?style=flat)](../../releases)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=flat&logo=windows)](https://www.microsoft.com/windows)
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?style=flat&logo=dotnet)](https://dotnet.microsoft.com/)
