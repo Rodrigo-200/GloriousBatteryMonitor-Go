@@ -61,8 +61,8 @@
 
 ## 🖱️ Supported Devices
 
-> Tested and confirmed working with **Model D Wireless**.  
-> Active work is ongoing to support the **Model D2 Wireless**.
+> Tested and confirmed working with **Model D/D2 Wireless**.  
+> Active work is ongoing to support the **Model I2 Wireless**.
 
 | Model | Wired | Wireless | Status |
 |-------|-------|----------|:------:|
@@ -71,7 +71,7 @@
 | Model D | ✅ | ✅ | ✅ Working |
 | Model D- | ❔ | ❔ | Untested |
 | **Model D2** | ✅ | ✅ | ✅ Working |
-| Model I / I2 | ❔ | ❔ | Untested |
+| Model I / I2 | ⌛ | ⌛ | In Progress |
 | Model O Pro | ❔ | ❔ | Untested |
 
 **Known Vendor IDs:** `0x258A` (Glorious LLC), `0x093A` (Pixart — used by newer receivers)
