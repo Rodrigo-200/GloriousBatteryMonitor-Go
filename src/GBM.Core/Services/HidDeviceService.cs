@@ -537,7 +537,7 @@ public class HidDeviceService : IHidDeviceService
     }
 
     private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateE(
-        HidDevice device, ILogger logger)
+        HidDevice device, ILogger logger, int timeoutMs = 2000)
     {
         // Passive input report read on interfaces with MaxInput > 0.
         // Candidate C was incorrectly attempted on col01 (MaxInput=0).
@@ -545,9 +545,9 @@ public class HidDeviceService : IHidDeviceService
         try
         {
             using var stream = device.Open();
-            stream.ReadTimeout = 2000;
+            stream.ReadTimeout = timeoutMs;
 
-            var buf = stream.Read(); // blocking read, 2s timeout
+            var buf = stream.Read(); // blocking read, uses timeoutMs timeout
 
             logger.LogDebug(
                 "[Pixart CandidateE] passive read raw: {Bytes}",
@@ -1051,14 +1051,14 @@ public class HidDeviceService : IHidDeviceService
                     device.VendorId, device.ProductId);
 
                 // Candidate E: passive input report read (no request trigger required).
-                // Try E first — if firmware emits battery data unprompted, it's the fastest option (2s timeout).
+                // Try E first — if firmware emits battery data unprompted, it's the fastest option (10s timeout on probe).
                 // This is ideal for devices with intermittent RF response patterns.
                 _logger.LogInformation(
                     "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate E (passive read on col05) " +
                     "input={InputPath}...",
                     device.VendorId, device.ProductId, siblingInput.DevicePath);
 
-                var resultE = TryPixartCandidateE(siblingInput, _logger);
+                var resultE = TryPixartCandidateE(siblingInput, _logger, timeoutMs: 10000);
                 if (resultE.Success && resultE.BatteryLevel >= 1)
                 {
                     _logger.LogInformation(
@@ -1085,10 +1085,43 @@ public class HidDeviceService : IHidDeviceService
                         siblingPath: siblingInput.DevicePath);
                 }
 
+                // Candidate A: SetFeature + GetFeature (PAW3395 command 0x11)
+                _logger.LogDebug("[Pixart probe] candidate F no result, trying candidate A...");
+                try
+                {
+                    using var stream = hidDevice.Open();
+                    stream.ReadTimeout = 2000;
+                    stream.WriteTimeout = 2000;
+
+                    var resultA = TryPixartCandidateA(stream, maxFeatureLen);
+                    if (resultA.Success && resultA.BatteryLevel >= 1)
+                    {
+                        _logger.LogInformation(
+                            "[Pixart probe] candidate A returned battery={Level}, charging={Charging} — profile saved",
+                            resultA.BatteryLevel, resultA.IsCharging);
+                        return MakeProfile(PixartBatteryMethod.CandidateA, device.DevicePath, maxFeatureLen, true);
+                    }
+
+                    // Candidate B: SetFeature + GetFeature (command 0x04/0x01)
+                    _logger.LogDebug("[Pixart probe] candidate A no result, trying candidate B...");
+                    var resultB = TryPixartCandidateB(stream, maxFeatureLen);
+                    if (resultB.Success && resultB.BatteryLevel >= 1)
+                    {
+                        _logger.LogInformation(
+                            "[Pixart probe] candidate B returned battery={Level}, charging={Charging} — profile saved",
+                            resultB.BatteryLevel, resultB.IsCharging);
+                        return MakeProfile(PixartBatteryMethod.CandidateB, device.DevicePath, maxFeatureLen, true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[Pixart probe] Error during A/B probing on {Model}", device.ModelName);
+                }
+
                 // Candidate G: write-triggered cross-interface (SetFeature/Write on col01 → read col05).
-                // Try G as fallback if F didn't succeed.
+                // Try G as last resort since it has aggressive priming that can corrupt device state.
                 _logger.LogInformation(
-                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate G (write-trigger) " +
+                    "[Pixart probe] 0x{VID:X4}:0x{PID:X4} — trying candidate G (write-trigger, last resort) " +
                     "trigger={TriggerPath} input={InputPath}...",
                     device.VendorId, device.ProductId, device.DevicePath, siblingInput.DevicePath);
 
