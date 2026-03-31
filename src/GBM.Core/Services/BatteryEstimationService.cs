@@ -10,12 +10,12 @@ public class BatteryEstimationService : IBatteryEstimationService
     private readonly object _lock = new();
 
     private const int MinLevelChangeForEstimate = 3;
-    private const int MinRatesForSession = 3;
     private const int MaxSamplesPerDevice = 500;
     private const double MaxEstimateHours = 48.0;
     private const int MaxHistoricalSessions = 20;
     private const double MinReasonableRate = 0.1;
     private const double MaxReasonableRate = 200.0;
+    private static readonly TimeSpan MinSpanForLowDeltaEstimate = TimeSpan.FromHours(2);
 
     // Default rates for first-ever use (before any learning).
     // These provide an immediate estimate so "Calculating..." never lingers.
@@ -41,6 +41,16 @@ public class BatteryEstimationService : IBatteryEstimationService
     }
 
     public void AddSample(string deviceKey, int level, bool isCharging)
+    {
+        AddSampleInternal(deviceKey, level, isCharging, DateTime.UtcNow);
+    }
+
+    internal void AddSampleForTesting(string deviceKey, int level, bool isCharging, DateTime timestampUtc)
+    {
+        AddSampleInternal(deviceKey, level, isCharging, timestampUtc);
+    }
+
+    private void AddSampleInternal(string deviceKey, int level, bool isCharging, DateTime timestampUtc)
     {
         const double ewmaAlpha = 0.25;
 
@@ -68,7 +78,7 @@ public class BatteryEstimationService : IBatteryEstimationService
                 state.Samples.Add(new EstimationSample
                 {
                     Level = level,
-                    Timestamp = DateTime.UtcNow,
+                    Timestamp = timestampUtc,
                     IsCharging = isCharging
                 });
 
@@ -119,6 +129,8 @@ public class BatteryEstimationService : IBatteryEstimationService
                 // Learn from the current session before resetting
                 LearnFromSession(state, deviceKey);
                 state.Samples.Clear();
+                state.SmoothedRate = null;
+                state.LastEffectiveRate = null;
                 _logger.LogDebug("Estimation state reset for device {Key}", deviceKey);
             }
         }
@@ -233,21 +245,50 @@ public class BatteryEstimationService : IBatteryEstimationService
         {
             var samples = state.Samples;
             bool isCharging = state.LastIsCharging;
-            int lastLevel = samples.Count > 0 ? samples[^1].Level : 0;
+            if (samples.Count == 0)
+                return BatteryEstimate.Invalid;
+
+            int lastLevel = samples[^1].Level;
+            if (lastLevel <= 0)
+                return BatteryEstimate.Invalid;
+
+            var firstSample = samples[0];
+            var lastSample = samples[^1];
+            TimeSpan sampleSpan = samples.Count > 1 ? lastSample.Timestamp - firstSample.Timestamp : TimeSpan.Zero;
+            TimeSpan recency = DateTime.UtcNow - lastSample.Timestamp;
+
+            double defaultAbsRate = isCharging ? DefaultChargeRate : DefaultDischargeRate;
 
             // Try to compute session rate
             double? sessionAvgRate = null;
             bool hasSessionData = false;
 
-            if (samples.Count >= 2)
+            if (samples.Count >= 2 && state.SmoothedRate.HasValue)
             {
                 int firstLevel = samples[0].Level;
                 int totalChange = Math.Abs(lastLevel - firstLevel);
+                bool enoughSessionEvidence = totalChange >= MinLevelChangeForEstimate ||
+                                             (totalChange >= 1 && sampleSpan >= MinSpanForLowDeltaEstimate);
 
-                if (totalChange >= MinLevelChangeForEstimate && state.SmoothedRate.HasValue)
+                if (enoughSessionEvidence)
                 {
                     sessionAvgRate = state.SmoothedRate.Value;
                     hasSessionData = Math.Abs(sessionAvgRate.Value) >= 0.01;
+
+                    if (hasSessionData && isCharging && sessionAvgRate.Value <= 0)
+                    {
+                        _logger.LogWarning(
+                            "Session rate {Rate}%/hr has wrong sign for charging phase, falling through to learned/default",
+                            sessionAvgRate.Value);
+                        hasSessionData = false;
+                    }
+                    else if (hasSessionData && !isCharging && sessionAvgRate.Value >= 0)
+                    {
+                        _logger.LogWarning(
+                            "Session rate {Rate}%/hr has wrong sign for discharge phase, falling through to learned/default",
+                            sessionAvgRate.Value);
+                        hasSessionData = false;
+                    }
                 }
             }
 
@@ -255,106 +296,59 @@ public class BatteryEstimationService : IBatteryEstimationService
             double? historicalRate = isCharging ? state.HistoricalChargeRate : state.HistoricalDischargeRate;
             int historicalSessions = isCharging ? state.ChargeSessionCount : state.DischargeSessionCount;
             bool hasHistorical = historicalRate.HasValue && historicalRate.Value > 0 && historicalSessions > 0;
+            double historicalConfidence = hasHistorical ? ComputeHistoricalConfidence(historicalSessions) : 0.0;
+            double blendedHistoricalAbsRate = hasHistorical
+                ? BlendLearnedRateWithDefault(historicalRate!.Value, defaultAbsRate, historicalConfidence)
+                : defaultAbsRate;
+
+            var sessionRates = GetSessionRateSeries(samples, isCharging);
+            double sessionConfidence = ComputeSessionConfidence(sessionRates, samples.Count, sampleSpan, recency);
 
             // Determine effective rate with direction validation (warn but don't reject)
-            double effectiveRate;
+            double effectiveAbsRate;
             bool isHistorical;
 
             if (hasSessionData && hasHistorical)
             {
-                // Blend session and historical rates
-                double absSessionRate = Math.Abs(sessionAvgRate!.Value);
-
-                // Check for direction mismatch and log warning (but don't return Invalid)
-                if (isCharging && sessionAvgRate!.Value <= 0)
-                {
-                    _logger.LogWarning("Session rate {Rate}%/hr has wrong sign for charging phase, falling through to historical", sessionAvgRate!.Value);
-                    hasSessionData = false;
-                }
-                else if (!isCharging && sessionAvgRate!.Value >= 0)
-                {
-                    _logger.LogWarning("Session rate {Rate}%/hr has wrong sign for discharge phase, falling through to historical", sessionAvgRate!.Value);
-                    hasSessionData = false;
-                }
-
-                if (hasSessionData)
-                {
-                    double histWeight = Math.Min(historicalSessions, MaxHistoricalSessions);
-                    double sessionWeight = 1.0;  // SmoothedRate counts as 1 effective sample
-                    double blendedRate = (historicalRate!.Value * histWeight + absSessionRate * sessionWeight)
-                                         / (histWeight + sessionWeight);
-
-                    effectiveRate = isCharging ? blendedRate : -blendedRate;
-                    isHistorical = false;
-                }
-                else
-                {
-                    // Fallback to historical
-                    effectiveRate = isCharging ? historicalRate!.Value : -historicalRate!.Value;
-                    isHistorical = true;
-                }
+                // Blend current session with learned history. Better evidence carries more weight.
+                double sessionWeight = Math.Max(0.25, sessionConfidence);
+                double historicalWeight = Math.Max(0.15, historicalConfidence);
+                effectiveAbsRate = (Math.Abs(sessionAvgRate!.Value) * sessionWeight + blendedHistoricalAbsRate * historicalWeight)
+                                   / (sessionWeight + historicalWeight);
+                isHistorical = false;
             }
             else if (hasSessionData)
             {
-                // Session only
-                if (isCharging && sessionAvgRate!.Value <= 0)
-                {
-                    _logger.LogWarning("Session rate {Rate}%/hr has wrong sign for charging phase, falling through to historical/default", sessionAvgRate!.Value);
-                    hasSessionData = false;
-                }
-                else if (!isCharging && sessionAvgRate!.Value >= 0)
-                {
-                    _logger.LogWarning("Session rate {Rate}%/hr has wrong sign for discharge phase, falling through to historical/default", sessionAvgRate!.Value);
-                    hasSessionData = false;
-                }
-
-                if (hasSessionData)
-                {
-                    effectiveRate = sessionAvgRate!.Value;
-                    isHistorical = false;
-                }
-                else if (hasHistorical && lastLevel > 0)
-                {
-                    // Fallback to historical
-                    effectiveRate = isCharging ? historicalRate!.Value : -historicalRate!.Value;
-                    isHistorical = true;
-                }
-                else if (lastLevel > 0)
-                {
-                    // No historical, no session data — use built-in defaults
-                    double defaultRate = isCharging ? DefaultChargeRate : DefaultDischargeRate;
-                    effectiveRate = isCharging ? defaultRate : -defaultRate;
-                    isHistorical = true;
-                }
-                else
-                {
-                    // No battery level at all (device not connected yet)
-                    return BatteryEstimate.Invalid;
-                }
+                // Session only: blend against defaults until confidence grows.
+                double sessionWeight = Math.Clamp(sessionConfidence, 0.0, 1.0);
+                effectiveAbsRate = defaultAbsRate * (1.0 - sessionWeight) + Math.Abs(sessionAvgRate!.Value) * sessionWeight;
+                isHistorical = false;
             }
-            else if (hasHistorical && lastLevel > 0)
+            else if (hasHistorical)
             {
-                // Historical only (startup / early session)
-                effectiveRate = isCharging ? historicalRate!.Value : -historicalRate!.Value;
-                isHistorical = true;
-            }
-            else if (lastLevel > 0)
-            {
-                // No historical, no session data — use built-in defaults.
-                // This ensures a time estimate from the very first poll (like phones do).
-                double defaultRate = isCharging ? DefaultChargeRate : DefaultDischargeRate;
-                effectiveRate = isCharging ? defaultRate : -defaultRate;
+                // Historical only (startup / early session): blend learned rates with defaults
+                // unless confidence from session count is already strong.
+                effectiveAbsRate = blendedHistoricalAbsRate;
                 isHistorical = true;
             }
             else
             {
-                // No battery level at all (device not connected yet)
-                return BatteryEstimate.Invalid;
+                // No historical, no session data — use built-in defaults.
+                // This ensures a time estimate from the very first poll (like phones do).
+                effectiveAbsRate = defaultAbsRate;
+                isHistorical = true;
             }
+
+            if (effectiveAbsRate < MinReasonableRate || effectiveAbsRate > MaxReasonableRate)
+            {
+                effectiveAbsRate = defaultAbsRate;
+            }
+
+            double effectiveRate = isCharging ? effectiveAbsRate : -effectiveAbsRate;
 
             // Apply stability gate: if new rate is within 10% of last rate, use the last one
             const double stabilityThreshold = 0.1;
-            if (state.LastEffectiveRate.HasValue)
+            if (state.LastEffectiveRate.HasValue && Math.Abs(state.LastEffectiveRate.Value) > 0.001)
             {
                 double lastRate = state.LastEffectiveRate.Value;
                 double percentDiff = Math.Abs(effectiveRate - lastRate) / Math.Abs(lastRate);
@@ -373,12 +367,12 @@ public class BatteryEstimationService : IBatteryEstimationService
 
             if (isCharging)
             {
-                hoursRemaining = (100.0 - lastLevel) / Math.Abs(effectiveRate);
+                hoursRemaining = (100.0 - lastLevel) / effectiveAbsRate;
                 phase = "charge";
             }
             else
             {
-                hoursRemaining = lastLevel / Math.Abs(effectiveRate);
+                hoursRemaining = lastLevel / effectiveAbsRate;
                 phase = "discharge";
             }
 
@@ -387,24 +381,21 @@ public class BatteryEstimationService : IBatteryEstimationService
 
             // Compute confidence using SmoothedRate in a synthetic list
             double confidence;
-            if (isHistorical)
+            if (hasSessionData && hasHistorical)
             {
-                confidence = ComputeHistoricalConfidence(historicalSessions);
+                confidence = Math.Clamp(sessionConfidence * 0.7 + historicalConfidence * 0.3, 0.15, 1.0);
             }
-            else if (hasSessionData && state.SmoothedRate.HasValue)
+            else if (hasSessionData)
             {
-                // Use SmoothedRate in a synthetic list for consistency calculation
-                var syntheticRates = new List<double> { state.SmoothedRate.Value };
-                confidence = ComputeConfidence(syntheticRates, samples.Count);
-                if (hasHistorical)
-                {
-                    // Boost confidence when we have both session and historical backing
-                    confidence = Math.Min(1.0, confidence + 0.1);
-                }
+                confidence = Math.Clamp(sessionConfidence, 0.12, 1.0);
+            }
+            else if (isHistorical && hasHistorical)
+            {
+                confidence = historicalConfidence;
             }
             else
             {
-                confidence = 0.1;
+                confidence = 0.15;
             }
 
             return new BatteryEstimate
@@ -413,7 +404,7 @@ public class BatteryEstimationService : IBatteryEstimationService
                 TimeRemaining = TimeSpan.FromHours(hoursRemaining),
                 Confidence = confidence,
                 Phase = phase,
-                RatePerHour = Math.Abs(effectiveRate),
+                RatePerHour = effectiveAbsRate,
                 SampleCount = samples.Count,
                 IsHistorical = isHistorical
             };
@@ -425,24 +416,71 @@ public class BatteryEstimationService : IBatteryEstimationService
         }
     }
 
-    private static double ComputeConfidence(List<double> rates, int sampleCount)
+    private static double BlendLearnedRateWithDefault(double learnedRate, double defaultRate, double confidence)
     {
-        if (rates.Count < 2)
-            return 0.1;
+        double learnedWeight = Math.Clamp((confidence - 0.2) / 0.6, 0.0, 1.0);
+        return defaultRate * (1.0 - learnedWeight) + learnedRate * learnedWeight;
+    }
 
-        // Factor 1: Sample count contribution (0 to 0.5)
-        double sampleFactor = Math.Min(sampleCount / 20.0, 1.0) * 0.5;
+    private static List<double> GetSessionRateSeries(List<EstimationSample> samples, bool isCharging)
+    {
+        var rates = new List<double>(Math.Max(0, samples.Count - 1));
 
-        // Factor 2: Consistency / low standard deviation (0 to 0.5)
+        for (int i = 1; i < samples.Count; i++)
+        {
+            var prev = samples[i - 1];
+            var curr = samples[i];
+            double elapsedHours = (curr.Timestamp - prev.Timestamp).TotalHours;
+            if (elapsedHours <= 0)
+                continue;
+
+            double signedRate = (curr.Level - prev.Level) / elapsedHours;
+            if (isCharging && signedRate <= 0)
+                continue;
+            if (!isCharging && signedRate >= 0)
+                continue;
+
+            double absRate = Math.Abs(signedRate);
+            if (absRate < MinReasonableRate || absRate > MaxReasonableRate)
+                continue;
+
+            rates.Add(absRate);
+        }
+
+        return rates;
+    }
+
+    private static double ComputeSessionConfidence(
+        List<double> rates,
+        int sampleCount,
+        TimeSpan sampleSpan,
+        TimeSpan recency)
+    {
+        if (sampleCount < 2 || rates.Count == 0)
+            return 0.12;
+
+        // Factor 1: sample count (more points => better confidence)
+        double sampleFactor = Math.Clamp((sampleCount - 1) / 20.0, 0.0, 1.0);
+
+        // Factor 2: time span (a trend over hours is stronger than short bursts)
+        double spanFactor = Math.Clamp(sampleSpan.TotalHours / 6.0, 0.0, 1.0);
+
+        // Factor 3: variance (lower spread => more stable behavior)
         double mean = rates.Average();
         double variance = rates.Sum(r => (r - mean) * (r - mean)) / rates.Count;
         double stdDev = Math.Sqrt(variance);
+        double relativeStdDev = mean > 0.01 ? stdDev / mean : 1.0;
+        double varianceFactor = Math.Clamp(1.0 - relativeStdDev, 0.0, 1.0);
 
-        // Lower std dev relative to mean = higher consistency
-        double relativeStdDev = Math.Abs(mean) > 0.01 ? stdDev / Math.Abs(mean) : stdDev;
-        double consistencyFactor = Math.Max(0, 1.0 - relativeStdDev) * 0.5;
+        // Factor 4: recency (stale data should be less trusted)
+        double recencyFactor = Math.Clamp(1.0 - (recency.TotalMinutes / 30.0), 0.0, 1.0);
 
-        return Math.Clamp(sampleFactor + consistencyFactor, 0.0, 1.0);
+        double confidence = 0.10 +
+                            sampleFactor * 0.30 +
+                            spanFactor * 0.25 +
+                            varianceFactor * 0.20 +
+                            recencyFactor * 0.15;
+        return Math.Clamp(confidence, 0.12, 1.0);
     }
 
     /// <summary>
@@ -451,9 +489,12 @@ public class BatteryEstimationService : IBatteryEstimationService
     /// </summary>
     private static double ComputeHistoricalConfidence(int sessionCount)
     {
-        // 1 session → 0.3, 5 → 0.5, 10 → 0.6, 20+ → 0.7
-        double factor = Math.Min(sessionCount / 20.0, 1.0);
-        return 0.3 + factor * 0.4;
+        if (sessionCount <= 0)
+            return 0.15;
+
+        // Confidence rises smoothly with session count and plateaus below 1.0.
+        double sessionFactor = 1.0 - Math.Exp(-sessionCount / 6.0);
+        return Math.Clamp(0.25 + sessionFactor * 0.55, 0.25, 0.8);
     }
 
     private class DeviceEstimationState

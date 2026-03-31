@@ -11,6 +11,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private readonly IStorageService _storageService;
     private readonly IBatteryEstimationService _estimationService;
     private readonly INotificationService _notificationService;
+    private readonly SemaphoreSlim _pollingTickGate = new(1, 1);
 
     private readonly object _stateLock = new();
     private CancellationTokenSource? _cts;
@@ -18,6 +19,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private DeviceProfile? _activeProfile;
     private int _consecutiveFailures;
     private DateTime _lastReconnectAttempt = DateTime.MinValue;
+    private DateTime _lastReconnectTriggerUtc = DateTime.MinValue;
+    private DateTime _lastSuccessfulReadUtc = DateTime.MinValue;
+    private DateTime _lastAbsenceCheckUtc = DateTime.MinValue;
+    private bool _lastAbsenceCheckResult;
+    private DateTime _lastLearnedRatesPersistUtc = DateTime.MinValue;
+    private int _successfulReadsSinceLearnedPersist;
     private bool _disposed;
     private bool _rescanRequested;
 
@@ -62,7 +69,14 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private const int MaxEstimatedLevel = 99;     // Can't confirm 100% without real reading
 
     private static readonly TimeSpan ReconnectDebounce = TimeSpan.FromMilliseconds(900);
+    private static readonly TimeSpan ReconnectCooldown = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan AbsenceEvidenceRecheckInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MinNoSuccessBeforeReconnect = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan MinNoSuccessBeforeReconnectCandidateF = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan MinNoSuccessBeforeReconnectCandidateG = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan LearnedRatesPersistInterval = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan ExhaustedProbeDebounce = TimeSpan.FromSeconds(60);
+    private const int SuccessfulReadsPerLearnedPersist = 6;
     private const int MaxConsecutiveFailuresBeforeReconnect = 3;
 
     // CandidateF does not always get a response on every poll cycle — the device
@@ -145,6 +159,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         try
         {
+            PersistLearnedRatesForActiveProfile(force: true);
             _cts.Cancel();
 
             if (_pollingTask != null)
@@ -178,6 +193,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _consecutiveFailures = 0;
         _consecutiveZeroReads = 0;
         _lastPositiveLevel = 0;
+        _lastSuccessfulReadUtc = DateTime.MinValue;
+        _lastReconnectTriggerUtc = DateTime.MinValue;
+        _lastAbsenceCheckUtc = DateTime.MinValue;
+        _lastAbsenceCheckResult = false;
+        _lastLearnedRatesPersistUtc = DateTime.MinValue;
+        _successfulReadsSinceLearnedPersist = 0;
         _lastWiredPresent = false;
         _chargeStartTime = null;
         _chargeStartLevel = 0;
@@ -239,6 +260,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
     private Task PollOnceAsync(CancellationToken cancellationToken)
     {
+        if (!_pollingTickGate.Wait(0, cancellationToken))
+        {
+            _logger.LogDebug("[MONITOR] Skipping poll tick because previous tick is still in progress");
+            return Task.CompletedTask;
+        }
+
         try
         {
             if (_rescanRequested)
@@ -382,6 +409,10 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during polling tick");
+        }
+        finally
+        {
+            _pollingTickGate.Release();
         }
 
         return Task.CompletedTask;
@@ -562,6 +593,10 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
     private void ProcessSuccessfulRead(int level, bool isCharging, bool skipEstimationSample = false)
     {
+        _lastSuccessfulReadUtc = DateTime.UtcNow;
+        _lastAbsenceCheckResult = false;
+        _consecutiveFailures = 0;
+
         // When the mouse is sleeping (Status 0xA4), the dongle returns Level=0%.
         // Use the last known level instead and track consecutive zero reads.
         int displayLevel = level;
@@ -632,11 +667,17 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         }
         var estimate = _estimationService.GetEstimate(deviceKey);
         UpdateEstimate(estimate);
+        _successfulReadsSinceLearnedPersist++;
 
         // Persist learned rates when charging state changes (session rate just got blended)
         if (previousState.IsCharging != isCharging)
         {
-            PersistLearnedRates(deviceKey);
+            PersistLearnedRates(deviceKey, force: true);
+        }
+        else if (_successfulReadsSinceLearnedPersist >= SuccessfulReadsPerLearnedPersist ||
+                 DateTime.UtcNow - _lastLearnedRatesPersistUtc >= LearnedRatesPersistInterval)
+        {
+            PersistLearnedRates(deviceKey, force: false);
         }
 
         // Process notifications
@@ -659,18 +700,83 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         if (_consecutiveFailures >= threshold)
         {
-            _logger.LogWarning("Max consecutive failures reached ({Count}). Attempting reconnect.",
+            TimeSpan noSuccessWindow = (_activeProfile?.PixartMethod) switch
+            {
+                PixartBatteryMethod.CandidateF => MinNoSuccessBeforeReconnectCandidateF,
+                PixartBatteryMethod.CandidateG => MinNoSuccessBeforeReconnectCandidateG,
+                _ => MinNoSuccessBeforeReconnect
+            };
+
+            bool noRecentSuccess = _lastSuccessfulReadUtc == DateTime.MinValue ||
+                                   DateTime.UtcNow - _lastSuccessfulReadUtc >= noSuccessWindow;
+            if (!noRecentSuccess)
+            {
+                _logger.LogInformation(
+                    "[MONITOR] Reconnect gated: recent successful read within {Window}s",
+                    noSuccessWindow.TotalSeconds);
+                return;
+            }
+
+            bool hasAbsenceEvidence = HasCorroboratedAbsenceEvidence();
+            if (!hasAbsenceEvidence)
+            {
+                _logger.LogInformation(
+                    "[MONITOR] Reconnect gated: failure threshold met but device path is still present");
+                return;
+            }
+
+            if (DateTime.UtcNow - _lastReconnectTriggerUtc < ReconnectCooldown)
+            {
+                _logger.LogInformation(
+                    "[MONITOR] Reconnect gated by cooldown ({Cooldown}s)",
+                    ReconnectCooldown.TotalSeconds);
+                return;
+            }
+
+            _logger.LogWarning(
+                "Max consecutive failures reached ({Count}) with corroborated absence evidence. Attempting reconnect.",
                 _consecutiveFailures);
 
             // Transition to LastKnown before full disconnect
-            if (CurrentState.Connection == ConnectionState.Connected)
+            if (CurrentState.Connection == ConnectionState.Connected ||
+                CurrentState.Connection == ConnectionState.Sleeping)
             {
                 TransitionToLastKnown();
             }
 
+            _lastReconnectTriggerUtc = DateTime.UtcNow;
             _activeProfile = null;
             _consecutiveFailures = 0;
         }
+    }
+
+    private bool HasCorroboratedAbsenceEvidence()
+    {
+        if (_activeProfile == null)
+            return true;
+
+        if (!_hidDeviceService.IsDevicePresent(_activeProfile))
+            return true;
+
+        if (DateTime.UtcNow - _lastAbsenceCheckUtc < AbsenceEvidenceRecheckInterval)
+            return _lastAbsenceCheckResult;
+
+        bool noMatchingDevice = true;
+        try
+        {
+            var devices = _hidDeviceService.EnumerateDevices();
+            noMatchingDevice = !devices.Any(d =>
+                string.Equals(d.CompositeKey, _activeProfile.CompositeKey, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[MONITOR] Could not corroborate absence via re-enumeration");
+            noMatchingDevice = false;
+        }
+
+        _lastAbsenceCheckUtc = DateTime.UtcNow;
+        _lastAbsenceCheckResult = noMatchingDevice;
+        return noMatchingDevice;
     }
 
     private void TransitionToDisconnected()
@@ -908,7 +1014,16 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         }
     }
 
-    private void PersistLearnedRates(string deviceKey)
+    private void PersistLearnedRatesForActiveProfile(bool force)
+    {
+        string? key = _activeProfile?.CompositeKey;
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            PersistLearnedRates(key, force);
+        }
+    }
+
+    private void PersistLearnedRates(string deviceKey, bool force)
     {
         try
         {
@@ -918,6 +1033,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 _storageService.UpdateLearnedRates(deviceKey,
                     learned.DischargeRate, learned.ChargeRate,
                     learned.DischargeSessionCount, learned.ChargeSessionCount);
+                _lastLearnedRatesPersistUtc = DateTime.UtcNow;
+                _successfulReadsSinceLearnedPersist = 0;
+                if (force)
+                {
+                    _logger.LogDebug("Persisted learned rates for {Key} (forced)", deviceKey);
+                }
             }
         }
         catch (Exception ex)
@@ -935,6 +1056,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         try
         {
+            PersistLearnedRatesForActiveProfile(force: true);
             _cts?.Cancel();
             _cts?.Dispose();
         }

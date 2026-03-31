@@ -10,6 +10,9 @@ public class HidDeviceService : IHidDeviceService
 {
     private readonly ILogger<HidDeviceService> _logger;
     private readonly ISettingsService _settingsService;
+    private readonly object _candidateGStrategyLock = new();
+    private readonly Dictionary<string, CandidateGAdaptiveStrategy> _candidateGStrategies =
+        new(StringComparer.OrdinalIgnoreCase);
 
     // Suppress repeated "Wired device detected" log — only log on first detection,
     // then suppress until the wired device disappears and reappears.
@@ -806,164 +809,230 @@ public class HidDeviceService : IHidDeviceService
         new byte[] { 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
     };
 
-    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateG(
-        HidDevice triggerDevice, HidDevice inputDevice, ILogger logger)
+    private const int CandidateGReadTimeoutMs = 3000;
+    private const int CandidateGPrimerReadTimeoutMs = 500;
+    private const int CandidateGTriggerReadTimeoutMs = 2000;
+    private const int CandidateGTriggerWriteTimeoutMs = 2000;
+    private const int CandidateGPrimerTriggerTimeoutMs = 6000;
+    private const int CandidateGBackoffMinMs = 20;
+    private const int CandidateGBackoffMaxMs = 80;
+
+    private CandidateGAdaptiveStrategy GetCandidateGStrategy(string strategyKey)
     {
-        try
+        lock (_candidateGStrategyLock)
         {
-            // Open col05 ONCE for reading — keep alive across all attempts.
-            using var inputStream = inputDevice.Open();
-            inputStream.ReadTimeout = 3000;
-
-            // Phase 0: Prime the receiver by sending GET_FEATURE RID=0x03 multiple times.
-            // USB captures show the first attempt produces no response — the response
-            // only arrives on col05 after the 2nd or 3rd GET_FEATURE. Each attempt
-            // causes ~5s processing in the receiver firmware.
-            const int primerAttempts = 3;
-            for (int attempt = 1; attempt <= primerAttempts; attempt++)
+            if (!_candidateGStrategies.TryGetValue(strategyKey, out var strategy))
             {
-                try
-                {
-                    using var primerStream = triggerDevice.Open();
-                    primerStream.ReadTimeout = 6000;
-
-                    var primerBuf = new byte[65];
-                    primerBuf[0] = 0x03;
-
-                    try
-                    {
-                        primerStream.GetFeature(primerBuf);
-                        logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} returned",
-                            attempt, primerAttempts);
-                    }
-                    catch (IOException)
-                    {
-                        logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} threw IOException (expected)",
-                            attempt, primerAttempts);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} failed: {Msg}",
-                        attempt, primerAttempts, ex.Message);
-                }
-
-                // After each primer attempt, check if a response arrived on col05
-                try
-                {
-                    inputStream.ReadTimeout = 500;
-                    var drain = inputStream.Read();
-                    logger.LogDebug(
-                        "[Pixart CandidateG] primer attempt {Attempt} col05: {Bytes}",
-                        attempt, BitConverter.ToString(drain, 0, Math.Min(16, drain.Length)));
-
-                    var parsed = ParsePixartCol05Response(drain, logger, $"RID0x03-primer-attempt{attempt}");
-                    if (parsed.Success)
-                        return parsed;
-                }
-                catch { /* no queued report after this attempt — try again */ }
+                strategy = new CandidateGAdaptiveStrategy();
+                _candidateGStrategies[strategyKey] = strategy;
             }
 
-            inputStream.ReadTimeout = 3000;
+            return strategy;
+        }
+    }
 
-            // Phase 1: Try each known payload via SetFeature then Write on col01
-            foreach (var payload in CandidateGPayloads)
+    private static string GetCandidateGStrategyKey(string triggerPath, string inputPath)
+    {
+        return $"{triggerPath}|{inputPath}";
+    }
+
+    private static byte GetCandidateGPayloadCommandByte(byte[] payload)
+    {
+        return payload.Length > 1 ? payload[1] : (byte)0;
+    }
+
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateGPrimerSequence(
+        HidDevice triggerDevice, HidStream inputStream, ILogger logger, int primerAttempts)
+    {
+        for (int attempt = 1; attempt <= primerAttempts; attempt++)
+        {
+            try
             {
+                using var primerStream = triggerDevice.Open();
+                primerStream.ReadTimeout = CandidateGPrimerTriggerTimeoutMs;
+
+                var primerBuf = new byte[65];
+                primerBuf[0] = 0x03;
+
                 try
                 {
-                    using var triggerStream = triggerDevice.Open();
-                    triggerStream.ReadTimeout = 2000;
-                    triggerStream.WriteTimeout = 2000;
-
-                    int featureLen = 0;
-                    try { featureLen = triggerDevice.GetMaxFeatureReportLength(); } catch { }
-                    if (featureLen <= 0) featureLen = 64;
-
-                    // Pad the payload to the feature report length
-                    var featureBuf = new byte[featureLen];
-                    Array.Copy(payload, 0, featureBuf, 0, Math.Min(payload.Length, featureBuf.Length));
-
-                    // a. Try SetFeature — swallow IOException (expected on this device)
-                    try
-                    {
-                        triggerStream.SetFeature(featureBuf);
-                        logger.LogDebug(
-                            "[Pixart CandidateG] payload[1]=0x{Cmd:X2} SetFeature sent",
-                            payload.Length > 1 ? payload[1] : 0);
-                    }
-                    catch (IOException)
-                    {
-                        logger.LogDebug(
-                            "[Pixart CandidateG] payload[1]=0x{Cmd:X2} SetFeature threw IOException (expected)",
-                            payload.Length > 1 ? payload[1] : 0);
-                    }
-
-                    // b. Try Write as output report — swallow IOException
-                    try
-                    {
-                        int outputLen = 0;
-                        try { outputLen = triggerDevice.GetMaxOutputReportLength(); } catch { }
-                        if (outputLen > 0)
-                        {
-                            var outputBuf = new byte[outputLen];
-                            Array.Copy(payload, 0, outputBuf, 0, Math.Min(payload.Length, outputBuf.Length));
-                            triggerStream.Write(outputBuf);
-                            logger.LogDebug(
-                                "[Pixart CandidateG] payload[1]=0x{Cmd:X2} Write sent",
-                                payload.Length > 1 ? payload[1] : 0);
-                        }
-                    }
-                    catch (IOException)
-                    {
-                        logger.LogDebug(
-                            "[Pixart CandidateG] payload[1]=0x{Cmd:X2} Write threw IOException (expected)",
-                            payload.Length > 1 ? payload[1] : 0);
-                    }
+                    primerStream.GetFeature(primerBuf);
+                    logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} returned",
+                        attempt, primerAttempts);
                 }
-                catch (Exception ex)
+                catch (IOException)
                 {
-                    logger.LogDebug(
-                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} trigger failed: {Msg}",
-                        payload.Length > 1 ? payload[1] : 0, ex.Message);
+                    logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} threw IOException (expected)",
+                        attempt, primerAttempts);
                 }
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug("[Pixart CandidateG] RID=0x03 primer attempt {Attempt}/{Total} failed: {Msg}",
+                    attempt, primerAttempts, ex.Message);
+            }
 
-                // c. Read response from col05
-                try
+            try
+            {
+                inputStream.ReadTimeout = CandidateGPrimerReadTimeoutMs;
+                var response = inputStream.Read();
+                logger.LogDebug(
+                    "[Pixart CandidateG] primer attempt {Attempt} col05: {Bytes}",
+                    attempt, BitConverter.ToString(response, 0, Math.Min(16, response.Length)));
+
+                var parsed = ParsePixartCol05Response(response, logger, $"RID0x03-primer-attempt{attempt}");
+                if (parsed.Success)
+                    return parsed;
+            }
+            catch
+            {
+                // No queued report after this primer attempt.
+            }
+            finally
+            {
+                inputStream.ReadTimeout = CandidateGReadTimeoutMs;
+            }
+        }
+
+        return (false, 0, false);
+    }
+
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateGPayloadAttempt(
+        HidDevice triggerDevice, HidStream inputStream, ILogger logger, byte[] payload)
+    {
+        byte commandByte = GetCandidateGPayloadCommandByte(payload);
+
+        try
+        {
+            using var triggerStream = triggerDevice.Open();
+            triggerStream.ReadTimeout = CandidateGTriggerReadTimeoutMs;
+            triggerStream.WriteTimeout = CandidateGTriggerWriteTimeoutMs;
+
+            int featureLen = 0;
+            try { featureLen = triggerDevice.GetMaxFeatureReportLength(); } catch { }
+            if (featureLen <= 0) featureLen = 64;
+
+            var featureBuf = new byte[featureLen];
+            Array.Copy(payload, 0, featureBuf, 0, Math.Min(payload.Length, featureBuf.Length));
+
+            try
+            {
+                triggerStream.SetFeature(featureBuf);
+                logger.LogDebug(
+                    "[Pixart CandidateG] payload[1]=0x{Cmd:X2} SetFeature sent",
+                    commandByte);
+            }
+            catch (IOException)
+            {
+                logger.LogDebug(
+                    "[Pixart CandidateG] payload[1]=0x{Cmd:X2} SetFeature threw IOException (expected)",
+                    commandByte);
+            }
+
+            try
+            {
+                int outputLen = 0;
+                try { outputLen = triggerDevice.GetMaxOutputReportLength(); } catch { }
+                if (outputLen > 0)
                 {
-                    var responseBuf = inputStream.Read();
-
+                    var outputBuf = new byte[outputLen];
+                    Array.Copy(payload, 0, outputBuf, 0, Math.Min(payload.Length, outputBuf.Length));
+                    triggerStream.Write(outputBuf);
                     logger.LogDebug(
-                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 raw: {Bytes}",
-                        payload.Length > 1 ? payload[1] : 0,
-                        BitConverter.ToString(responseBuf, 0, Math.Min(16, responseBuf.Length)));
-
-                    var payloadLabel = $"payload0x{(payload.Length > 1 ? payload[1] : 0):X2}";
-                    var parsed = ParsePixartCol05Response(responseBuf, logger, payloadLabel);
-                    if (parsed.Success)
-                        return parsed;
-
-                    logger.LogDebug(
-                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 response had no plausible battery value",
-                        payload.Length > 1 ? payload[1] : 0);
+                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} Write sent",
+                        commandByte);
                 }
-                catch (TimeoutException)
+            }
+            catch (IOException)
+            {
+                logger.LogDebug(
+                    "[Pixart CandidateG] payload[1]=0x{Cmd:X2} Write threw IOException (expected)",
+                    commandByte);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                "[Pixart CandidateG] payload[1]=0x{Cmd:X2} trigger failed: {Msg}",
+                commandByte, ex.Message);
+        }
+
+        try
+        {
+            inputStream.ReadTimeout = CandidateGReadTimeoutMs;
+            var responseBuf = inputStream.Read();
+
+            logger.LogDebug(
+                "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 raw: {Bytes}",
+                commandByte,
+                BitConverter.ToString(responseBuf, 0, Math.Min(16, responseBuf.Length)));
+
+            var payloadLabel = $"payload0x{commandByte:X2}";
+            var parsed = ParsePixartCol05Response(responseBuf, logger, payloadLabel);
+            if (parsed.Success)
+                return parsed;
+
+            logger.LogDebug(
+                "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 response had no plausible battery value",
+                commandByte);
+        }
+        catch (TimeoutException)
+        {
+            logger.LogDebug(
+                "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 read timed out ({Timeout}ms)",
+                commandByte, CandidateGReadTimeoutMs);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 read failed: {Msg}",
+                commandByte, ex.Message);
+        }
+
+        return (false, 0, false);
+    }
+
+    private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateG(
+        HidDevice triggerDevice, HidDevice inputDevice, ILogger logger, string strategyKey)
+    {
+        var strategy = GetCandidateGStrategy(strategyKey);
+        var plan = strategy.BuildPlan(DateTime.UtcNow);
+
+        try
+        {
+            using var inputStream = inputDevice.Open();
+            inputStream.ReadTimeout = CandidateGReadTimeoutMs;
+
+            foreach (var attemptKind in plan.Attempts)
+            {
+                var result = attemptKind switch
                 {
-                    logger.LogDebug(
-                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 read timed out (3000ms)",
-                        payload.Length > 1 ? payload[1] : 0);
-                }
-                catch (Exception ex)
+                    CandidateGAttemptKind.Primer =>
+                        TryPixartCandidateGPrimerSequence(triggerDevice, inputStream, logger, plan.PrimerAttempts),
+                    CandidateGAttemptKind.Payload0 =>
+                        TryPixartCandidateGPayloadAttempt(triggerDevice, inputStream, logger, CandidateGPayloads[0]),
+                    CandidateGAttemptKind.Payload1 =>
+                        TryPixartCandidateGPayloadAttempt(triggerDevice, inputStream, logger, CandidateGPayloads[1]),
+                    CandidateGAttemptKind.Payload2 =>
+                        TryPixartCandidateGPayloadAttempt(triggerDevice, inputStream, logger, CandidateGPayloads[2]),
+                    _ => (Success: false, BatteryLevel: 0, IsCharging: false)
+                };
+
+                if (result.Success)
                 {
-                    logger.LogDebug(
-                        "[Pixart CandidateG] payload[1]=0x{Cmd:X2} col05 read failed: {Msg}",
-                        payload.Length > 1 ? payload[1] : 0, ex.Message);
+                    strategy.RecordSuccess(attemptKind, DateTime.UtcNow);
+                    return result;
                 }
+
+                Thread.Sleep(Random.Shared.Next(CandidateGBackoffMinMs, CandidateGBackoffMaxMs + 1));
             }
         }
         catch (Exception ex)
         {
             logger.LogDebug("[Pixart CandidateG] failed to open streams: {Msg}", ex.Message);
         }
+
+        strategy.RecordFailure(DateTime.UtcNow);
 
         return (false, 0, false);
     }
@@ -986,7 +1055,8 @@ public class HidDeviceService : IHidDeviceService
             return (false, 0, false);
         }
 
-        return TryPixartCandidateG(triggerDevice, inputDevice, logger);
+        string strategyKey = GetCandidateGStrategyKey(profile.DevicePath, profile.SiblingDevicePath);
+        return TryPixartCandidateG(triggerDevice, inputDevice, logger, strategyKey);
     }
 
     private DeviceProfile? ProbeDevicePixart(HidDevice hidDevice, DeviceInfo device)
@@ -1125,7 +1195,8 @@ public class HidDeviceService : IHidDeviceService
                     "trigger={TriggerPath} input={InputPath}...",
                     device.VendorId, device.ProductId, device.DevicePath, siblingInput.DevicePath);
 
-                var resultG = TryPixartCandidateG(hidDevice, siblingInput, _logger);
+                string strategyKey = GetCandidateGStrategyKey(device.DevicePath, siblingInput.DevicePath);
+                var resultG = TryPixartCandidateG(hidDevice, siblingInput, _logger, strategyKey);
                 if (resultG.Success && resultG.BatteryLevel >= 1)
                 {
                     _logger.LogInformation(
@@ -1769,6 +1840,120 @@ public class HidDeviceService : IHidDeviceService
         catch
         {
             return "N/A";
+        }
+    }
+}
+
+internal enum CandidateGAttemptKind
+{
+    Primer,
+    Payload0,
+    Payload1,
+    Payload2
+}
+
+internal sealed record CandidateGAttemptPlan(
+    IReadOnlyList<CandidateGAttemptKind> Attempts,
+    int PrimerAttempts);
+
+internal sealed class CandidateGAdaptiveStrategy
+{
+    private const int MaxAttemptsPerRead = 4;
+    private static readonly TimeSpan PreferredPathWindow = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan PrimerRecentSuccessWindow = TimeSpan.FromSeconds(45);
+    private const int PrimerAttemptsDefault = 3;
+    private const int PrimerAttemptsDeprioritized = 1;
+
+    private readonly object _lock = new();
+    private CandidateGAttemptKind? _preferredPath;
+    private DateTime _lastSuccessUtc = DateTime.MinValue;
+    private DateTime _lastPrimerSuccessUtc = DateTime.MinValue;
+    private int _failureStreak;
+
+    public int FailureStreak
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _failureStreak;
+            }
+        }
+    }
+
+    public CandidateGAttemptPlan BuildPlan(DateTime nowUtc)
+    {
+        lock (_lock)
+        {
+            bool preferredIsRecent = _preferredPath.HasValue &&
+                                     nowUtc - _lastSuccessUtc <= PreferredPathWindow &&
+                                     _failureStreak < 4;
+            bool primerRecentlySucceeded =
+                _lastPrimerSuccessUtc != DateTime.MinValue &&
+                nowUtc - _lastPrimerSuccessUtc <= PrimerRecentSuccessWindow;
+
+            var attempts = new List<CandidateGAttemptKind>(4);
+            if (preferredIsRecent &&
+                !(primerRecentlySucceeded && _preferredPath == CandidateGAttemptKind.Primer))
+            {
+                attempts.Add(_preferredPath!.Value);
+            }
+
+            if (!primerRecentlySucceeded)
+            {
+                attempts.Add(CandidateGAttemptKind.Primer);
+            }
+
+            foreach (var payloadAttempt in new[]
+                     {
+                         CandidateGAttemptKind.Payload0,
+                         CandidateGAttemptKind.Payload1,
+                         CandidateGAttemptKind.Payload2
+                     })
+            {
+                if (!attempts.Contains(payloadAttempt))
+                {
+                    attempts.Add(payloadAttempt);
+                }
+            }
+
+            if (primerRecentlySucceeded && !attempts.Contains(CandidateGAttemptKind.Primer))
+            {
+                attempts.Add(CandidateGAttemptKind.Primer);
+            }
+
+            if (attempts.Count > MaxAttemptsPerRead)
+            {
+                attempts.RemoveRange(MaxAttemptsPerRead, attempts.Count - MaxAttemptsPerRead);
+            }
+
+            int primerAttempts = primerRecentlySucceeded
+                ? PrimerAttemptsDeprioritized
+                : PrimerAttemptsDefault;
+            return new CandidateGAttemptPlan(attempts, primerAttempts);
+        }
+    }
+
+    public void RecordSuccess(CandidateGAttemptKind path, DateTime nowUtc)
+    {
+        lock (_lock)
+        {
+            _preferredPath = path;
+            _lastSuccessUtc = nowUtc;
+            if (path == CandidateGAttemptKind.Primer)
+            {
+                _lastPrimerSuccessUtc = nowUtc;
+            }
+
+            _failureStreak = 0;
+        }
+    }
+
+    public void RecordFailure(DateTime nowUtc)
+    {
+        lock (_lock)
+        {
+            _failureStreak++;
         }
     }
 }
