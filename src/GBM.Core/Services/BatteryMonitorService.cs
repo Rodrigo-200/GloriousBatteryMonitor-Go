@@ -188,6 +188,17 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     public void TriggerRescan()
     {
         _logger.LogInformation("Rescan triggered");
+
+        string? activeDeviceKey = _activeProfile?.CompositeKey;
+        if (!string.IsNullOrWhiteSpace(activeDeviceKey))
+        {
+            _estimationService.Reset(activeDeviceKey);
+        }
+        else if (!string.IsNullOrWhiteSpace(CurrentState.DeviceName))
+        {
+            _estimationService.Reset(CurrentState.DeviceName);
+        }
+
         _rescanRequested = true;
         _activeProfile = null;
         _consecutiveFailures = 0;
@@ -273,7 +284,6 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 _rescanRequested = false;
                 _activeProfile = null;
                 _consecutiveFailures = 0;
-                _estimationService.Reset(CurrentState.DeviceName);
             }
 
             // If no active device, try to find one
@@ -601,20 +611,18 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         // Use the last known level instead and track consecutive zero reads.
         int displayLevel = level;
         ConnectionState connection = ConnectionState.Connected;
+        bool suppressedSleepRead = false;
 
         if (level == 0 && _lastPositiveLevel > 0)
         {
+            suppressedSleepRead = true;
             _consecutiveZeroReads++;
-            _logger.LogDebug("Suppressing transient Level=0% (last known: {Last}%, consecutive zeros: {Count})",
-                _lastPositiveLevel, _consecutiveZeroReads);
             displayLevel = _lastPositiveLevel;
             _consecutiveFailures = 0;
 
             if (_consecutiveZeroReads >= ConsecutiveZeroReadsForSleep)
             {
                 connection = ConnectionState.Sleeping;
-                _logger.LogInformation("[MONITOR] Mouse detected as sleeping after {Count} consecutive 0% reads",
-                    _consecutiveZeroReads);
             }
         }
         else
@@ -656,12 +664,30 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         UpdateState(newState);
 
+        if (previousState.Connection != ConnectionState.Sleeping && connection == ConnectionState.Sleeping)
+        {
+            _logger.LogInformation(
+                "[MONITOR] Mouse detected as sleeping after {Count} consecutive 0% reads",
+                _consecutiveZeroReads);
+        }
+        else if (previousState.Connection == ConnectionState.Sleeping && connection == ConnectionState.Connected)
+        {
+            _logger.LogInformation("[MONITOR] Mouse woke from sleep state");
+        }
+
         // Update storage
         _storageService.AddBatterySample(deviceKey, displayLevel, isCharging);
         _storageService.UpdateChargeInfo(deviceKey, displayLevel, isCharging ? DateTime.UtcNow : null);
 
         // Update estimation
-        if (!skipEstimationSample)
+        bool wakingFromSleep = previousState.Connection == ConnectionState.Sleeping &&
+                               connection == ConnectionState.Connected;
+        bool shouldSkipEstimationSample = skipEstimationSample ||
+                                          suppressedSleepRead ||
+                                          connection == ConnectionState.Sleeping ||
+                                          wakingFromSleep;
+
+        if (!shouldSkipEstimationSample)
         {
             _estimationService.AddSample(deviceKey, displayLevel, isCharging);
         }

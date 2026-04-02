@@ -12,10 +12,12 @@ public class StorageService : IStorageService
     private readonly object _profilesLock = new();
 
     private ChargeData? _cachedChargeData;
+    private DateTime _lastChargeDataSaveUtc = DateTime.MinValue;
 
     private const string ChargeDataFileName = "charge_data.json";
     private const string ProfilesFileName = "conn_profile.json";
     private const int MaxSamplesPerDevice = 200;
+    private static readonly TimeSpan MinChargeDataSaveInterval = TimeSpan.FromSeconds(30);
 
     public StorageService(ILogger<StorageService> logger, ISettingsService settingsService)
     {
@@ -46,11 +48,8 @@ public class StorageService : IStorageService
     {
         lock (_chargeDataLock)
         {
-            SaveToFile(
-                GetChargeDataPath(),
-                data,
-                GbmJsonContext.Default.ChargeData,
-                "charge data");
+            _cachedChargeData = data;
+            SaveChargeDataInternal(data, force: true);
         }
     }
 
@@ -125,7 +124,7 @@ public class StorageService : IStorageService
                 deviceData.LastReadTime = DateTime.UtcNow;
 
                 _cachedChargeData = data;
-                SaveChargeDataInternal(data);
+                SaveChargeDataInternal(data, force: false);
             }
             catch (Exception ex)
             {
@@ -170,7 +169,7 @@ public class StorageService : IStorageService
                 }
 
                 _cachedChargeData = data;
-                SaveChargeDataInternal(data);
+                SaveChargeDataInternal(data, force: false);
             }
             catch (Exception ex)
             {
@@ -195,7 +194,7 @@ public class StorageService : IStorageService
                 deviceData.ChargeSessionCount = chargeSessions;
 
                 _cachedChargeData = data;
-                SaveChargeDataInternal(data);
+                SaveChargeDataInternal(data, force: true);
             }
             catch (Exception ex)
             {
@@ -217,13 +216,25 @@ public class StorageService : IStorageService
         return loaded;
     }
 
-    private void SaveChargeDataInternal(ChargeData data)
+    private void SaveChargeDataInternal(ChargeData data, bool force)
     {
+        DateTime now = DateTime.UtcNow;
+        bool shouldThrottle = !force &&
+                              _lastChargeDataSaveUtc != DateTime.MinValue &&
+                              now - _lastChargeDataSaveUtc < MinChargeDataSaveInterval;
+
+        if (shouldThrottle)
+        {
+            return;
+        }
+
         SaveToFile(
             GetChargeDataPath(),
             data,
             GbmJsonContext.Default.ChargeData,
             "charge data");
+
+        _lastChargeDataSaveUtc = now;
     }
 
     private T? LoadFromFile<T>(string filePath, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo,

@@ -15,6 +15,16 @@ public class BatteryEstimationService : IBatteryEstimationService
     private const int MaxHistoricalSessions = 20;
     private const double MinReasonableRate = 0.1;
     private const double MaxReasonableRate = 200.0;
+    private const double MaxReasonableDischargeLearnRate = 15.0;
+    private const double MinReasonableChargeLearnRate = 5.0;
+    private const double MaxReasonableChargeLearnRate = 120.0;
+    private const int MinSessionsForOutlierGuard = 3;
+    private const double MinOutlierRatioVsHistorical = 0.33;
+    private const double MaxOutlierRatioVsHistorical = 3.0;
+    private static readonly TimeSpan MinSpanForOngoingDischargeLearning = TimeSpan.FromMinutes(45);
+    private static readonly TimeSpan MinSpanForOngoingChargeLearning = TimeSpan.FromMinutes(15);
+    private const int MinLevelDeltaForOngoingDischargeLearning = 1;
+    private const int MinLevelDeltaForOngoingChargeLearning = 2;
     private static readonly TimeSpan MinSpanForLowDeltaEstimate = TimeSpan.FromHours(2);
 
     // Default rates for first-ever use (before any learning).
@@ -71,6 +81,8 @@ public class BatteryEstimationService : IBatteryEstimationService
                     state.Samples.Clear();
                     state.SmoothedRate = null;
                     state.LastEffectiveRate = null;
+                    state.LastLearnCheckpointLevel = null;
+                    state.LastLearnCheckpointTimeUtc = null;
                 }
 
                 state.LastIsCharging = isCharging;
@@ -81,6 +93,12 @@ public class BatteryEstimationService : IBatteryEstimationService
                     Timestamp = timestampUtc,
                     IsCharging = isCharging
                 });
+
+                if (!state.LastLearnCheckpointTimeUtc.HasValue)
+                {
+                    state.LastLearnCheckpointTimeUtc = timestampUtc;
+                    state.LastLearnCheckpointLevel = level;
+                }
 
                 // Compute rate from last two samples and update EWMA
                 if (state.Samples.Count >= 2)
@@ -112,6 +130,8 @@ public class BatteryEstimationService : IBatteryEstimationService
                 {
                     state.Samples.RemoveRange(0, state.Samples.Count - MaxSamplesPerDevice);
                 }
+
+                TryLearnFromOngoingSession(state, deviceKey);
             }
             catch (Exception ex)
             {
@@ -131,6 +151,8 @@ public class BatteryEstimationService : IBatteryEstimationService
                 state.Samples.Clear();
                 state.SmoothedRate = null;
                 state.LastEffectiveRate = null;
+                state.LastLearnCheckpointLevel = null;
+                state.LastLearnCheckpointTimeUtc = null;
                 _logger.LogDebug("Estimation state reset for device {Key}", deviceKey);
             }
         }
@@ -181,16 +203,81 @@ public class BatteryEstimationService : IBatteryEstimationService
 
     private void LearnFromSession(DeviceEstimationState state, string deviceKey)
     {
-        // Use the EWMA-smoothed rate directly
-        double? sessionRate = state.SmoothedRate;
-
-        if (!sessionRate.HasValue)
+        if (state.Samples.Count < 2 || !state.SmoothedRate.HasValue)
             return;
 
-        double absRate = Math.Abs(sessionRate.Value);
-        if (absRate < MinReasonableRate || absRate > MaxReasonableRate)
+        var firstSample = state.Samples[0];
+        var lastSample = state.Samples[^1];
+        if (!HasEnoughLearningEvidence(
+                state,
+                firstSample.Timestamp,
+                firstSample.Level,
+                lastSample.Timestamp,
+                lastSample.Level))
         {
-            _logger.LogDebug("Session rate {Rate}%/hr outside reasonable range, skipping learning", absRate);
+            return;
+        }
+
+        LearnRate(state, deviceKey, Math.Abs(state.SmoothedRate.Value), source: "phase-end");
+    }
+
+    private void TryLearnFromOngoingSession(DeviceEstimationState state, string deviceKey)
+    {
+        if (state.Samples.Count < 2 || !state.SmoothedRate.HasValue)
+            return;
+
+        var lastSample = state.Samples[^1];
+        DateTime checkpointTime = state.LastLearnCheckpointTimeUtc ?? state.Samples[0].Timestamp;
+        int checkpointLevel = state.LastLearnCheckpointLevel ?? state.Samples[0].Level;
+
+        if (!HasEnoughLearningEvidence(
+                state,
+                checkpointTime,
+                checkpointLevel,
+                lastSample.Timestamp,
+                lastSample.Level))
+        {
+            return;
+        }
+
+        LearnRate(state, deviceKey, Math.Abs(state.SmoothedRate.Value), source: "checkpoint");
+        state.LastLearnCheckpointTimeUtc = lastSample.Timestamp;
+        state.LastLearnCheckpointLevel = lastSample.Level;
+    }
+
+    private static bool HasEnoughLearningEvidence(
+        DeviceEstimationState state,
+        DateTime fromTime,
+        int fromLevel,
+        DateTime toTime,
+        int toLevel)
+    {
+        if (toTime <= fromTime)
+            return false;
+
+        TimeSpan span = toTime - fromTime;
+        int levelDelta = Math.Abs(toLevel - fromLevel);
+
+        TimeSpan minSpan = state.LastIsCharging
+            ? MinSpanForOngoingChargeLearning
+            : MinSpanForOngoingDischargeLearning;
+
+        int minLevelDelta = state.LastIsCharging
+            ? MinLevelDeltaForOngoingChargeLearning
+            : MinLevelDeltaForOngoingDischargeLearning;
+
+        return span >= minSpan && levelDelta >= minLevelDelta;
+    }
+
+    private void LearnRate(DeviceEstimationState state, string deviceKey, double absRate, string source)
+    {
+        if (!IsReasonableLearnRate(state, absRate, out string reason))
+        {
+            _logger.LogDebug(
+                "Skipping {Source} learning for {Key}: {Reason}",
+                source,
+                deviceKey,
+                reason);
             return;
         }
 
@@ -202,9 +289,9 @@ public class BatteryEstimationService : IBatteryEstimationService
             state.HistoricalChargeRate = rate;
             state.ChargeSessionCount = count;
             _logger.LogInformation(
-                "Learned charge rate for {Key}: session={SessionRate:F1}%/hr, " +
+                "Learned charge rate for {Key}: source={Source}, session={SessionRate:F1}%/hr, " +
                 "historical={HistRate:F1}%/hr ({Sessions} sessions)",
-                deviceKey, absRate, state.HistoricalChargeRate, state.ChargeSessionCount);
+                deviceKey, source, absRate, state.HistoricalChargeRate, state.ChargeSessionCount);
         }
         else
         {
@@ -214,10 +301,64 @@ public class BatteryEstimationService : IBatteryEstimationService
             state.HistoricalDischargeRate = rate;
             state.DischargeSessionCount = count;
             _logger.LogInformation(
-                "Learned discharge rate for {Key}: session={SessionRate:F1}%/hr, " +
+                "Learned discharge rate for {Key}: source={Source}, session={SessionRate:F1}%/hr, " +
                 "historical={HistRate:F1}%/hr ({Sessions} sessions)",
-                deviceKey, absRate, state.HistoricalDischargeRate, state.DischargeSessionCount);
+                deviceKey, source, absRate, state.HistoricalDischargeRate, state.DischargeSessionCount);
         }
+    }
+
+    private bool IsReasonableLearnRate(DeviceEstimationState state, double absRate, out string reason)
+    {
+        if (absRate < MinReasonableRate || absRate > MaxReasonableRate)
+        {
+            reason = $"rate {absRate:F2}%/hr outside global bounds";
+            return false;
+        }
+
+        if (state.LastIsCharging)
+        {
+            if (absRate < MinReasonableChargeLearnRate || absRate > MaxReasonableChargeLearnRate)
+            {
+                reason = $"charge rate {absRate:F2}%/hr outside charge learning bounds";
+                return false;
+            }
+
+            if (state.HistoricalChargeRate.HasValue &&
+                state.ChargeSessionCount >= MinSessionsForOutlierGuard &&
+                IsRateOutlierVsHistorical(absRate, state.HistoricalChargeRate.Value))
+            {
+                reason = $"charge rate {absRate:F2}%/hr is outlier vs historical {state.HistoricalChargeRate.Value:F2}%/hr";
+                return false;
+            }
+        }
+        else
+        {
+            if (absRate > MaxReasonableDischargeLearnRate)
+            {
+                reason = $"discharge rate {absRate:F2}%/hr outside discharge learning bounds";
+                return false;
+            }
+
+            if (state.HistoricalDischargeRate.HasValue &&
+                state.DischargeSessionCount >= MinSessionsForOutlierGuard &&
+                IsRateOutlierVsHistorical(absRate, state.HistoricalDischargeRate.Value))
+            {
+                reason = $"discharge rate {absRate:F2}%/hr is outlier vs historical {state.HistoricalDischargeRate.Value:F2}%/hr";
+                return false;
+            }
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool IsRateOutlierVsHistorical(double absRate, double historicalRate)
+    {
+        if (historicalRate <= 0)
+            return false;
+
+        double ratio = absRate / historicalRate;
+        return ratio < MinOutlierRatioVsHistorical || ratio > MaxOutlierRatioVsHistorical;
     }
 
     /// <summary>
@@ -511,6 +652,10 @@ public class BatteryEstimationService : IBatteryEstimationService
 
         // Last effective rate used for time-remaining calculation (stability gate)
         public double? LastEffectiveRate { get; set; }
+
+        // Last checkpoint used for ongoing learning inside a single phase.
+        public DateTime? LastLearnCheckpointTimeUtc { get; set; }
+        public int? LastLearnCheckpointLevel { get; set; }
     }
 
     private class EstimationSample

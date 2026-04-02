@@ -112,6 +112,25 @@ public class BatteryMonitorReliabilityTests
         GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().NotBeNull();
     }
 
+    [Fact]
+    public void SleepAndWakeTransitions_DoNotFeedEstimatorSamples()
+    {
+        var monitor = CreateMonitor(out _, out _, out _, out var estimation);
+        var profile = CreateProfile();
+
+        SetPrivateField(monitor, "_activeProfile", profile);
+        SetPrivateField(monitor, "_lastPositiveLevel", 75);
+
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 0, false, false);
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 0, false, false);
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 0, false, false);
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 74, false, false);
+
+        estimation.Verify(
+            e => e.AddSample(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Never);
+    }
+
     private static BatteryMonitorService CreateMonitor(
         out Mock<IHidDeviceService> hid,
         out Mock<ISettingsService> settings,

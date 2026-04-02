@@ -357,4 +357,36 @@ public class BatteryEstimationTests
         stale.IsValid.Should().BeTrue();
         fresh.Confidence.Should().BeGreaterThan(stale.Confidence);
     }
+
+    [Fact]
+    public void OngoingDischargeLearning_CommitsWithoutPhaseChange()
+    {
+        var now = DateTime.UtcNow;
+
+        _service.AddSampleForTesting("ongoing", 80, false, now.AddHours(-2));
+        _service.AddSampleForTesting("ongoing", 79, false, now.AddHours(-1));
+
+        var learned = _service.GetLearnedRates("ongoing");
+
+        learned.Should().NotBeNull();
+        learned!.DischargeRate.Should().NotBeNull();
+        learned.DischargeRate!.Value.Should().BeInRange(0.5, 2.0);
+        learned.DischargeSessionCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void OngoingLearning_RejectsOutlierRateAgainstHistoricalBaseline()
+    {
+        var now = DateTime.UtcNow;
+        _service.SetHistoricalRates("outlier-guard", dischargeRate: 1.0, chargeRate: null,
+            dischargeSessionCount: 5, chargeSessionCount: 0);
+
+        _service.AddSampleForTesting("outlier-guard", 90, false, now.AddHours(-1));
+        _service.AddSampleForTesting("outlier-guard", 70, false, now);
+
+        var learned = _service.GetLearnedRates("outlier-guard");
+        learned.Should().NotBeNull();
+        learned!.DischargeRate.Should().BeApproximately(1.0, 0.01);
+        learned.DischargeSessionCount.Should().Be(5);
+    }
 }
