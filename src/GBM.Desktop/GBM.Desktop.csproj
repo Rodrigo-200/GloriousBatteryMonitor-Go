@@ -39,6 +39,6 @@
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="SkiaSharp" Version="2.88.9" />
     <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
-    <PackageReference Include="Velopack" Version="0.0.915" />
+    <PackageReference Include="Velopack" Version="0.0.1298" />
   </ItemGroup>
 </Project>

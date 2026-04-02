@@ -181,6 +181,7 @@
                                             Command="{Binding CaptureDiagnosticsCommand}"
                                             Margin="0,0,8,8" />
                                 </WrapPanel>
+
                                 <TextBox Text="{Binding DevOutput}" IsReadOnly="True"
                                          AcceptsReturn="True" TextWrapping="Wrap"
                                          MaxHeight="180" MinHeight="60"
@@ -219,7 +220,7 @@
                                             Command="{Binding CheckForUpdateCommand}"
                                             IsEnabled="{Binding !IsCheckingUpdate}" />
                                     <Button Classes="accent"
-                                            Content="Download &amp; Restart"
+                                            Content="{Binding UpdateActionButtonText}"
                                             Command="{Binding DownloadUpdateCommand}"
                                             IsVisible="{Binding IsUpdateAvailable}"
                                             IsEnabled="{Binding !IsDownloadingUpdate}" />

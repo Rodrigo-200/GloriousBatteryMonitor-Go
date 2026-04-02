@@ -4,7 +4,9 @@ public interface IUpdateService
 {
     string CurrentVersion { get; }
     Task<UpdateCheckResult?> CheckForUpdateAsync();
-    Task<bool> DownloadAndApplyUpdateAsync(IProgress<int>? progress = null);
+    bool IsUpdatePendingRestart();
+    Task<bool> DownloadUpdateAsync(IProgress<int>? progress = null);
+    bool ApplyPendingUpdateAndRestart(string[]? restartArgs = null);
 }
 
 public record UpdateCheckResult(string NewVersion, string ReleaseUrl);

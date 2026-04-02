@@ -66,7 +66,25 @@ public class UpdateService : IUpdateService
         }
     }
 
-    public async Task<bool> DownloadAndApplyUpdateAsync(
+    public bool IsUpdatePendingRestart()
+    {
+        try
+        {
+            var mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
+
+            if (!mgr.IsInstalled)
+                return false;
+
+            return mgr.UpdatePendingRestart != null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[UPDATE] Could not determine pending update state");
+            return false;
+        }
+    }
+
+    public async Task<bool> DownloadUpdateAsync(
         IProgress<int>? progress = null)
     {
         try
@@ -90,14 +108,46 @@ public class UpdateService : IUpdateService
             await mgr.DownloadUpdatesAsync(info, progress != null ? p => progress.Report(p) : null);
 
             _logger.LogInformation(
-                "[UPDATE] Download complete — applying silently and restarting");
-
-            mgr.WaitExitThenApplyUpdates(info, silent: true, restart: true);
+                "[UPDATE] Download complete — update staged for next restart/apply");
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[UPDATE] Failed to apply update");
+            _logger.LogError(ex, "[UPDATE] Failed to download update");
+            return false;
+        }
+    }
+
+    public bool ApplyPendingUpdateAndRestart(string[]? restartArgs = null)
+    {
+        try
+        {
+            var mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
+
+            if (!mgr.IsInstalled)
+            {
+                _logger.LogWarning(
+                    "[UPDATE] Cannot apply pending update — not running as installed app");
+                return false;
+            }
+
+            var pending = mgr.UpdatePendingRestart;
+            if (pending == null)
+            {
+                _logger.LogInformation("[UPDATE] No pending downloaded update to apply");
+                return false;
+            }
+
+            _logger.LogInformation(
+                "[UPDATE] Applying pending update {V} silently and restarting",
+                pending.Version);
+
+            mgr.WaitExitThenApplyUpdates(pending, silent: true, restart: true, restartArgs);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[UPDATE] Failed to start apply/restart flow");
             return false;
         }
     }

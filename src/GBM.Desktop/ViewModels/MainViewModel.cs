@@ -72,6 +72,12 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private bool _isUpdateAvailable = false;
     [ObservableProperty] private int _updateDownloadProgress = 0;
     [ObservableProperty] private bool _isDownloadingUpdate = false;
+    [ObservableProperty] private bool _isUpdateReadyToInstall = false;
+    [ObservableProperty] private string _updateActionButtonText = "Download Update";
+    [ObservableProperty] private bool _showUpdateIndicator = false;
+    [ObservableProperty] private string _updateIndicatorText = string.Empty;
+    [ObservableProperty] private string _updateIndicatorActionText = "Open";
+    [ObservableProperty] private bool _showUpdateIndicatorAction = false;
 
     // Toast
     [ObservableProperty] private bool _isToastVisible;
@@ -104,7 +110,96 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         await _monitorService.StartAsync();
         StartSyncTimer();
-        _ = CheckForUpdateAsync();
+
+        if (_updateService.IsUpdatePendingRestart())
+        {
+            ConfigurePendingUpdateState();
+            return;
+        }
+
+        if (Program.SkipUpdateCheckOnLaunch)
+        {
+            UpdateStatusText = $"Updated to v{_updateService.CurrentVersion}";
+            UpdateUpdateIndicator();
+            return;
+        }
+
+        _ = DelayedStartupUpdateCheckAsync();
+    }
+
+    private async Task DelayedStartupUpdateCheckAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            await CheckForUpdateAsync();
+        }
+        catch
+        {
+            // Best-effort background update check.
+        }
+    }
+
+    private void ConfigurePendingUpdateState()
+    {
+        IsUpdateAvailable = true;
+        IsUpdateReadyToInstall = true;
+        IsDownloadingUpdate = false;
+        UpdateDownloadProgress = 100;
+        UpdateActionButtonText = "Restart to Update";
+        UpdateStatusText = "Update ready — restart to apply";
+        UpdateUpdateIndicator();
+    }
+
+    private void UpdateUpdateIndicator()
+    {
+        if (IsUpdateReadyToInstall)
+        {
+            ShowUpdateIndicator = true;
+            UpdateIndicatorText = "Update ready";
+            UpdateIndicatorActionText = "Restart";
+            ShowUpdateIndicatorAction = true;
+            return;
+        }
+
+        if (IsDownloadingUpdate)
+        {
+            ShowUpdateIndicator = true;
+            UpdateIndicatorText = $"Updating {UpdateDownloadProgress}%";
+            ShowUpdateIndicatorAction = false;
+            return;
+        }
+
+        if (IsUpdateAvailable)
+        {
+            ShowUpdateIndicator = true;
+            UpdateIndicatorText = string.IsNullOrWhiteSpace(UpdateVersion)
+                ? "Update available"
+                : $"v{UpdateVersion} available";
+            UpdateIndicatorActionText = "Download";
+            ShowUpdateIndicatorAction = true;
+            return;
+        }
+
+        ShowUpdateIndicator = false;
+        ShowUpdateIndicatorAction = false;
+        UpdateIndicatorText = string.Empty;
+        UpdateIndicatorActionText = "Open";
+    }
+
+    [RelayCommand]
+    private async Task UpdateIndicatorActionAsync()
+    {
+        if (IsCheckingUpdate || IsDownloadingUpdate)
+            return;
+
+        if (IsUpdateAvailable || IsUpdateReadyToInstall)
+        {
+            await DownloadUpdateAsync();
+            return;
+        }
+
+        OpenSettings();
     }
 
     private void OnBatteryStateChanged(BatteryState state)
@@ -322,10 +417,21 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private async Task CheckForUpdateAsync()
     {
         IsCheckingUpdate = true;
-        IsUpdateAvailable = false;
-        UpdateStatusText = "Checking...";
+        UpdateUpdateIndicator();
         try
         {
+            if (_updateService.IsUpdatePendingRestart())
+            {
+                ConfigurePendingUpdateState();
+                return;
+            }
+
+            IsUpdateAvailable = false;
+            IsUpdateReadyToInstall = false;
+            UpdateDownloadProgress = 0;
+            UpdateActionButtonText = "Download Update";
+            UpdateStatusText = "Checking...";
+
             var result = await _updateService.CheckForUpdateAsync();
             if (result == null)
             {
@@ -335,46 +441,71 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             else
             {
                 UpdateStatusText = $"Update available: v{result.NewVersion}";
+                UpdateVersion = result.NewVersion;
                 IsUpdateAvailable = true;
+                UpdateUpdateIndicator();
             }
         }
         catch
         {
             UpdateStatusText = "Update check failed";
+            UpdateUpdateIndicator();
         }
         finally
         {
             IsCheckingUpdate = false;
+            UpdateUpdateIndicator();
         }
     }
 
     [RelayCommand]
     private async Task DownloadUpdateAsync()
     {
+        if (IsUpdateReadyToInstall || _updateService.IsUpdatePendingRestart())
+        {
+            UpdateStatusText = "Restarting to apply update...";
+            UpdateUpdateIndicator();
+            bool started = _updateService.ApplyPendingUpdateAndRestart(new[] { Program.SkipUpdateCheckArg });
+            if (started)
+            {
+                if (Avalonia.Application.Current?.ApplicationLifetime
+                    is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+                {
+                    desktop.Shutdown();
+                }
+                return;
+            }
+
+            UpdateStatusText = "Could not start updater — try again";
+            UpdateUpdateIndicator();
+            return;
+        }
+
         IsDownloadingUpdate = true;
+        UpdateDownloadProgress = 0;
+        UpdateUpdateIndicator();
         var progress = new Progress<int>(p =>
         {
             UpdateDownloadProgress = p;
-            UpdateStatusText = $"Downloading... {p}%";
+            UpdateStatusText = $"Downloading update... {p}%";
+            UpdateUpdateIndicator();
         });
-        var success = await _updateService.DownloadAndApplyUpdateAsync(progress);
+
+        var success = await _updateService.DownloadUpdateAsync(progress);
+        IsDownloadingUpdate = false;
+
         if (success)
         {
-            // Velopack updater is waiting for us to exit,
-            // then it will apply the update silently and restart.
-            UpdateStatusText = "Applying update...";
-            if (Avalonia.Application.Current?.ApplicationLifetime
-                is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
-            {
-                desktop.Shutdown();
-            }
+            ConfigurePendingUpdateState();
+            ShowToast("Update downloaded. Restart when ready.");
         }
         else
         {
             UpdateStatusText = "Download failed — try again";
-            IsDownloadingUpdate = false;
+            UpdateUpdateIndicator();
         }
-        // if success, app shuts down — lines below never reached
+
+        UpdateUpdateIndicator();
     }
 
     private bool _disposed;
