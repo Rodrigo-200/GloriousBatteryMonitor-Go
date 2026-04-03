@@ -20,6 +20,7 @@ public class TrayIconService : IDisposable
     private NativeMenu? _menu;
     private NativeMenuItem? _infoItem;
     private NativeMenuItem? _updateItem;
+    private WindowIcon? _currentIcon;
     private int _lastLevel;
     private bool _lastCharging;
     private bool _lastConnected;
@@ -79,7 +80,8 @@ public class TrayIconService : IDisposable
             try
             {
                 var uri = new Uri("avares://GBM.Desktop/Assets/app-icon.ico");
-                _trayIcon.Icon = new WindowIcon(AssetLoader.Open(uri));
+                _currentIcon = new WindowIcon(AssetLoader.Open(uri));
+                _trayIcon.Icon = _currentIcon;
             }
             catch
             {
@@ -169,8 +171,11 @@ public class TrayIconService : IDisposable
         var icon = TrayIconRenderer.RenderIcon(
             _lastLevel, _lastCharging, _lastConnected, _lastShowPercentage);
 
-        if (icon != null)
+        if (icon != null && !ReferenceEquals(_currentIcon, icon))
+        {
+            _currentIcon = icon;
             _trayIcon.Icon = icon;
+        }
     }
 
     public void ShowUpdateAvailable(string version)
@@ -219,6 +224,7 @@ public class TrayIconService : IDisposable
         {
             _trayIcon.IsVisible = false;
             _trayIcon.Dispose();
+            _currentIcon = null;
         }
     }
 }

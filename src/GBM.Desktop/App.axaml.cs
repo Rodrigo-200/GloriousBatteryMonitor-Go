@@ -58,7 +58,7 @@ public partial class App : Application
             desktop.MainWindow = splash;
             splash.Show();
 
-            // Run startup update check, then launch main window
+            // Launch startup flow (updates are handled in-app after main window starts)
             _ = RunStartupAsync(desktop, splash, settingsService);
         }
 
@@ -72,42 +72,6 @@ public partial class App : Application
     {
         try
         {
-            // Check for updates
-            splash.SetStatus("Checking for updates...");
-            var updateService = _serviceProvider!.GetRequiredService<IUpdateService>();
-
-            try
-            {
-                var updateResult = await updateService.CheckForUpdateAsync();
-                if (updateResult != null)
-                {
-                    // Ask user whether to update or skip
-                    bool wantsUpdate = await splash.ShowUpdatePromptAsync(updateResult.NewVersion);
-                    if (wantsUpdate)
-                    {
-                        splash.ShowDownloadProgress();
-                        var progress = new Progress<int>(percent => splash.UpdateProgress(percent));
-                        bool applied = await updateService.DownloadAndApplyUpdateAsync(progress);
-                        if (applied)
-                        {
-                            // Velopack updater is waiting for us to exit,
-                            // then it will apply the update silently and restart.
-                            splash.SetStatus("Applying update...");
-                            await Task.Delay(500);
-                            desktop.Shutdown();
-                            return;
-                        }
-                        // Download/apply failed — continue to normal launch
-                        splash.SetStatus("Update failed. Starting...");
-                        await Task.Delay(1500);
-                    }
-                }
-            }
-            catch
-            {
-                // Update check failed — continue to normal launch
-            }
-
             splash.SetStatus("Starting...");
 
             var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
@@ -209,8 +173,12 @@ public partial class App : Application
             catch { }
         }
 
+        var minSerilogLevel = debugMode
+            ? Serilog.Events.LogEventLevel.Debug
+            : Serilog.Events.LogEventLevel.Information;
+
         var serilogLogger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
+            .MinimumLevel.Is(minSerilogLevel)
             .WriteTo.File(logPath,
                 rollingInterval: RollingInterval.Infinite,
                 fileSizeLimitBytes: 5 * 1024 * 1024,

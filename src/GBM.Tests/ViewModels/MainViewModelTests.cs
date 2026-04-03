@@ -41,6 +41,7 @@ public class MainViewModelTests
         settings.LowBatteryThreshold.Should().Be(20);
         settings.CriticalBatteryThreshold.Should().Be(10);
         settings.ShowPercentageOnTrayIcon.Should().BeFalse();
+        settings.EnableBetaUpdates.Should().BeFalse();
         settings.Theme.Should().Be("system");
     }
 
@@ -120,12 +121,16 @@ public class MainViewModelTests
         var original = new AppSettings
         {
             NotificationCooldownMinutes = 15,
-            DebugLogging = true
+            DebugLogging = true,
+            EnableBetaUpdates = true
         };
         var clone = original.Clone();
         clone.NotificationCooldownMinutes.Should().Be(15);
         clone.DebugLogging.Should().BeTrue();
+        clone.EnableBetaUpdates.Should().BeTrue();
         clone.NotificationCooldownMinutes = 99;
+        clone.EnableBetaUpdates = false;
         original.NotificationCooldownMinutes.Should().Be(15);
+        original.EnableBetaUpdates.Should().BeTrue();
     }
 }

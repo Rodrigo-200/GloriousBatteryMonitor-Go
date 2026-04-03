@@ -1,10 +1,14 @@
 using Avalonia;
+using System.Linq;
 using Velopack;
 
 namespace GBM.Desktop;
 
 internal sealed class Program
 {
+    internal const string SkipUpdateCheckArg = "--gbm-skip-update-check-once";
+    internal static bool SkipUpdateCheckOnLaunch { get; private set; }
+
     [STAThread]
     public static void Main(string[] args)
     {
@@ -17,8 +21,14 @@ internal sealed class Program
         if (!isNew)
             return;
 
+        SkipUpdateCheckOnLaunch = args.Any(a =>
+            string.Equals(a, SkipUpdateCheckArg, StringComparison.OrdinalIgnoreCase));
+        string[] filteredArgs = args
+            .Where(a => !string.Equals(a, SkipUpdateCheckArg, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
         VelopackApp.Build().Run();
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        BuildAvaloniaApp().StartWithClassicDesktopLifetime(filteredArgs);
     }
 
     public static AppBuilder BuildAvaloniaApp()

@@ -10,6 +10,9 @@ namespace GBM.Desktop.ViewModels;
 
 public partial class MainViewModel : ViewModelBase, IDisposable
 {
+    private const double FullChargeDurationDisplayCapHours = 24.0 * 30.0;
+    private static readonly TimeSpan FullChargeDurationRefreshInterval = TimeSpan.FromMinutes(1);
+
     private readonly IBatteryMonitorService _monitorService;
     private readonly ISettingsService _settingsService;
     private readonly IHidDeviceService _hidService;
@@ -40,6 +43,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     // Last sync
     [ObservableProperty] private string _lastSyncText = "—";
     private DateTime? _lastReadTime;
+    private DateTime _lastFullChargeDurationRefreshUtc;
+    private string _lastFullChargeDurationDeviceName = string.Empty;
 
     // Settings overlay
     [ObservableProperty] private bool _isSettingsOpen;
@@ -54,6 +59,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private int _criticalThreshold = 10;
     [ObservableProperty] private int _notificationCooldownMinutes = 5;
     [ObservableProperty] private bool _debugLogging;
+    [ObservableProperty] private bool _enableBetaUpdates;
     [ObservableProperty] private bool _isAdvancedExpanded;
     [ObservableProperty] private bool _isDevToolsExpanded;
 
@@ -72,6 +78,12 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private bool _isUpdateAvailable = false;
     [ObservableProperty] private int _updateDownloadProgress = 0;
     [ObservableProperty] private bool _isDownloadingUpdate = false;
+    [ObservableProperty] private bool _isUpdateReadyToInstall = false;
+    [ObservableProperty] private string _updateActionButtonText = "Download Update";
+    [ObservableProperty] private bool _showUpdateIndicator = false;
+    [ObservableProperty] private string _updateIndicatorText = string.Empty;
+    [ObservableProperty] private string _updateIndicatorActionText = "Open";
+    [ObservableProperty] private bool _showUpdateIndicatorAction = false;
 
     // Toast
     [ObservableProperty] private bool _isToastVisible;
@@ -104,7 +116,96 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         await _monitorService.StartAsync();
         StartSyncTimer();
-        _ = CheckForUpdateAsync();
+
+        if (_updateService.IsUpdatePendingRestart())
+        {
+            ConfigurePendingUpdateState();
+            return;
+        }
+
+        if (Program.SkipUpdateCheckOnLaunch)
+        {
+            UpdateStatusText = $"Updated to v{_updateService.CurrentVersion}";
+            UpdateUpdateIndicator();
+            return;
+        }
+
+        _ = DelayedStartupUpdateCheckAsync();
+    }
+
+    private async Task DelayedStartupUpdateCheckAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            await CheckForUpdateAsync();
+        }
+        catch
+        {
+            // Best-effort background update check.
+        }
+    }
+
+    private void ConfigurePendingUpdateState()
+    {
+        IsUpdateAvailable = true;
+        IsUpdateReadyToInstall = true;
+        IsDownloadingUpdate = false;
+        UpdateDownloadProgress = 100;
+        UpdateActionButtonText = "Restart to Update";
+        UpdateStatusText = "Update ready — restart to apply";
+        UpdateUpdateIndicator();
+    }
+
+    private void UpdateUpdateIndicator()
+    {
+        if (IsUpdateReadyToInstall)
+        {
+            ShowUpdateIndicator = true;
+            UpdateIndicatorText = "Update ready";
+            UpdateIndicatorActionText = "Restart";
+            ShowUpdateIndicatorAction = true;
+            return;
+        }
+
+        if (IsDownloadingUpdate)
+        {
+            ShowUpdateIndicator = true;
+            UpdateIndicatorText = $"Updating {UpdateDownloadProgress}%";
+            ShowUpdateIndicatorAction = false;
+            return;
+        }
+
+        if (IsUpdateAvailable)
+        {
+            ShowUpdateIndicator = true;
+            UpdateIndicatorText = string.IsNullOrWhiteSpace(UpdateVersion)
+                ? "Update available"
+                : $"v{UpdateVersion} available";
+            UpdateIndicatorActionText = "Download";
+            ShowUpdateIndicatorAction = true;
+            return;
+        }
+
+        ShowUpdateIndicator = false;
+        ShowUpdateIndicatorAction = false;
+        UpdateIndicatorText = string.Empty;
+        UpdateIndicatorActionText = "Open";
+    }
+
+    [RelayCommand]
+    private async Task UpdateIndicatorActionAsync()
+    {
+        if (IsCheckingUpdate || IsDownloadingUpdate)
+            return;
+
+        if (IsUpdateAvailable || IsUpdateReadyToInstall)
+        {
+            await DownloadUpdateAsync();
+            return;
+        }
+
+        OpenSettings();
     }
 
     private void OnBatteryStateChanged(BatteryState state)
@@ -145,9 +246,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             if (estimate.IsValid)
             {
                 TimeRemaining = estimate.TimeRemaining;
-                var hours = (int)estimate.TimeRemaining.TotalHours;
-                var mins = estimate.TimeRemaining.Minutes;
-                TimeRemainingText = hours > 0 ? $"{hours}h {mins}m" : $"{mins}m";
+                TimeRemainingText = FormatDuration(estimate.TimeRemaining);
             }
             else
             {
@@ -161,12 +260,30 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         // Get display name from current state
         string displayName = _monitorService.CurrentState.DeviceName;
+        DateTime now = DateTime.UtcNow;
 
         if (string.IsNullOrEmpty(displayName) || displayName == "Glorious Mouse")
         {
             FullChargeDurationText = "—";
+            _lastFullChargeDurationDeviceName = string.Empty;
+            _lastFullChargeDurationRefreshUtc = DateTime.MinValue;
             return;
         }
+
+        bool sameDevice = string.Equals(
+            _lastFullChargeDurationDeviceName,
+            displayName,
+            StringComparison.Ordinal);
+
+        if (sameDevice &&
+            _lastFullChargeDurationRefreshUtc != DateTime.MinValue &&
+            now - _lastFullChargeDurationRefreshUtc < FullChargeDurationRefreshInterval)
+        {
+            return;
+        }
+
+        _lastFullChargeDurationDeviceName = displayName;
+        _lastFullChargeDurationRefreshUtc = now;
 
         // Load cached charge data and iterate to find the current device's learned rates
         // The estimation service only has in-memory state for the currently active device,
@@ -180,22 +297,39 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
             double totalHours = 100.0 / rate;
 
-            // Cap at 48h to avoid nonsensical estimates from near-zero rates
-            if (totalHours > 48.0)
+            // Keep display bounded but allow realistic multi-day durations.
+            if (totalHours > FullChargeDurationDisplayCapHours)
             {
-                FullChargeDurationText = "~48h+";
+                FullChargeDurationText = "~30d+";
                 return;
             }
 
             var span = TimeSpan.FromHours(totalHours);
-            int hours = (int)span.TotalHours;
-            int mins = span.Minutes;
-            FullChargeDurationText = hours > 0 ? $"~{hours}h {mins}m" : $"~{mins}m";
+            FullChargeDurationText = "~" + FormatDuration(span, includeMinutesForDays: false);
             return;
         }
 
         // No device with learned rates found
         FullChargeDurationText = "—";
+    }
+
+    private static string FormatDuration(TimeSpan span, bool includeMinutesForDays = false)
+    {
+        if (span.TotalHours >= 24)
+        {
+            int days = (int)span.TotalDays;
+            int hours = span.Hours;
+            int mins = span.Minutes;
+
+            if (includeMinutesForDays && mins > 0)
+                return $"{days}d {hours}h {mins}m";
+
+            return hours > 0 ? $"{days}d {hours}h" : $"{days}d";
+        }
+
+        int shortHours = (int)span.TotalHours;
+        int shortMins = span.Minutes;
+        return shortHours > 0 ? $"{shortHours}h {shortMins}m" : $"{shortMins}m";
     }
 
     private void LoadSettings()
@@ -210,6 +344,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         CriticalThreshold = s.CriticalBatteryThreshold;
         NotificationCooldownMinutes = s.NotificationCooldownMinutes;
         DebugLogging = s.DebugLogging;
+        EnableBetaUpdates = s.EnableBetaUpdates;
         CurrentTheme = s.Theme;
         IsDarkTheme = s.Theme == "dark";
     }
@@ -230,6 +365,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void SaveSettings()
     {
+        bool oldBetaSetting = _settingsService.Current.EnableBetaUpdates;
+
         var settings = new AppSettings
         {
             StartWithOS = StartWithOS,
@@ -241,12 +378,31 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             CriticalBatteryThreshold = Math.Clamp(CriticalThreshold, 5, 30),
             NotificationCooldownMinutes = Math.Clamp(NotificationCooldownMinutes, 1, 60),
             DebugLogging = DebugLogging,
-            Theme = CurrentTheme
+            Theme = CurrentTheme,
+            EnableBetaUpdates = EnableBetaUpdates
         };
+
+        bool betaSettingChanged = oldBetaSetting != settings.EnableBetaUpdates;
+
         _settingsService.Save(settings);
         _autoStartService.SetAutoStart(settings.StartWithOS);
         IsSettingsOpen = false;
         ShowToast("Settings saved successfully");
+
+        if (betaSettingChanged)
+        {
+            IsUpdateAvailable = false;
+            IsUpdateReadyToInstall = false;
+            IsDownloadingUpdate = false;
+            UpdateDownloadProgress = 0;
+            UpdateActionButtonText = "Download Update";
+            UpdateStatusText = settings.EnableBetaUpdates
+                ? "Beta channel enabled — checking for beta updates..."
+                : "Stable channel enabled — checking for stable updates...";
+            UpdateUpdateIndicator();
+
+            _ = CheckForUpdateAsync();
+        }
     }
 
     [RelayCommand]
@@ -322,59 +478,99 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private async Task CheckForUpdateAsync()
     {
         IsCheckingUpdate = true;
-        IsUpdateAvailable = false;
-        UpdateStatusText = "Checking...";
+        UpdateUpdateIndicator();
         try
         {
+            if (_updateService.IsUpdatePendingRestart())
+            {
+                ConfigurePendingUpdateState();
+                return;
+            }
+
+            IsUpdateAvailable = false;
+            IsUpdateReadyToInstall = false;
+            UpdateDownloadProgress = 0;
+            UpdateActionButtonText = "Download Update";
+            UpdateStatusText = EnableBetaUpdates
+                ? "Checking beta updates..."
+                : "Checking stable updates...";
+
             var result = await _updateService.CheckForUpdateAsync();
             if (result == null)
             {
+                string channelName = EnableBetaUpdates ? "beta" : "stable";
                 UpdateStatusText =
-                    $"Up to date — v{_updateService.CurrentVersion}";
+                    $"Up to date ({channelName}) — v{_updateService.CurrentVersion}";
             }
             else
             {
-                UpdateStatusText = $"Update available: v{result.NewVersion}";
+                string channelName = EnableBetaUpdates ? "Beta" : "Stable";
+                UpdateStatusText = $"{channelName} update available: v{result.NewVersion}";
+                UpdateVersion = result.NewVersion;
                 IsUpdateAvailable = true;
+                UpdateUpdateIndicator();
             }
         }
         catch
         {
             UpdateStatusText = "Update check failed";
+            UpdateUpdateIndicator();
         }
         finally
         {
             IsCheckingUpdate = false;
+            UpdateUpdateIndicator();
         }
     }
 
     [RelayCommand]
     private async Task DownloadUpdateAsync()
     {
+        if (IsUpdateReadyToInstall || _updateService.IsUpdatePendingRestart())
+        {
+            UpdateStatusText = "Restarting to apply update...";
+            UpdateUpdateIndicator();
+            bool started = _updateService.ApplyPendingUpdateAndRestart(new[] { Program.SkipUpdateCheckArg });
+            if (started)
+            {
+                if (Avalonia.Application.Current?.ApplicationLifetime
+                    is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+                {
+                    desktop.Shutdown();
+                }
+                return;
+            }
+
+            UpdateStatusText = "Could not start updater — try again";
+            UpdateUpdateIndicator();
+            return;
+        }
+
         IsDownloadingUpdate = true;
+        UpdateDownloadProgress = 0;
+        UpdateUpdateIndicator();
         var progress = new Progress<int>(p =>
         {
             UpdateDownloadProgress = p;
-            UpdateStatusText = $"Downloading... {p}%";
+            UpdateStatusText = $"Downloading update... {p}%";
+            UpdateUpdateIndicator();
         });
-        var success = await _updateService.DownloadAndApplyUpdateAsync(progress);
+
+        var success = await _updateService.DownloadUpdateAsync(progress);
+        IsDownloadingUpdate = false;
+
         if (success)
         {
-            // Velopack updater is waiting for us to exit,
-            // then it will apply the update silently and restart.
-            UpdateStatusText = "Applying update...";
-            if (Avalonia.Application.Current?.ApplicationLifetime
-                is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
-            {
-                desktop.Shutdown();
-            }
+            ConfigurePendingUpdateState();
+            ShowToast("Update downloaded. Restart when ready.");
         }
         else
         {
             UpdateStatusText = "Download failed — try again";
-            IsDownloadingUpdate = false;
+            UpdateUpdateIndicator();
         }
-        // if success, app shuts down — lines below never reached
+
+        UpdateUpdateIndicator();
     }
 
     private bool _disposed;
@@ -385,6 +581,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _monitorService.BatteryStateChanged -= OnBatteryStateChanged;
+        _monitorService.EstimateChanged -= OnEstimateChanged;
         _syncTimer?.Stop();
         _syncTimer?.Dispose();
         _syncTimer = null;

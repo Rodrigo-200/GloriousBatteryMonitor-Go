@@ -73,6 +73,32 @@ public class NotificationServiceTests
     }
 
     [Fact]
+    public void FullCharge_DoesNotFireOnFirst99Sample()
+    {
+        var settings = new AppSettings { NotificationsEnabled = true, LowBatteryThreshold = 20, CriticalBatteryThreshold = 10 };
+
+        var previous = new BatteryState { Level = 98, IsCharging = true, Connection = ConnectionState.Connected };
+        var current = new BatteryState { Level = 99, IsCharging = true, Connection = ConnectionState.Connected };
+
+        _service.ProcessBatteryUpdate(current, previous, settings);
+
+        _notifications.Should().NotContain(n => n.Type == NotificationType.FullCharge);
+    }
+
+    [Fact]
+    public void FullCharge_FiresAtStable99WhileCharging()
+    {
+        var settings = new AppSettings { NotificationsEnabled = true, LowBatteryThreshold = 20, CriticalBatteryThreshold = 10 };
+
+        var previous = new BatteryState { Level = 99, IsCharging = true, Connection = ConnectionState.Connected };
+        var current = new BatteryState { Level = 99, IsCharging = true, Connection = ConnectionState.Connected };
+
+        _service.ProcessBatteryUpdate(current, previous, settings);
+
+        _notifications.Should().ContainSingle(n => n.Type == NotificationType.FullCharge);
+    }
+
+    [Fact]
     public void Disconnected_FiresOnConnectionLoss()
     {
         var settings = new AppSettings { NotificationsEnabled = true, LowBatteryThreshold = 20, CriticalBatteryThreshold = 10 };

@@ -3,14 +3,18 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 
 namespace GBM.Desktop.Services;
 
 internal static class TrayIconRenderer
 {
     private const int IconSize = 32;
+    private const int MaxCachedIcons = 96;
+    private static readonly object CacheLock = new();
+    private static readonly Dictionary<IconCacheKey, CacheEntry> IconCache = new();
+    private static readonly LinkedList<IconCacheKey> CacheOrder = new();
 
     private static readonly Color TealColor = Color.Parse("#00E5CC");
     private static readonly Color AmberColor = Color.Parse("#FF8A50");
@@ -21,34 +25,100 @@ internal static class TrayIconRenderer
 
     public static WindowIcon? RenderIcon(int level, bool isCharging, bool isConnected, bool showPercentage)
     {
+        level = Math.Clamp(level, 0, 100);
+        var cacheKey = NormalizeKey(level, isCharging, isConnected, showPercentage);
+
         try
         {
-            var canvas = new IconCanvas
+            lock (CacheLock)
             {
-                Level = level,
-                IsCharging = isCharging,
-                IsConnected = isConnected,
-                ShowPercentage = showPercentage,
-                Width = IconSize,
-                Height = IconSize
-            };
+                if (IconCache.TryGetValue(cacheKey, out var cachedEntry))
+                {
+                    TouchCacheEntry(cachedEntry);
+                    return cachedEntry.Icon;
+                }
 
-            canvas.Measure(new Size(IconSize, IconSize));
-            canvas.Arrange(new Rect(0, 0, IconSize, IconSize));
+                var canvas = new IconCanvas
+                {
+                    Level = cacheKey.Level,
+                    IsCharging = cacheKey.IsCharging,
+                    IsConnected = cacheKey.IsConnected,
+                    ShowPercentage = cacheKey.ShowPercentage,
+                    Width = IconSize,
+                    Height = IconSize
+                };
 
-            var rtb = new RenderTargetBitmap(new PixelSize(IconSize, IconSize), new Vector(96, 96));
-            rtb.Render(canvas);
+                canvas.Measure(new Size(IconSize, IconSize));
+                canvas.Arrange(new Rect(0, 0, IconSize, IconSize));
 
-            var ms = new MemoryStream();
-            rtb.Save(ms);
-            ms.Position = 0;
-            return new WindowIcon(ms);
+                using var rtb = new RenderTargetBitmap(new PixelSize(IconSize, IconSize), new Vector(96, 96));
+                rtb.Render(canvas);
+
+                var icon = new WindowIcon(rtb);
+                AddCacheEntry(cacheKey, icon);
+                return icon;
+            }
         }
         catch
         {
             return null;
         }
     }
+
+    private static IconCacheKey NormalizeKey(int level, bool isCharging, bool isConnected, bool showPercentage)
+    {
+        if (!isConnected)
+        {
+            // Disconnected icon rendering does not vary by level/charging/percentage mode.
+            return new IconCacheKey(0, false, false, false);
+        }
+
+        return new IconCacheKey(level, isCharging, true, showPercentage);
+    }
+
+    private static void TouchCacheEntry(CacheEntry entry)
+    {
+        if (entry.Node == CacheOrder.First)
+            return;
+
+        CacheOrder.Remove(entry.Node);
+        CacheOrder.AddFirst(entry.Node);
+    }
+
+    private static void AddCacheEntry(IconCacheKey key, WindowIcon icon)
+    {
+        var node = new LinkedListNode<IconCacheKey>(key);
+        CacheOrder.AddFirst(node);
+        IconCache[key] = new CacheEntry(icon, node);
+
+        if (IconCache.Count <= MaxCachedIcons)
+            return;
+
+        var lastNode = CacheOrder.Last;
+        if (lastNode == null)
+            return;
+
+        CacheOrder.RemoveLast();
+        IconCache.Remove(lastNode.Value);
+    }
+
+    private sealed class CacheEntry
+    {
+        public CacheEntry(WindowIcon icon, LinkedListNode<IconCacheKey> node)
+        {
+            Icon = icon;
+            Node = node;
+        }
+
+        public WindowIcon Icon { get; }
+        public LinkedListNode<IconCacheKey> Node { get; }
+    }
+
+    private readonly record struct IconCacheKey(
+        int Level,
+        bool IsCharging,
+        bool IsConnected,
+        bool ShowPercentage);
 
     private static Color GetFillColor(int level, bool isCharging, bool isConnected)
     {

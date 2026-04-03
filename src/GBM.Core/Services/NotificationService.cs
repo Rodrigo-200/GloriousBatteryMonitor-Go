@@ -60,7 +60,11 @@ public class NotificationService : INotificationService
                 }
 
                 // Full charge notification
-                if (current.IsCharging && current.Level >= 100 && !state.FullChargeFired)
+                bool isDefinitiveFull = current.IsCharging && current.Level >= 100;
+                bool isStableNearFull = current.IsCharging && current.Level >= 99 &&
+                                        previous is { IsCharging: true, Level: >= 99 };
+
+                if (!state.FullChargeFired && (isDefinitiveFull || isStableNearFull))
                 {
                     if (TryFireNotification(state, NotificationType.FullCharge,
                             "Charging Complete",

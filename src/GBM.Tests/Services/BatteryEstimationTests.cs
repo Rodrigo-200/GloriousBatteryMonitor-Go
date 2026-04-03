@@ -110,9 +110,9 @@ public class BatteryEstimationTests
         estimate.IsValid.Should().BeTrue();
         estimate.IsHistorical.Should().BeTrue();
         estimate.Phase.Should().Be("discharge");
-        estimate.RatePerHour.Should().BeApproximately(5.0, 0.1);
-        // 50% / 5%/hr = 10 hours
-        estimate.TimeRemaining.TotalHours.Should().BeApproximately(10.0, 0.5);
+        estimate.RatePerHour.Should().BeGreaterThan(1.5);
+        estimate.RatePerHour.Should().BeLessThan(5.0);
+        estimate.TimeRemaining.TotalHours.Should().BeGreaterThan(10.0);
     }
 
     [Fact]
@@ -127,9 +127,9 @@ public class BatteryEstimationTests
         estimate.IsValid.Should().BeTrue();
         estimate.IsHistorical.Should().BeTrue();
         estimate.Phase.Should().Be("charge");
-        estimate.RatePerHour.Should().BeApproximately(40.0, 0.1);
-        // (100-60) / 40 = 1.0 hours
-        estimate.TimeRemaining.TotalHours.Should().BeApproximately(1.0, 0.1);
+        estimate.RatePerHour.Should().BeGreaterThan(40.0);
+        estimate.RatePerHour.Should().BeLessThan(50.0);
+        estimate.TimeRemaining.TotalHours.Should().BeLessThan(1.0);
     }
 
     [Fact]
@@ -205,7 +205,8 @@ public class BatteryEstimationTests
         var estimate = _service.GetEstimate("device1");
         estimate.IsValid.Should().BeTrue();
         estimate.IsHistorical.Should().BeTrue();
-        estimate.RatePerHour.Should().BeApproximately(5.0, 0.1);
+        estimate.RatePerHour.Should().BeGreaterThan(1.5);
+        estimate.RatePerHour.Should().BeLessThan(5.0);
     }
 
     [Fact]
@@ -277,5 +278,130 @@ public class BatteryEstimationTests
         double totalHours = 100.0 / rates.DischargeRate!.Value;
         totalHours.Should().BeApproximately(20.0, 0.01,
             "100% ÷ 5%·hr⁻¹ must equal 20 hours");
+    }
+
+    [Fact]
+    public void GetEstimate_HistoricalRateLowConfidence_BlendsWithDefaultRate()
+    {
+        _service.SetHistoricalRates("low-confidence", dischargeRate: 0.61, chargeRate: null,
+            dischargeSessionCount: 1, chargeSessionCount: 0);
+        _service.AddSample("low-confidence", 50, false);
+
+        var estimate = _service.GetEstimate("low-confidence");
+
+        estimate.IsValid.Should().BeTrue();
+        estimate.IsHistorical.Should().BeTrue();
+        estimate.RatePerHour.Should().BeGreaterThan(0.61);
+        estimate.RatePerHour.Should().BeLessThan(1.5);
+    }
+
+    [Fact]
+    public void GetEstimate_HistoricalRateHighConfidence_TracksLearnedRate()
+    {
+        _service.SetHistoricalRates("high-confidence", dischargeRate: 0.61, chargeRate: null,
+            dischargeSessionCount: 20, chargeSessionCount: 0);
+        _service.AddSample("high-confidence", 50, false);
+
+        var estimate = _service.GetEstimate("high-confidence");
+
+        estimate.IsValid.Should().BeTrue();
+        estimate.RatePerHour.Should().BeApproximately(0.61, 0.05);
+    }
+
+    [Fact]
+    public void GetEstimate_LowDischargeRate_CanExceed48Hours()
+    {
+        _service.SetHistoricalRates("multi-day", dischargeRate: 0.25, chargeRate: null,
+            dischargeSessionCount: 20, chargeSessionCount: 0);
+
+        _service.AddSample("multi-day", 85, false);
+
+        var estimate = _service.GetEstimate("multi-day");
+
+        estimate.IsValid.Should().BeTrue();
+        estimate.Phase.Should().Be("discharge");
+        estimate.TimeRemaining.TotalHours.Should().BeGreaterThan(48.0);
+    }
+
+    [Fact]
+    public void Confidence_Increases_WithBetterSampleEvidence()
+    {
+        var now = DateTime.UtcNow;
+
+        // Sparse and short-lived evidence
+        _service.AddSampleForTesting("low-evidence", 90, false, now.AddMinutes(-10));
+        _service.AddSampleForTesting("low-evidence", 89, false, now.AddMinutes(-5));
+        var low = _service.GetEstimate("low-evidence");
+
+        // Longer span with more stable data
+        var start = now.AddHours(-6);
+        for (int i = 0; i <= 6; i++)
+        {
+            _service.AddSampleForTesting("high-evidence", 90 - i, false, start.AddHours(i));
+        }
+        var high = _service.GetEstimate("high-evidence");
+
+        high.IsValid.Should().BeTrue();
+        low.IsValid.Should().BeTrue();
+        high.Confidence.Should().BeGreaterThan(low.Confidence);
+    }
+
+    [Fact]
+    public void Confidence_RecentDataScoresHigherThanStaleData()
+    {
+        var now = DateTime.UtcNow;
+
+        // Stale trend: ended ~6 hours ago
+        var staleStart = now.AddHours(-8);
+        for (int i = 0; i <= 4; i++)
+        {
+            _service.AddSampleForTesting("stale", 80 - i, false, staleStart.AddMinutes(i * 30));
+        }
+
+        // Fresh trend: ends now
+        var freshStart = now.AddHours(-2);
+        for (int i = 0; i <= 4; i++)
+        {
+            _service.AddSampleForTesting("fresh", 80 - i, false, freshStart.AddMinutes(i * 30));
+        }
+
+        var stale = _service.GetEstimate("stale");
+        var fresh = _service.GetEstimate("fresh");
+
+        fresh.IsValid.Should().BeTrue();
+        stale.IsValid.Should().BeTrue();
+        fresh.Confidence.Should().BeGreaterThan(stale.Confidence);
+    }
+
+    [Fact]
+    public void OngoingDischargeLearning_CommitsWithoutPhaseChange()
+    {
+        var now = DateTime.UtcNow;
+
+        _service.AddSampleForTesting("ongoing", 80, false, now.AddHours(-2));
+        _service.AddSampleForTesting("ongoing", 79, false, now.AddHours(-1));
+
+        var learned = _service.GetLearnedRates("ongoing");
+
+        learned.Should().NotBeNull();
+        learned!.DischargeRate.Should().NotBeNull();
+        learned.DischargeRate!.Value.Should().BeInRange(0.5, 2.0);
+        learned.DischargeSessionCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void OngoingLearning_RejectsOutlierRateAgainstHistoricalBaseline()
+    {
+        var now = DateTime.UtcNow;
+        _service.SetHistoricalRates("outlier-guard", dischargeRate: 1.0, chargeRate: null,
+            dischargeSessionCount: 5, chargeSessionCount: 0);
+
+        _service.AddSampleForTesting("outlier-guard", 90, false, now.AddHours(-1));
+        _service.AddSampleForTesting("outlier-guard", 70, false, now);
+
+        var learned = _service.GetLearnedRates("outlier-guard");
+        learned.Should().NotBeNull();
+        learned!.DischargeRate.Should().BeApproximately(1.0, 0.01);
+        learned.DischargeSessionCount.Should().Be(5);
     }
 }
