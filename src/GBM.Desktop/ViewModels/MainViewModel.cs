@@ -11,6 +11,7 @@ namespace GBM.Desktop.ViewModels;
 public partial class MainViewModel : ViewModelBase, IDisposable
 {
     private const double FullChargeDurationDisplayCapHours = 24.0 * 30.0;
+    private static readonly TimeSpan FullChargeDurationRefreshInterval = TimeSpan.FromMinutes(1);
 
     private readonly IBatteryMonitorService _monitorService;
     private readonly ISettingsService _settingsService;
@@ -42,6 +43,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     // Last sync
     [ObservableProperty] private string _lastSyncText = "—";
     private DateTime? _lastReadTime;
+    private DateTime _lastFullChargeDurationRefreshUtc;
+    private string _lastFullChargeDurationDeviceName = string.Empty;
 
     // Settings overlay
     [ObservableProperty] private bool _isSettingsOpen;
@@ -256,12 +259,30 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         // Get display name from current state
         string displayName = _monitorService.CurrentState.DeviceName;
+        DateTime now = DateTime.UtcNow;
 
         if (string.IsNullOrEmpty(displayName) || displayName == "Glorious Mouse")
         {
             FullChargeDurationText = "—";
+            _lastFullChargeDurationDeviceName = string.Empty;
+            _lastFullChargeDurationRefreshUtc = DateTime.MinValue;
             return;
         }
+
+        bool sameDevice = string.Equals(
+            _lastFullChargeDurationDeviceName,
+            displayName,
+            StringComparison.Ordinal);
+
+        if (sameDevice &&
+            _lastFullChargeDurationRefreshUtc != DateTime.MinValue &&
+            now - _lastFullChargeDurationRefreshUtc < FullChargeDurationRefreshInterval)
+        {
+            return;
+        }
+
+        _lastFullChargeDurationDeviceName = displayName;
+        _lastFullChargeDurationRefreshUtc = now;
 
         // Load cached charge data and iterate to find the current device's learned rates
         // The estimation service only has in-memory state for the currently active device,

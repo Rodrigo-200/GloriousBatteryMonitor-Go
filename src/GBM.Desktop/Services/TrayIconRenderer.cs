@@ -26,7 +26,7 @@ internal static class TrayIconRenderer
     public static WindowIcon? RenderIcon(int level, bool isCharging, bool isConnected, bool showPercentage)
     {
         level = Math.Clamp(level, 0, 100);
-        var cacheKey = new IconCacheKey(level, isCharging, isConnected, showPercentage);
+        var cacheKey = NormalizeKey(level, isCharging, isConnected, showPercentage);
 
         try
         {
@@ -40,10 +40,10 @@ internal static class TrayIconRenderer
 
                 var canvas = new IconCanvas
                 {
-                    Level = level,
-                    IsCharging = isCharging,
-                    IsConnected = isConnected,
-                    ShowPercentage = showPercentage,
+                    Level = cacheKey.Level,
+                    IsCharging = cacheKey.IsCharging,
+                    IsConnected = cacheKey.IsConnected,
+                    ShowPercentage = cacheKey.ShowPercentage,
                     Width = IconSize,
                     Height = IconSize
                 };
@@ -63,6 +63,17 @@ internal static class TrayIconRenderer
         {
             return null;
         }
+    }
+
+    private static IconCacheKey NormalizeKey(int level, bool isCharging, bool isConnected, bool showPercentage)
+    {
+        if (!isConnected)
+        {
+            // Disconnected icon rendering does not vary by level/charging/percentage mode.
+            return new IconCacheKey(0, false, false, false);
+        }
+
+        return new IconCacheKey(level, isCharging, true, showPercentage);
     }
 
     private static void TouchCacheEntry(CacheEntry entry)

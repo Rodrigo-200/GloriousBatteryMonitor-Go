@@ -81,6 +81,10 @@ public class BatteryEstimationService : IBatteryEstimationService
                 {
                     LearnFromSession(state, deviceKey);
                     state.Samples.Clear();
+                    if (state.Samples.Capacity > MaxSamplesPerDevice)
+                    {
+                        state.Samples.TrimExcess();
+                    }
                     state.SmoothedRate = null;
                     state.LastEffectiveRate = null;
                     state.LastLearnCheckpointLevel = null;
@@ -89,12 +93,7 @@ public class BatteryEstimationService : IBatteryEstimationService
 
                 state.LastIsCharging = isCharging;
 
-                state.Samples.Add(new EstimationSample
-                {
-                    Level = level,
-                    Timestamp = timestampUtc,
-                    IsCharging = isCharging
-                });
+                state.Samples.Add(new EstimationSample(level, timestampUtc, isCharging));
 
                 if (!state.LastLearnCheckpointTimeUtc.HasValue)
                 {
@@ -151,6 +150,10 @@ public class BatteryEstimationService : IBatteryEstimationService
                 // Learn from the current session before resetting
                 LearnFromSession(state, deviceKey);
                 state.Samples.Clear();
+                if (state.Samples.Capacity > MaxSamplesPerDevice)
+                {
+                    state.Samples.TrimExcess();
+                }
                 state.SmoothedRate = null;
                 state.LastEffectiveRate = null;
                 state.LastLearnCheckpointLevel = null;
@@ -444,8 +447,8 @@ public class BatteryEstimationService : IBatteryEstimationService
                 ? BlendLearnedRateWithDefault(historicalRate!.Value, defaultAbsRate, historicalConfidence)
                 : defaultAbsRate;
 
-            var sessionRates = GetSessionRateSeries(samples, isCharging);
-            double sessionConfidence = ComputeSessionConfidence(sessionRates, samples.Count, sampleSpan, recency);
+            var sessionRateStats = GetSessionRateStats(samples, isCharging);
+            double sessionConfidence = ComputeSessionConfidence(sessionRateStats, samples.Count, sampleSpan, recency);
 
             // Determine effective rate with direction validation (warn but don't reject)
             double effectiveAbsRate;
@@ -522,7 +525,7 @@ public class BatteryEstimationService : IBatteryEstimationService
             hoursRemaining = Math.Min(hoursRemaining, MaxEstimateHours);
             hoursRemaining = Math.Max(hoursRemaining, 0);
 
-            // Compute confidence using SmoothedRate in a synthetic list
+            // Compute confidence from session and historical evidence.
             double confidence;
             if (hasSessionData && hasHistorical)
             {
@@ -565,9 +568,11 @@ public class BatteryEstimationService : IBatteryEstimationService
         return defaultRate * (1.0 - learnedWeight) + learnedRate * learnedWeight;
     }
 
-    private static List<double> GetSessionRateSeries(List<EstimationSample> samples, bool isCharging)
+    private static SessionRateStats GetSessionRateStats(List<EstimationSample> samples, bool isCharging)
     {
-        var rates = new List<double>(Math.Max(0, samples.Count - 1));
+        int count = 0;
+        double sum = 0;
+        double sumSquares = 0;
 
         for (int i = 1; i < samples.Count; i++)
         {
@@ -587,19 +592,21 @@ public class BatteryEstimationService : IBatteryEstimationService
             if (absRate < MinReasonableRate || absRate > MaxReasonableRate)
                 continue;
 
-            rates.Add(absRate);
+            count++;
+            sum += absRate;
+            sumSquares += absRate * absRate;
         }
 
-        return rates;
+        return new SessionRateStats(count, sum, sumSquares);
     }
 
     private static double ComputeSessionConfidence(
-        List<double> rates,
+        SessionRateStats rateStats,
         int sampleCount,
         TimeSpan sampleSpan,
         TimeSpan recency)
     {
-        if (sampleCount < 2 || rates.Count == 0)
+        if (sampleCount < 2 || rateStats.Count == 0)
             return 0.12;
 
         // Factor 1: sample count (more points => better confidence)
@@ -609,8 +616,8 @@ public class BatteryEstimationService : IBatteryEstimationService
         double spanFactor = Math.Clamp(sampleSpan.TotalHours / 6.0, 0.0, 1.0);
 
         // Factor 3: variance (lower spread => more stable behavior)
-        double mean = rates.Average();
-        double variance = rates.Sum(r => (r - mean) * (r - mean)) / rates.Count;
+        double mean = rateStats.Sum / rateStats.Count;
+        double variance = Math.Max(0, (rateStats.SumSquares / rateStats.Count) - (mean * mean));
         double stdDev = Math.Sqrt(variance);
         double relativeStdDev = mean > 0.01 ? stdDev / mean : 1.0;
         double varianceFactor = Math.Clamp(1.0 - relativeStdDev, 0.0, 1.0);
@@ -624,6 +631,20 @@ public class BatteryEstimationService : IBatteryEstimationService
                             varianceFactor * 0.20 +
                             recencyFactor * 0.15;
         return Math.Clamp(confidence, 0.12, 1.0);
+    }
+
+    private readonly struct SessionRateStats
+    {
+        public SessionRateStats(int count, double sum, double sumSquares)
+        {
+            Count = count;
+            Sum = sum;
+            SumSquares = sumSquares;
+        }
+
+        public int Count { get; }
+        public double Sum { get; }
+        public double SumSquares { get; }
     }
 
     /// <summary>
@@ -660,8 +681,15 @@ public class BatteryEstimationService : IBatteryEstimationService
         public int? LastLearnCheckpointLevel { get; set; }
     }
 
-    private class EstimationSample
+    private readonly struct EstimationSample
     {
+        public EstimationSample(int level, DateTime timestamp, bool isCharging)
+        {
+            Level = level;
+            Timestamp = timestamp;
+            IsCharging = isCharging;
+        }
+
         public int Level { get; init; }
         public DateTime Timestamp { get; init; }
         public bool IsCharging { get; init; }
