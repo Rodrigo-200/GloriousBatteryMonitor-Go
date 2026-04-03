@@ -7,27 +7,74 @@ namespace GBM.Core.Services;
 public class UpdateService : IUpdateService
 {
     private readonly ILogger<UpdateService> _logger;
+    private readonly ISettingsService _settingsService;
+    private readonly object _currentVersionLock = new();
+    private string? _cachedCurrentVersion;
     private const string RepoUrl =
         "https://github.com/Rodrigo-200/GloriousBatteryMonitor-Go";
 
-    public UpdateService(ILogger<UpdateService> logger)
+    public UpdateService(ILogger<UpdateService> logger, ISettingsService settingsService)
     {
         _logger = logger;
+        _settingsService = settingsService;
+    }
+
+    private bool UseBetaChannel => _settingsService.Current.EnableBetaUpdates;
+
+    private static string GetChannelName(bool useBetaChannel)
+    {
+        return useBetaChannel ? "beta" : "stable";
+    }
+
+    private UpdateManager CreateManager(bool useBetaChannel, bool allowVersionDowngrade = false)
+    {
+        var source = new GithubSource(RepoUrl, null, useBetaChannel);
+        var options = new UpdateOptions
+        {
+            ExplicitChannel = GetChannelName(useBetaChannel),
+            AllowVersionDowngrade = allowVersionDowngrade
+        };
+
+        return new UpdateManager(source, options, null);
+    }
+
+    private string ResolveCurrentVersion(bool useBetaChannel)
+    {
+        if (!string.IsNullOrWhiteSpace(_cachedCurrentVersion))
+            return _cachedCurrentVersion;
+
+        lock (_currentVersionLock)
+        {
+            if (!string.IsNullOrWhiteSpace(_cachedCurrentVersion))
+                return _cachedCurrentVersion;
+
+            try
+            {
+                var mgr = CreateManager(useBetaChannel);
+                _cachedCurrentVersion = mgr.CurrentVersion?.ToString() ?? "dev";
+            }
+            catch
+            {
+                _cachedCurrentVersion = "dev";
+            }
+
+            return _cachedCurrentVersion;
+        }
+    }
+
+    private static bool IsPrereleaseVersion(string version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return false;
+
+        return version.Contains('-', StringComparison.Ordinal);
     }
 
     public string CurrentVersion
     {
         get
         {
-            try
-            {
-                var mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
-                return mgr.CurrentVersion?.ToString() ?? "dev";
-            }
-            catch
-            {
-                return "dev";
-            }
+            return ResolveCurrentVersion(UseBetaChannel);
         }
     }
 
@@ -35,7 +82,13 @@ public class UpdateService : IUpdateService
     {
         try
         {
-            var mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
+            bool useBetaChannel = UseBetaChannel;
+            string channel = GetChannelName(useBetaChannel);
+            string currentVersion = ResolveCurrentVersion(useBetaChannel);
+
+            // Enable downgrade checks only when user opted back to stable from a prerelease build.
+            bool allowDowngrade = !useBetaChannel && IsPrereleaseVersion(currentVersion);
+            var mgr = CreateManager(useBetaChannel, allowDowngrade);
 
             if (!mgr.IsInstalled)
             {
@@ -48,14 +101,18 @@ public class UpdateService : IUpdateService
             if (info == null)
             {
                 _logger.LogInformation(
-                    "[UPDATE] Already on latest ({V})", CurrentVersion);
+                    "[UPDATE] Already on latest ({V}) for {Channel} channel",
+                    currentVersion,
+                    channel);
                 return null;
             }
 
             var newVersion = info.TargetFullRelease.Version.ToString();
             _logger.LogInformation(
-                "[UPDATE] Update available: {New} (current: {Cur})",
-                newVersion, CurrentVersion);
+                "[UPDATE] {Channel} update available: {New} (current: {Cur})",
+                channel,
+                newVersion,
+                currentVersion);
 
             return new UpdateCheckResult(newVersion, $"{RepoUrl}/releases/latest");
         }
@@ -70,7 +127,7 @@ public class UpdateService : IUpdateService
     {
         try
         {
-            var mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
+            var mgr = CreateManager(UseBetaChannel);
 
             if (!mgr.IsInstalled)
                 return false;
@@ -89,7 +146,11 @@ public class UpdateService : IUpdateService
     {
         try
         {
-            var mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
+            bool useBetaChannel = UseBetaChannel;
+            string channel = GetChannelName(useBetaChannel);
+            string currentVersion = ResolveCurrentVersion(useBetaChannel);
+            bool allowDowngrade = !useBetaChannel && IsPrereleaseVersion(currentVersion);
+            var mgr = CreateManager(useBetaChannel, allowDowngrade);
 
             if (!mgr.IsInstalled)
             {
@@ -102,10 +163,14 @@ public class UpdateService : IUpdateService
             if (info == null) return false;
 
             _logger.LogInformation(
-                "[UPDATE] Downloading {V}...",
+                "[UPDATE] Downloading {Channel} package {V}...",
+                channel,
                 info.TargetFullRelease.Version);
 
-            await mgr.DownloadUpdatesAsync(info, progress != null ? p => progress.Report(p) : null);
+            if (progress != null)
+                await mgr.DownloadUpdatesAsync(info, p => progress.Report(p));
+            else
+                await mgr.DownloadUpdatesAsync(info);
 
             _logger.LogInformation(
                 "[UPDATE] Download complete — update staged for next restart/apply");
@@ -122,7 +187,7 @@ public class UpdateService : IUpdateService
     {
         try
         {
-            var mgr = new UpdateManager(new GithubSource(RepoUrl, null, false));
+            var mgr = CreateManager(UseBetaChannel);
 
             if (!mgr.IsInstalled)
             {

@@ -59,6 +59,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private int _criticalThreshold = 10;
     [ObservableProperty] private int _notificationCooldownMinutes = 5;
     [ObservableProperty] private bool _debugLogging;
+    [ObservableProperty] private bool _enableBetaUpdates;
     [ObservableProperty] private bool _isAdvancedExpanded;
     [ObservableProperty] private bool _isDevToolsExpanded;
 
@@ -343,6 +344,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         CriticalThreshold = s.CriticalBatteryThreshold;
         NotificationCooldownMinutes = s.NotificationCooldownMinutes;
         DebugLogging = s.DebugLogging;
+        EnableBetaUpdates = s.EnableBetaUpdates;
         CurrentTheme = s.Theme;
         IsDarkTheme = s.Theme == "dark";
     }
@@ -363,6 +365,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void SaveSettings()
     {
+        bool oldBetaSetting = _settingsService.Current.EnableBetaUpdates;
+
         var settings = new AppSettings
         {
             StartWithOS = StartWithOS,
@@ -374,12 +378,31 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             CriticalBatteryThreshold = Math.Clamp(CriticalThreshold, 5, 30),
             NotificationCooldownMinutes = Math.Clamp(NotificationCooldownMinutes, 1, 60),
             DebugLogging = DebugLogging,
-            Theme = CurrentTheme
+            Theme = CurrentTheme,
+            EnableBetaUpdates = EnableBetaUpdates
         };
+
+        bool betaSettingChanged = oldBetaSetting != settings.EnableBetaUpdates;
+
         _settingsService.Save(settings);
         _autoStartService.SetAutoStart(settings.StartWithOS);
         IsSettingsOpen = false;
         ShowToast("Settings saved successfully");
+
+        if (betaSettingChanged)
+        {
+            IsUpdateAvailable = false;
+            IsUpdateReadyToInstall = false;
+            IsDownloadingUpdate = false;
+            UpdateDownloadProgress = 0;
+            UpdateActionButtonText = "Download Update";
+            UpdateStatusText = settings.EnableBetaUpdates
+                ? "Beta channel enabled — checking for beta updates..."
+                : "Stable channel enabled — checking for stable updates...";
+            UpdateUpdateIndicator();
+
+            _ = CheckForUpdateAsync();
+        }
     }
 
     [RelayCommand]
@@ -468,17 +491,21 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             IsUpdateReadyToInstall = false;
             UpdateDownloadProgress = 0;
             UpdateActionButtonText = "Download Update";
-            UpdateStatusText = "Checking...";
+            UpdateStatusText = EnableBetaUpdates
+                ? "Checking beta updates..."
+                : "Checking stable updates...";
 
             var result = await _updateService.CheckForUpdateAsync();
             if (result == null)
             {
+                string channelName = EnableBetaUpdates ? "beta" : "stable";
                 UpdateStatusText =
-                    $"Up to date — v{_updateService.CurrentVersion}";
+                    $"Up to date ({channelName}) — v{_updateService.CurrentVersion}";
             }
             else
             {
-                UpdateStatusText = $"Update available: v{result.NewVersion}";
+                string channelName = EnableBetaUpdates ? "Beta" : "Stable";
+                UpdateStatusText = $"{channelName} update available: v{result.NewVersion}";
                 UpdateVersion = result.NewVersion;
                 IsUpdateAvailable = true;
                 UpdateUpdateIndicator();

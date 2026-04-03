@@ -209,6 +209,21 @@
                                 <TextBlock Text="{Binding UpdateStatusText}"
                                            FontSize="13"
                                            Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,4">
+                                    <StackPanel Spacing="2" Margin="0,0,16,0">
+                                        <TextBlock Text="Beta Updates"
+                                                   FontSize="13"
+                                                   FontWeight="Medium"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="Opt in to pre-release builds. Turning this off switches back to stable updates."
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextMutedBrush}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1"
+                                                  IsChecked="{Binding EnableBetaUpdates}"
+                                                  VerticalAlignment="Center" />
+                                </Grid>
                                 <ProgressBar Value="{Binding UpdateDownloadProgress}"
                                              Maximum="100"
                                              Height="4"
