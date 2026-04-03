@@ -31,7 +31,6 @@ public class UpdateService : IUpdateService
         var source = new GithubSource(RepoUrl, null, useBetaChannel);
         var options = new UpdateOptions
         {
-            ExplicitChannel = GetChannelName(useBetaChannel),
             AllowVersionDowngrade = allowVersionDowngrade
         };
 
