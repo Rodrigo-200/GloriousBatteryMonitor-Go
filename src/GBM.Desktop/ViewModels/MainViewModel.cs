@@ -516,6 +516,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _monitorService.BatteryStateChanged -= OnBatteryStateChanged;
+        _monitorService.EstimateChanged -= OnEstimateChanged;
         _syncTimer?.Stop();
         _syncTimer?.Dispose();
         _syncTimer = null;

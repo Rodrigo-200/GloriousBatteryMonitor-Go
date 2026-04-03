@@ -131,6 +131,49 @@ public class BatteryMonitorReliabilityTests
             Times.Never);
     }
 
+    [Fact]
+    public async Task PollOnceAsync_WhenWiredAndRealtimeReadIsPlausible_UsesRealtimeLevel()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out _, out _);
+        var profile = CreateProfile();
+
+        SetPrivateField(monitor, "_activeProfile", profile);
+        SetPrivateField(monitor, "_lastPositiveLevel", 64);
+
+        hid.Setup(s => s.IsWiredDevicePresent(profile.ModelName)).Returns(true);
+        hid.Setup(s => s.ReadBattery(It.Is<DeviceProfile>(p => p == profile)))
+            .Returns((true, 67, true));
+
+        await InvokePrivateAsync(monitor, "PollOnceAsync", CancellationToken.None);
+
+        monitor.CurrentState.Level.Should().Be(67);
+        monitor.CurrentState.IsCharging.Should().BeTrue();
+
+        hid.Verify(s => s.ReadBattery(It.Is<DeviceProfile>(p => p == profile)), Times.Once);
+    }
+
+    [Fact]
+    public async Task PollOnceAsync_WhenWiredAndRealtimeReadLooksSuspicious_FallsBackToEstimate()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out _, out _);
+        var profile = CreateProfile();
+
+        SetPrivateField(monitor, "_activeProfile", profile);
+        SetPrivateField(monitor, "_lastWiredPresent", true);
+        SetPrivateField(monitor, "_lastPositiveLevel", 70);
+        SetPrivateField(monitor, "_chargeStartTime", null);
+        SetPrivateField(monitor, "_chargeStartLevel", 0);
+
+        hid.Setup(s => s.IsWiredDevicePresent(profile.ModelName)).Returns(true);
+        hid.Setup(s => s.ReadBattery(It.Is<DeviceProfile>(p => p == profile)))
+            .Returns((true, 8, false));
+
+        await InvokePrivateAsync(monitor, "PollOnceAsync", CancellationToken.None);
+
+        monitor.CurrentState.Level.Should().Be(70);
+        monitor.CurrentState.IsCharging.Should().BeTrue();
+    }
+
     private static BatteryMonitorService CreateMonitor(
         out Mock<IHidDeviceService> hid,
         out Mock<ISettingsService> settings,
@@ -199,6 +242,17 @@ public class BatteryMonitorReliabilityTests
         var method = target.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
         method.Should().NotBeNull($"Expected private method {methodName} to exist");
         method!.Invoke(target, args);
+    }
+
+    private static async Task InvokePrivateAsync(object target, string methodName, params object[] args)
+    {
+        var method = target.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull($"Expected private method {methodName} to exist");
+        var result = method!.Invoke(target, args);
+        if (result is Task task)
+        {
+            await task.ConfigureAwait(false);
+        }
     }
 
     private static T GetPrivateField<T>(object target, string fieldName)

@@ -3,14 +3,16 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 
 namespace GBM.Desktop.Services;
 
 internal static class TrayIconRenderer
 {
     private const int IconSize = 32;
+    private static readonly object CacheLock = new();
+    private static readonly Dictionary<IconCacheKey, WindowIcon> IconCache = new();
 
     private static readonly Color TealColor = Color.Parse("#00E5CC");
     private static readonly Color AmberColor = Color.Parse("#FF8A50");
@@ -21,34 +23,48 @@ internal static class TrayIconRenderer
 
     public static WindowIcon? RenderIcon(int level, bool isCharging, bool isConnected, bool showPercentage)
     {
+        level = Math.Clamp(level, 0, 100);
+        var cacheKey = new IconCacheKey(level, isCharging, isConnected, showPercentage);
+
         try
         {
-            var canvas = new IconCanvas
+            lock (CacheLock)
             {
-                Level = level,
-                IsCharging = isCharging,
-                IsConnected = isConnected,
-                ShowPercentage = showPercentage,
-                Width = IconSize,
-                Height = IconSize
-            };
+                if (IconCache.TryGetValue(cacheKey, out var cachedIcon))
+                    return cachedIcon;
 
-            canvas.Measure(new Size(IconSize, IconSize));
-            canvas.Arrange(new Rect(0, 0, IconSize, IconSize));
+                var canvas = new IconCanvas
+                {
+                    Level = level,
+                    IsCharging = isCharging,
+                    IsConnected = isConnected,
+                    ShowPercentage = showPercentage,
+                    Width = IconSize,
+                    Height = IconSize
+                };
 
-            var rtb = new RenderTargetBitmap(new PixelSize(IconSize, IconSize), new Vector(96, 96));
-            rtb.Render(canvas);
+                canvas.Measure(new Size(IconSize, IconSize));
+                canvas.Arrange(new Rect(0, 0, IconSize, IconSize));
 
-            var ms = new MemoryStream();
-            rtb.Save(ms);
-            ms.Position = 0;
-            return new WindowIcon(ms);
+                using var rtb = new RenderTargetBitmap(new PixelSize(IconSize, IconSize), new Vector(96, 96));
+                rtb.Render(canvas);
+
+                var icon = new WindowIcon(rtb);
+                IconCache[cacheKey] = icon;
+                return icon;
+            }
         }
         catch
         {
             return null;
         }
     }
+
+    private readonly record struct IconCacheKey(
+        int Level,
+        bool IsCharging,
+        bool IsConnected,
+        bool ShowPercentage);
 
     private static Color GetFillColor(int level, bool isCharging, bool isConnected)
     {

@@ -46,11 +46,10 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private int _consecutiveZeroReads;
     private const int ConsecutiveZeroReadsForSleep = 3;
 
-    // Wired-device-based charging: the wireless dongle cannot reliably report
-    // charging state (mouse sleeps on RF when USB cable is plugged in).
-    // Instead, we detect the wired HID device appearing as the charging signal.
-    // We estimate charging progress using a Li-ion charge curve model rather than
-    // reading the wired device (its voltage-based reading is inflated by charge current).
+    // Wired-device-based charging: use wired HID presence as the charging signal.
+    // While charging, prefer real-time battery readings from the active profile when
+    // they look plausible. Fall back to the Li-ion charge curve model when the device
+    // reports no data (or clearly bogus low/status values).
     private bool _lastWiredPresent;
     private DateTime? _chargeStartTime;
     private int _chargeStartLevel;
@@ -67,6 +66,8 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private const double CvRateMinPerHour = 10.0; // CV phase end rate at 100%
     private const int CvThreshold = 80;           // CC→CV transition point
     private const int MaxEstimatedLevel = 99;     // Can't confirm 100% without real reading
+    private const int SuspiciousChargingLowThreshold = 10;
+    private const int SuspiciousChargingDropThreshold = 20;
 
     private static readonly TimeSpan ReconnectDebounce = TimeSpan.FromMilliseconds(900);
     private static readonly TimeSpan ReconnectCooldown = TimeSpan.FromSeconds(45);
@@ -348,9 +349,22 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 // Clear settling delay if cable is plugged back in.
                 _cableDisconnectTime = null;
 
-                // Charging: estimate battery level from Li-ion charge curve model.
-                // The wireless dongle returns 0% (mouse sleeping on RF) and the wired
-                // device's voltage-based reading is inflated, so we model it instead.
+                // While charging, prefer real telemetry from the active profile.
+                // If it is unavailable (or clearly implausible), fall back to the
+                // learned Li-ion charge curve estimate.
+                if (TryReadRealtimeChargingLevel(out int realtimeLevel))
+                {
+                    _consecutiveFailures = 0;
+
+                    // Rebase the fallback curve from the latest valid real sample so
+                    // future estimate-only ticks continue from a fresh anchor point.
+                    _chargeStartTime = DateTime.UtcNow;
+                    _chargeStartLevel = realtimeLevel;
+
+                    ProcessSuccessfulRead(realtimeLevel, isCharging: true);
+                    return Task.CompletedTask;
+                }
+
                 int estimatedLevel = EstimateChargingLevel();
                 _consecutiveFailures = 0;
                 ProcessSuccessfulRead(estimatedLevel, isCharging: true);
@@ -488,6 +502,42 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         int result = Math.Min((int)Math.Round(level), MaxEstimatedLevel);
         return Math.Max(result, _chargeStartLevel); // Never go below start level
+    }
+
+    private bool TryReadRealtimeChargingLevel(out int level)
+    {
+        level = 0;
+
+        if (_activeProfile == null)
+            return false;
+
+        var result = _hidDeviceService.ReadBattery(_activeProfile);
+        if (!result.Success || result.BatteryLevel <= 0 || result.BatteryLevel > 100)
+            return false;
+
+        if (IsSuspiciousChargingReading(result.BatteryLevel))
+        {
+            _logger.LogDebug(
+                "[MONITOR] Ignoring suspicious charging reading {Raw}% (last known {Last}%)",
+                result.BatteryLevel,
+                _lastPositiveLevel);
+            return false;
+        }
+
+        level = result.BatteryLevel;
+        return true;
+    }
+
+    private bool IsSuspiciousChargingReading(int level)
+    {
+        if (_lastPositiveLevel <= 0)
+            return false;
+
+        bool implausiblyLow = level < SuspiciousChargingLowThreshold &&
+                              _lastPositiveLevel >= SuspiciousChargingDropThreshold;
+        bool implausibleDrop = (_lastPositiveLevel - level) >= SuspiciousChargingDropThreshold;
+
+        return implausiblyLow || implausibleDrop;
     }
 
     private void AttemptDeviceDiscovery()
