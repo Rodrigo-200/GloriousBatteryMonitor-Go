@@ -15,6 +15,7 @@ public class AppSettings
     public bool ShowPercentageOnTrayIcon { get; set; } = false;
     public string Theme { get; set; } = "system";
     public bool EnableBetaUpdates { get; set; } = false;
+    public bool HasSetBetaChannelPreference { get; set; } = false;
 
     public AppSettings Clone() => new()
     {
@@ -28,7 +29,8 @@ public class AppSettings
         DebugLogging = DebugLogging,
         ShowPercentageOnTrayIcon = ShowPercentageOnTrayIcon,
         Theme = Theme,
-        EnableBetaUpdates = EnableBetaUpdates
+        EnableBetaUpdates = EnableBetaUpdates,
+        HasSetBetaChannelPreference = HasSetBetaChannelPreference
     };
 }
 

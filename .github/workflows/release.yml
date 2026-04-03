@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
+      - 'v[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
   contents: write
@@ -99,6 +99,7 @@ jobs:
           GH_TOKEN: ${{ secrets.VELOPACK_GITHUB_TOKEN }}
         run: |
           $tag = "${{ steps.version.outputs.TAG }}"
+          $version = "${{ steps.version.outputs.VERSION }}"
           $notes = ""
           if (Test-Path RELEASE_NOTES.md) {
             $notes = Get-Content RELEASE_NOTES.md -Raw
@@ -112,8 +113,8 @@ jobs:
           $notesFile = "RELEASE_NOTES.md"
           $notes | Out-File -FilePath $notesFile -Encoding utf8
 
-          # Check if this is a pre-release (has beta, rc, alpha, etc.)
-          $isPrerelease = $tag -match '-\w+\d+$'
+          # SemVer pre-release detection, e.g. 1.2.3-beta.13, 1.2.3-rc.1, 1.2.3-alpha1
+          $isPrerelease = $version -match '^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*$'
 
           $releaseArgs = @(
             $tag

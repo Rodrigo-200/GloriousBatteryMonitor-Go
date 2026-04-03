@@ -70,6 +70,12 @@ public class UpdateService : IUpdateService
         return version.Contains('-', StringComparison.Ordinal);
     }
 
+    private static bool IsPendingVersionCompatibleWithChannel(string pendingVersion, bool useBetaChannel)
+    {
+        bool isPendingPrerelease = IsPrereleaseVersion(pendingVersion);
+        return useBetaChannel ? isPendingPrerelease : !isPendingPrerelease;
+    }
+
     public string CurrentVersion
     {
         get
@@ -127,12 +133,28 @@ public class UpdateService : IUpdateService
     {
         try
         {
-            var mgr = CreateManager(UseBetaChannel);
+            bool useBetaChannel = UseBetaChannel;
+            string channel = GetChannelName(useBetaChannel);
+            var mgr = CreateManager(useBetaChannel);
 
             if (!mgr.IsInstalled)
                 return false;
 
-            return mgr.UpdatePendingRestart != null;
+            var pending = mgr.UpdatePendingRestart;
+            if (pending == null)
+                return false;
+
+            string pendingVersion = pending.Version?.ToString() ?? string.Empty;
+            if (!IsPendingVersionCompatibleWithChannel(pendingVersion, useBetaChannel))
+            {
+                _logger.LogInformation(
+                    "[UPDATE] Ignoring pending {Version} because selected channel is {Channel}",
+                    pendingVersion,
+                    channel);
+                return false;
+            }
+
+            return true;
         }
         catch (Exception ex)
         {
