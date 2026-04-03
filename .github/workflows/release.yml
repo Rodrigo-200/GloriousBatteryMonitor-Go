@@ -30,6 +30,17 @@ jobs:
           echo "TAG=$tag" >> $env:GITHUB_OUTPUT
           echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
 
+      - name: Validate prerelease tag format
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+
+          # Reject ambiguous tags like 3.3.0-beta9 / 3.3.0-rc1.
+          # Use SemVer-compatible format such as 3.3.0-beta.9 / 3.3.0-rc.1.
+          if ($version -match '^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z]+[0-9]+$') {
+            throw "Invalid prerelease tag '$version'. Use SemVer prerelease format like v3.3.0-beta.9"
+          }
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
