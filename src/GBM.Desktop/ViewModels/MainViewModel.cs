@@ -20,6 +20,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private readonly IUpdateService _updateService;
     private readonly IStorageService _storageService;
     private readonly IBatteryEstimationService _estimationService;
+    private bool _betaDefaultAppliedThisSession;
 
     // Battery state properties
     [ObservableProperty] private int _batteryLevel;
@@ -334,6 +335,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     private void LoadSettings()
     {
+        TryEnableBetaByDefaultForPrereleaseBuild();
+
         var s = _settingsService.Current;
         StartWithOS = s.StartWithOS;
         StartMinimized = s.StartMinimized;
@@ -347,6 +350,35 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         EnableBetaUpdates = s.EnableBetaUpdates;
         CurrentTheme = s.Theme;
         IsDarkTheme = s.Theme == "dark";
+    }
+
+    private void TryEnableBetaByDefaultForPrereleaseBuild()
+    {
+        if (_betaDefaultAppliedThisSession)
+            return;
+
+        _betaDefaultAppliedThisSession = true;
+
+        var current = _settingsService.Current;
+        if (current.EnableBetaUpdates)
+            return;
+
+        if (current.HasSetBetaChannelPreference)
+            return;
+
+        // Prerelease builds (e.g. 3.3.0-beta.13) should default to beta channel.
+        if (!IsPrereleaseVersion(_updateService.CurrentVersion))
+            return;
+
+        var migrated = current.Clone();
+        migrated.EnableBetaUpdates = true;
+        _settingsService.Save(migrated);
+    }
+
+    private static bool IsPrereleaseVersion(string version)
+    {
+        return !string.IsNullOrWhiteSpace(version) &&
+               version.Contains('-', StringComparison.Ordinal);
     }
 
     [RelayCommand]
@@ -379,7 +411,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             NotificationCooldownMinutes = Math.Clamp(NotificationCooldownMinutes, 1, 60),
             DebugLogging = DebugLogging,
             Theme = CurrentTheme,
-            EnableBetaUpdates = EnableBetaUpdates
+            EnableBetaUpdates = EnableBetaUpdates,
+            HasSetBetaChannelPreference = true
         };
 
         bool betaSettingChanged = oldBetaSetting != settings.EnableBetaUpdates;

@@ -42,6 +42,7 @@ public class MainViewModelTests
         settings.CriticalBatteryThreshold.Should().Be(10);
         settings.ShowPercentageOnTrayIcon.Should().BeFalse();
         settings.EnableBetaUpdates.Should().BeFalse();
+        settings.HasSetBetaChannelPreference.Should().BeFalse();
         settings.Theme.Should().Be("system");
     }
 
@@ -122,15 +123,19 @@ public class MainViewModelTests
         {
             NotificationCooldownMinutes = 15,
             DebugLogging = true,
-            EnableBetaUpdates = true
+            EnableBetaUpdates = true,
+            HasSetBetaChannelPreference = true
         };
         var clone = original.Clone();
         clone.NotificationCooldownMinutes.Should().Be(15);
         clone.DebugLogging.Should().BeTrue();
         clone.EnableBetaUpdates.Should().BeTrue();
+        clone.HasSetBetaChannelPreference.Should().BeTrue();
         clone.NotificationCooldownMinutes = 99;
         clone.EnableBetaUpdates = false;
+        clone.HasSetBetaChannelPreference = false;
         original.NotificationCooldownMinutes.Should().Be(15);
         original.EnableBetaUpdates.Should().BeTrue();
+        original.HasSetBetaChannelPreference.Should().BeTrue();
     }
 }
