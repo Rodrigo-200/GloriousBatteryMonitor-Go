@@ -102,13 +102,14 @@ public class StorageService : IStorageService
         {
             try
             {
+                DateTime now = DateTime.UtcNow;
                 var data = LoadChargeDataInternal();
                 var deviceData = GetOrCreateDeviceData(data, deviceKey);
 
                 deviceData.Samples.Add(new BatterySample
                 {
                     Level = level,
-                    Timestamp = DateTime.UtcNow,
+                    Timestamp = now,
                     IsCharging = isCharging
                 });
 
@@ -121,7 +122,13 @@ public class StorageService : IStorageService
                 }
 
                 deviceData.LastKnownLevel = level;
-                deviceData.LastReadTime = DateTime.UtcNow;
+                deviceData.LastReadTime = now;
+
+                if (isCharging)
+                {
+                    deviceData.LastChargeTime = now;
+                    deviceData.LastChargeLevel = level;
+                }
 
                 _cachedChargeData = data;
                 SaveChargeDataInternal(data, force: false);
@@ -179,7 +186,7 @@ public class StorageService : IStorageService
     }
 
     public void UpdateLearnedRates(string deviceKey, double? dischargeRate, double? chargeRate,
-                                    int dischargeSessions, int chargeSessions)
+                                    int dischargeSessions, int chargeSessions, bool forceSave = false)
     {
         lock (_chargeDataLock)
         {
@@ -194,7 +201,7 @@ public class StorageService : IStorageService
                 deviceData.ChargeSessionCount = chargeSessions;
 
                 _cachedChargeData = data;
-                SaveChargeDataInternal(data, force: true);
+                SaveChargeDataInternal(data, force: forceSave);
             }
             catch (Exception ex)
             {

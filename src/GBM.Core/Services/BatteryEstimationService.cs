@@ -11,7 +11,9 @@ public class BatteryEstimationService : IBatteryEstimationService
 
     private const int MinLevelChangeForEstimate = 3;
     private const int MaxSamplesPerDevice = 500;
-    private const double MaxEstimateHours = 48.0;
+    // Keep a very high safety cap to avoid infinite/absurd durations while still
+    // allowing multi-day estimates for low-drain real-world usage patterns.
+    private const double MaxEstimateHours = 24.0 * 30.0;
     private const int MaxHistoricalSessions = 20;
     private const double MinReasonableRate = 0.1;
     private const double MaxReasonableRate = 200.0;

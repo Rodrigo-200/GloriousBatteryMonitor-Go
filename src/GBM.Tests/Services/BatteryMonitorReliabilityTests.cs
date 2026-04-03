@@ -89,7 +89,8 @@ public class BatteryMonitorReliabilityTests
                 0.61,
                 40.0,
                 8,
-                3),
+                3,
+                false),
             Times.Once);
     }
 

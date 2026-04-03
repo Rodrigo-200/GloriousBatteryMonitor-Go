@@ -10,6 +10,8 @@ namespace GBM.Desktop.ViewModels;
 
 public partial class MainViewModel : ViewModelBase, IDisposable
 {
+    private const double FullChargeDurationDisplayCapHours = 24.0 * 30.0;
+
     private readonly IBatteryMonitorService _monitorService;
     private readonly ISettingsService _settingsService;
     private readonly IHidDeviceService _hidService;
@@ -240,9 +242,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             if (estimate.IsValid)
             {
                 TimeRemaining = estimate.TimeRemaining;
-                var hours = (int)estimate.TimeRemaining.TotalHours;
-                var mins = estimate.TimeRemaining.Minutes;
-                TimeRemainingText = hours > 0 ? $"{hours}h {mins}m" : $"{mins}m";
+                TimeRemainingText = FormatDuration(estimate.TimeRemaining);
             }
             else
             {
@@ -275,22 +275,39 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
             double totalHours = 100.0 / rate;
 
-            // Cap at 48h to avoid nonsensical estimates from near-zero rates
-            if (totalHours > 48.0)
+            // Keep display bounded but allow realistic multi-day durations.
+            if (totalHours > FullChargeDurationDisplayCapHours)
             {
-                FullChargeDurationText = "~48h+";
+                FullChargeDurationText = "~30d+";
                 return;
             }
 
             var span = TimeSpan.FromHours(totalHours);
-            int hours = (int)span.TotalHours;
-            int mins = span.Minutes;
-            FullChargeDurationText = hours > 0 ? $"~{hours}h {mins}m" : $"~{mins}m";
+            FullChargeDurationText = "~" + FormatDuration(span, includeMinutesForDays: false);
             return;
         }
 
         // No device with learned rates found
         FullChargeDurationText = "—";
+    }
+
+    private static string FormatDuration(TimeSpan span, bool includeMinutesForDays = false)
+    {
+        if (span.TotalHours >= 24)
+        {
+            int days = (int)span.TotalDays;
+            int hours = span.Hours;
+            int mins = span.Minutes;
+
+            if (includeMinutesForDays && mins > 0)
+                return $"{days}d {hours}h {mins}m";
+
+            return hours > 0 ? $"{days}d {hours}h" : $"{days}d";
+        }
+
+        int shortHours = (int)span.TotalHours;
+        int shortMins = span.Minutes;
+        return shortHours > 0 ? $"{shortHours}h {shortMins}m" : $"{shortMins}m";
     }
 
     private void LoadSettings()

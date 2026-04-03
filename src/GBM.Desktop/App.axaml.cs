@@ -173,8 +173,12 @@ public partial class App : Application
             catch { }
         }
 
+        var minSerilogLevel = debugMode
+            ? Serilog.Events.LogEventLevel.Debug
+            : Serilog.Events.LogEventLevel.Information;
+
         var serilogLogger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
+            .MinimumLevel.Is(minSerilogLevel)
             .WriteTo.File(logPath,
                 rollingInterval: RollingInterval.Infinite,
                 fileSizeLimitBytes: 5 * 1024 * 1024,

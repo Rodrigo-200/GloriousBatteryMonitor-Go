@@ -64,7 +64,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private const double CcRatePerHour = 60.0;   // CC phase (<80%): 60%/hr
     private const double CvRateMaxPerHour = 60.0; // CV phase start rate at 80%
     private const double CvRateMinPerHour = 10.0; // CV phase end rate at 100%
-    private const int CvThreshold = 80;           // CC→CV transition point
+    private const int CvThreshold = 80;           // CC->CV transition point
     private const int MaxEstimatedLevel = 99;     // Can't confirm 100% without real reading
     private const int SuspiciousChargingLowThreshold = 10;
     private const int SuspiciousChargingDropThreshold = 20;
@@ -80,7 +80,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private const int SuccessfulReadsPerLearnedPersist = 6;
     private const int MaxConsecutiveFailuresBeforeReconnect = 3;
 
-    // CandidateF does not always get a response on every poll cycle — the device
+    // CandidateF does not always get a response on every poll cycle - the device
     // answers intermittently across RIDs, and each full miss (all 4 RIDs timeout)
     // takes ~12 seconds. A threshold of 3 would trigger reconnect within ~36s even
     // when the device responds every other cycle. Use a higher threshold so transient
@@ -232,7 +232,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         // so restarting the app while charging would miss the cable.
         SeedWiredPresenceOnStartup();
 
-        // Poll immediately on startup — don't wait for the first timer tick
+        // Poll immediately on startup - don't wait for the first timer tick
         await PollOnceAsync(cancellationToken).ConfigureAwait(false);
 
         while (!cancellationToken.IsCancellationRequested)
@@ -311,12 +311,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             if (wiredPresent != _lastWiredPresent)
             {
                 _logger.LogInformation(
-                    "[MONITOR] Wired device presence changed: {Old} → {New} for {Model}",
+                    "[MONITOR] Wired device presence changed: {Old} -> {New} for {Model}",
                     _lastWiredPresent, wiredPresent, modelName);
 
                 if (wiredPresent && !_lastWiredPresent)
                 {
-                    // Cable just plugged in — record charge start for estimation.
+                    // Cable just plugged in - record charge start for estimation.
                     // Do NOT reset _activeProfile or trigger reconnect: the CandidateF
                     // poll on PID=0x824D remains valid while the cable is in.
                     _chargeStartTime = DateTime.UtcNow;
@@ -328,7 +328,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 }
                 else if (!wiredPresent)
                 {
-                    // Cable unplugged — clear charge tracking.
+                    // Cable unplugged - clear charge tracking.
                     // The device needs a few seconds to settle back into wireless mode
                     // before it will respond to GetFeature again. Record the disconnect
                     // time so PollOnceAsync can skip reads during the settling period.
@@ -337,7 +337,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     _consecutiveFailures = 0;
                     _cableDisconnectTime = DateTime.UtcNow;
                     _logger.LogInformation(
-                        "[MONITOR] USB cable disconnected for {Model} — resuming wireless polling after {Delay}s settling delay",
+                        "[MONITOR] USB cable disconnected for {Model} - resuming wireless polling after {Delay}s settling delay",
                         modelName, PostDisconnectSettlingDelay.TotalSeconds);
                 }
 
@@ -377,7 +377,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     DateTime.UtcNow - _cableDisconnectTime.Value < PostDisconnectSettlingDelay)
                 {
                     _logger.LogDebug(
-                        "[MONITOR] Skipping poll — post-disconnect settling ({Elapsed:F1}s / {Delay}s)",
+                        "[MONITOR] Skipping poll - post-disconnect settling ({Elapsed:F1}s / {Delay}s)",
                         (DateTime.UtcNow - _cableDisconnectTime.Value).TotalSeconds,
                         PostDisconnectSettlingDelay.TotalSeconds);
                     // Keep state as Connected with last known level, just not charging
@@ -389,7 +389,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 // Clear the settling flag once the window has elapsed
                 _cableDisconnectTime = null;
 
-                // Normal wireless mode — read from dongle.
+                // Normal wireless mode - read from dongle.
                 var result = _hidDeviceService.ReadBattery(_activeProfile);
                 if (result.Success)
                 {
@@ -406,7 +406,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                         {
                             _logger.LogDebug(
                                 "[D2] Ignoring suspicious low reading ({Raw}%) while USB cable present " +
-                                "— using last known level {Last}%",
+                                "- using last known level {Last}%",
                                 result.BatteryLevel, _lastPositiveLevel);
                             ProcessSuccessfulRead(_lastPositiveLevel, isCharging: true);
 
@@ -451,7 +451,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     {
         if (_chargeStartTime == null || _chargeStartLevel <= 0)
         {
-            // Started app while already charging — no baseline level available.
+            // Started app while already charging - no baseline level available.
             // Fall back to last known level (may be 0 if none available).
             return _lastPositiveLevel > 0 ? _lastPositiveLevel : 0;
         }
@@ -474,7 +474,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             cvMin = ccRate / 6.0; // CV phase tapers to ~1/6 of CC rate
         }
 
-        // Walk the charge curve in small time steps for accuracy through the CC→CV transition
+        // Walk the charge curve in small time steps for accuracy through the CC->CV transition
         double level = _chargeStartLevel;
         double stepHours = 1.0 / 3600.0; // 1-second steps
         double remaining = elapsedHours;
@@ -554,7 +554,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
             // Only show "Connecting" on fresh probe attempts.
             // After exhaustion, stay in NotConnected to avoid a misleading
-            // "connecting" → "not connected" loop every poll cycle.
+            // "connecting" -> "not connected" loop every poll cycle.
             if (!_probeExhausted)
                 UpdateConnectionState(ConnectionState.Connecting);
 
@@ -576,7 +576,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 if (isIntermittent && maxAttempts > 1)
                 {
                     _logger.LogInformation(
-                        "[MONITOR] Consecutive failure threshold reached — retrying saved {Method} profile before full rescan",
+                        "[MONITOR] Consecutive failure threshold reached - retrying saved {Method} profile before full rescan",
                         profile.PixartMethod);
                 }
 
@@ -633,7 +633,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             if (devices.Count > 0 && !_probeExhausted)
             {
                 _logger.LogWarning(
-                    "[MONITOR] Known device(s) found but no working probe candidate — " +
+                    "[MONITOR] Known device(s) found but no working probe candidate - " +
                     "will retry in {Seconds}s (or on manual rescan)",
                     (int)_exhaustedProbeDebounce.TotalSeconds);
                 _probeExhausted = true;
@@ -727,7 +727,6 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         // Update storage
         _storageService.AddBatterySample(deviceKey, displayLevel, isCharging);
-        _storageService.UpdateChargeInfo(deviceKey, displayLevel, isCharging ? DateTime.UtcNow : null);
 
         // Update estimation
         bool wakingFromSleep = previousState.Connection == ConnectionState.Sleeping &&
@@ -765,7 +764,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _consecutiveFailures++;
         _logger.LogDebug("Battery read failed. Consecutive failures: {Count}", _consecutiveFailures);
 
-        // CandidateF and CandidateG have intermittent response patterns — use higher
+        // CandidateF and CandidateG have intermittent response patterns - use higher
         // thresholds to avoid unnecessary reconnect cycles during normal operation.
         int threshold = (_activeProfile?.PixartMethod) switch
         {
@@ -957,7 +956,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     continue;
                 }
 
-                // Try an immediate battery read — works for Sinowealth and some Pixart methods
+                // Try an immediate battery read - works for Sinowealth and some Pixart methods
                 var result = _hidDeviceService.ReadBattery(profile);
                 if (result.Success)
                 {
@@ -969,7 +968,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
                 // For Pixart passive-read methods (CandidateE, CandidateF, CandidateG), the
                 // device won't emit data on cold start until triggered. Trust the saved
-                // profile if the device path is present — the normal poll loop will handle reads.
+                // profile if the device path is present - the normal poll loop will handle reads.
                 // Do NOT trust CandidateD: it's synchronous GetFeature, so if ReadBattery
                 // failed above it means the response was rejected (false positive filter).
                 // Letting CandidateD fall through forces a re-probe that discovers F/G.
@@ -1056,7 +1055,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 return;
 
             _logger.LogInformation(
-                "[D2] PID=0x824A detected on startup — USB cable is plugged in");
+                "[D2] PID=0x824A detected on startup - USB cable is plugged in");
             _lastWiredPresent = true;
 
             // Seed charge baseline from persisted data so EstimateChargingLevel
@@ -1076,11 +1075,11 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             }
             else
             {
-                // No stored level — we'll report charging with 0% until real data arrives.
+                // No stored level - we'll report charging with 0% until real data arrives.
                 _chargeStartTime = DateTime.UtcNow;
                 _chargeStartLevel = 0;
                 _logger.LogWarning(
-                    "[D2] USB cable present on startup but no stored battery baseline — " +
+                    "[D2] USB cable present on startup but no stored battery baseline - " +
                     "charge estimate will start at 0%");
             }
         }
@@ -1108,7 +1107,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             {
                 _storageService.UpdateLearnedRates(deviceKey,
                     learned.DischargeRate, learned.ChargeRate,
-                    learned.DischargeSessionCount, learned.ChargeSessionCount);
+                    learned.DischargeSessionCount, learned.ChargeSessionCount, force);
                 _lastLearnedRatesPersistUtc = DateTime.UtcNow;
                 _successfulReadsSinceLearnedPersist = 0;
                 if (force)

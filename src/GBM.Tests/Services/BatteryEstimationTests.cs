@@ -309,6 +309,21 @@ public class BatteryEstimationTests
     }
 
     [Fact]
+    public void GetEstimate_LowDischargeRate_CanExceed48Hours()
+    {
+        _service.SetHistoricalRates("multi-day", dischargeRate: 0.25, chargeRate: null,
+            dischargeSessionCount: 20, chargeSessionCount: 0);
+
+        _service.AddSample("multi-day", 85, false);
+
+        var estimate = _service.GetEstimate("multi-day");
+
+        estimate.IsValid.Should().BeTrue();
+        estimate.Phase.Should().Be("discharge");
+        estimate.TimeRemaining.TotalHours.Should().BeGreaterThan(48.0);
+    }
+
+    [Fact]
     public void Confidence_Increases_WithBetterSampleEvidence()
     {
         var now = DateTime.UtcNow;

@@ -11,8 +11,10 @@ namespace GBM.Desktop.Services;
 internal static class TrayIconRenderer
 {
     private const int IconSize = 32;
+    private const int MaxCachedIcons = 96;
     private static readonly object CacheLock = new();
-    private static readonly Dictionary<IconCacheKey, WindowIcon> IconCache = new();
+    private static readonly Dictionary<IconCacheKey, CacheEntry> IconCache = new();
+    private static readonly LinkedList<IconCacheKey> CacheOrder = new();
 
     private static readonly Color TealColor = Color.Parse("#00E5CC");
     private static readonly Color AmberColor = Color.Parse("#FF8A50");
@@ -30,8 +32,11 @@ internal static class TrayIconRenderer
         {
             lock (CacheLock)
             {
-                if (IconCache.TryGetValue(cacheKey, out var cachedIcon))
-                    return cachedIcon;
+                if (IconCache.TryGetValue(cacheKey, out var cachedEntry))
+                {
+                    TouchCacheEntry(cachedEntry);
+                    return cachedEntry.Icon;
+                }
 
                 var canvas = new IconCanvas
                 {
@@ -50,7 +55,7 @@ internal static class TrayIconRenderer
                 rtb.Render(canvas);
 
                 var icon = new WindowIcon(rtb);
-                IconCache[cacheKey] = icon;
+                AddCacheEntry(cacheKey, icon);
                 return icon;
             }
         }
@@ -58,6 +63,44 @@ internal static class TrayIconRenderer
         {
             return null;
         }
+    }
+
+    private static void TouchCacheEntry(CacheEntry entry)
+    {
+        if (entry.Node == CacheOrder.First)
+            return;
+
+        CacheOrder.Remove(entry.Node);
+        CacheOrder.AddFirst(entry.Node);
+    }
+
+    private static void AddCacheEntry(IconCacheKey key, WindowIcon icon)
+    {
+        var node = new LinkedListNode<IconCacheKey>(key);
+        CacheOrder.AddFirst(node);
+        IconCache[key] = new CacheEntry(icon, node);
+
+        if (IconCache.Count <= MaxCachedIcons)
+            return;
+
+        var lastNode = CacheOrder.Last;
+        if (lastNode == null)
+            return;
+
+        CacheOrder.RemoveLast();
+        IconCache.Remove(lastNode.Value);
+    }
+
+    private sealed class CacheEntry
+    {
+        public CacheEntry(WindowIcon icon, LinkedListNode<IconCacheKey> node)
+        {
+            Icon = icon;
+            Node = node;
+        }
+
+        public WindowIcon Icon { get; }
+        public LinkedListNode<IconCacheKey> Node { get; }
     }
 
     private readonly record struct IconCacheKey(
