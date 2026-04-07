@@ -71,7 +71,7 @@
 | Model D | ✅ | ✅ | ✅ Working |
 | Model D- | ❔ | ❔ | Untested |
 | **Model D2** | ✅ | ✅ | ✅ Working |
-| Model I / I2 | ⌛ | ⌛ | In Progress |
+| Model I / I2 | ✅ | ✅ | ✅ Working |
 | Model O Pro | ❔ | ❔ | Untested |
 
 **Known Vendor IDs:** `0x258A` (Glorious LLC), `0x093A` (Pixart — used by newer receivers)
