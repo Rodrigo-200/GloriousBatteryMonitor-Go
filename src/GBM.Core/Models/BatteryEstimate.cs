@@ -26,3 +26,7 @@ public record LearnedRates(
     double? ChargeRate,
     int DischargeSessionCount,
     int ChargeSessionCount);
+
+public record ChargeCalibration(
+    double OvershootPercent,
+    int ObservationCount);

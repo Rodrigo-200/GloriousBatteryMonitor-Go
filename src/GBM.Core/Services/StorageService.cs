@@ -210,6 +210,29 @@ public class StorageService : IStorageService
         }
     }
 
+    public void UpdateChargeCalibration(string deviceKey, double? overshootPercent,
+                                        int observationCount, bool forceSave = false)
+    {
+        lock (_chargeDataLock)
+        {
+            try
+            {
+                var data = LoadChargeDataInternal();
+                var deviceData = GetOrCreateDeviceData(data, deviceKey);
+
+                deviceData.LearnedChargeOvershootPercent = overshootPercent;
+                deviceData.ChargeOvershootObservationCount = observationCount;
+
+                _cachedChargeData = data;
+                SaveChargeDataInternal(data, force: forceSave);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update charge calibration for device {Key}", deviceKey);
+            }
+        }
+    }
+
     private ChargeData LoadChargeDataInternal()
     {
         if (_cachedChargeData != null)

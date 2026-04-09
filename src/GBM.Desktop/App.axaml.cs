@@ -46,7 +46,6 @@ public partial class App : Application
 
             // Apply theme from settings
             var settingsService = _serviceProvider.GetRequiredService<ISettingsService>();
-            settingsService.Load();
             ApplyTheme(settingsService.Current.Theme);
             settingsService.SettingsChanged += s => ApplyTheme(s.Theme);
 

@@ -30,3 +30,21 @@ debug.prev.log
 *.delta
 RELEASES
 AGENTS.md
+
+# AI Agent Instructions
+.ai-agent-rules.md
+.ai-task-template.md
+.github/copilot-instructions.md
+.cursorrules
+.clinerules
+.windsurfrules
+
+# AI Agent Files
+.ai-*
+.llm-logs/
+.ai-cache/
+
+# Keep only CI workflows tracked under .github
+.github/*
+!.github/workflows/
+!.github/workflows/**

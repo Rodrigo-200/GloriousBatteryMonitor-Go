@@ -71,6 +71,37 @@ public class StorageServiceTests
         }
     }
 
+    [Fact]
+    public void UpdateChargeCalibration_ForceFlagControlsImmediateDiskPersistence()
+    {
+        string appDataPath = CreateTempDirectory();
+        const string deviceKey = "device";
+
+        try
+        {
+            var service = CreateStorageService(appDataPath);
+            service.AddBatterySample(deviceKey, 75, isCharging: true);
+
+            service.UpdateChargeCalibration(deviceKey, 12.0, 2, forceSave: false);
+
+            var reloadedAfterNonForced = CreateStorageService(appDataPath).GetDeviceChargeData(deviceKey);
+            reloadedAfterNonForced.Should().NotBeNull();
+            reloadedAfterNonForced!.LearnedChargeOvershootPercent.Should().BeNull();
+            reloadedAfterNonForced.ChargeOvershootObservationCount.Should().Be(0);
+
+            service.UpdateChargeCalibration(deviceKey, 12.0, 2, forceSave: true);
+
+            var reloadedAfterForced = CreateStorageService(appDataPath).GetDeviceChargeData(deviceKey);
+            reloadedAfterForced.Should().NotBeNull();
+            reloadedAfterForced!.LearnedChargeOvershootPercent.Should().Be(12.0);
+            reloadedAfterForced.ChargeOvershootObservationCount.Should().Be(2);
+        }
+        finally
+        {
+            TryDeleteDirectory(appDataPath);
+        }
+    }
+
     private static StorageService CreateStorageService(string appDataPath)
     {
         var logger = new Mock<ILogger<StorageService>>();

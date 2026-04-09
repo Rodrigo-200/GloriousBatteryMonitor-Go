@@ -19,6 +19,11 @@ public class DeviceChargeData
     public double? LearnedChargeRate { get; set; }
     public int DischargeSessionCount { get; set; }
     public int ChargeSessionCount { get; set; }
+
+    // Learned charging overshoot correction, observed after unplug events.
+    // Example: estimated 100% while wired, first stable wireless sample is 86% => 14% overshoot.
+    public double? LearnedChargeOvershootPercent { get; set; }
+    public int ChargeOvershootObservationCount { get; set; }
 }
 
 public class BatterySample
