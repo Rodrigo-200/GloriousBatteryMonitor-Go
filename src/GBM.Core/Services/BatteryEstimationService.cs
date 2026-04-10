@@ -28,6 +28,9 @@ public class BatteryEstimationService : IBatteryEstimationService
     private const int MinLevelDeltaForOngoingDischargeLearning = 1;
     private const int MinLevelDeltaForOngoingChargeLearning = 2;
     private static readonly TimeSpan MinSpanForLowDeltaEstimate = TimeSpan.FromHours(2);
+    private static readonly TimeSpan MaxChargeOvershootObservationAge = TimeSpan.FromMinutes(10);
+    private const double MinChargeOvershootLearnPercent = 2.0;
+    private const double MaxChargeOvershootLearnPercent = 40.0;
 
     // Default rates for first-ever use (before any learning).
     // These provide an immediate estimate so "Calculating..." never lingers.
@@ -203,6 +206,85 @@ public class BatteryEstimationService : IBatteryEstimationService
                 state.HistoricalChargeRate,
                 state.DischargeSessionCount,
                 state.ChargeSessionCount);
+        }
+    }
+
+    public void SetChargeCalibration(string deviceKey, double? overshootPercent, int observationCount)
+    {
+        lock (_lock)
+        {
+            if (!_states.TryGetValue(deviceKey, out var state))
+            {
+                state = new DeviceEstimationState();
+                _states[deviceKey] = state;
+            }
+
+            if (!overshootPercent.HasValue || overshootPercent.Value <= 0 || observationCount <= 0)
+            {
+                state.ChargeOvershootPercent = null;
+                state.ChargeOvershootObservationCount = 0;
+                return;
+            }
+
+            state.ChargeOvershootPercent = Math.Clamp(
+                overshootPercent.Value,
+                MinChargeOvershootLearnPercent,
+                MaxChargeOvershootLearnPercent);
+            state.ChargeOvershootObservationCount = observationCount;
+        }
+    }
+
+    public void ObserveChargeDropAfterUnplug(string deviceKey, int anchorLevel, int measuredLevel, TimeSpan elapsed)
+    {
+        lock (_lock)
+        {
+            if (!_states.TryGetValue(deviceKey, out var state))
+            {
+                state = new DeviceEstimationState();
+                _states[deviceKey] = state;
+            }
+
+            if (elapsed <= TimeSpan.Zero || elapsed > MaxChargeOvershootObservationAge)
+                return;
+
+            if (anchorLevel <= 0 || anchorLevel > 100 || measuredLevel < 0 || measuredLevel > 100)
+                return;
+
+            int drop = anchorLevel - measuredLevel;
+            if (drop < MinChargeOvershootLearnPercent || drop > MaxChargeOvershootLearnPercent)
+            {
+                return;
+            }
+
+            double? overshoot = state.ChargeOvershootPercent;
+            int count = state.ChargeOvershootObservationCount;
+            BlendCalibration(ref overshoot, ref count, drop);
+
+            state.ChargeOvershootPercent = overshoot;
+            state.ChargeOvershootObservationCount = count;
+
+            _logger.LogInformation(
+                "Learned charge overshoot for {Key}: observed={Observed:F1}%, historical={Historical:F1}% ({Observations} observations)",
+                deviceKey,
+                (double)drop,
+                state.ChargeOvershootPercent ?? 0,
+                state.ChargeOvershootObservationCount);
+        }
+    }
+
+    public ChargeCalibration? GetChargeCalibration(string deviceKey)
+    {
+        lock (_lock)
+        {
+            if (!_states.TryGetValue(deviceKey, out var state))
+                return null;
+
+            if (!state.ChargeOvershootPercent.HasValue || state.ChargeOvershootObservationCount <= 0)
+                return null;
+
+            return new ChargeCalibration(
+                state.ChargeOvershootPercent.Value,
+                state.ChargeOvershootObservationCount);
         }
     }
 
@@ -382,6 +464,21 @@ public class BatteryEstimationService : IBatteryEstimationService
             int cappedCount = Math.Min(sessionCount, MaxHistoricalSessions);
             historicalRate = (historicalRate.Value * cappedCount + sessionRate) / (cappedCount + 1);
             sessionCount++;
+        }
+    }
+
+    private static void BlendCalibration(ref double? historicalOvershoot, ref int observationCount, double observedOvershoot)
+    {
+        if (!historicalOvershoot.HasValue || observationCount <= 0)
+        {
+            historicalOvershoot = observedOvershoot;
+            observationCount = 1;
+        }
+        else
+        {
+            int cappedCount = Math.Min(observationCount, MaxHistoricalSessions);
+            historicalOvershoot = (historicalOvershoot.Value * cappedCount + observedOvershoot) / (cappedCount + 1);
+            observationCount++;
         }
     }
 
@@ -669,6 +766,8 @@ public class BatteryEstimationService : IBatteryEstimationService
         public double? HistoricalChargeRate { get; set; }
         public int DischargeSessionCount { get; set; }
         public int ChargeSessionCount { get; set; }
+        public double? ChargeOvershootPercent { get; set; }
+        public int ChargeOvershootObservationCount { get; set; }
 
         // EWMA smoothed instantaneous discharge/charge rate (per sample pair)
         public double? SmoothedRate { get; set; }

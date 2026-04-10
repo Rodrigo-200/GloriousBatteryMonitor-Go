@@ -59,6 +59,14 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     // Skip polling during this window to avoid accumulating false failures.
     private DateTime? _cableDisconnectTime;
     private static readonly TimeSpan PostDisconnectSettlingDelay = TimeSpan.FromSeconds(5);
+    private DateTime? _pendingUnplugCalibrationUtc;
+    private int? _pendingUnplugCalibrationAnchorLevel;
+    private bool _awaitingUnplugCalibrationSample;
+    private static readonly TimeSpan MaxUnplugCalibrationWindow = TimeSpan.FromMinutes(10);
+    private const int MinUnplugCalibrationDrop = 5;
+    private const int MaxUnplugCalibrationDrop = 40;
+    private const int MinLevelForUnplugCalibration = 20;
+    private const int ChargeCalibrationFullConfidenceObservations = 6;
 
     // Li-ion charge curve constants (typical for 500-700mAh gaming mouse cells)
     private const double CcRatePerHour = 60.0;   // CC phase (<80%): 60%/hr
@@ -215,6 +223,9 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _chargeStartTime = null;
         _chargeStartLevel = 0;
         _cableDisconnectTime = null;
+        _pendingUnplugCalibrationUtc = null;
+        _pendingUnplugCalibrationAnchorLevel = null;
+        _awaitingUnplugCalibrationSample = false;
         _probeExhausted = false;
         _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
     }
@@ -316,6 +327,8 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
                 if (wiredPresent && !_lastWiredPresent)
                 {
+                    ClearPendingUnplugCalibration();
+
                     // Cable just plugged in - record charge start for estimation.
                     // Do NOT reset _activeProfile or trigger reconnect: the CandidateF
                     // poll on PID=0x824D remains valid while the cable is in.
@@ -328,6 +341,18 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 }
                 else if (!wiredPresent)
                 {
+                    int anchorLevel = CurrentState.Level > 0 ? CurrentState.Level : _lastPositiveLevel;
+                    if (anchorLevel >= MinLevelForUnplugCalibration)
+                    {
+                        _pendingUnplugCalibrationAnchorLevel = anchorLevel;
+                        _pendingUnplugCalibrationUtc = DateTime.UtcNow;
+                        _awaitingUnplugCalibrationSample = true;
+                    }
+                    else
+                    {
+                        ClearPendingUnplugCalibration();
+                    }
+
                     // Cable unplugged - clear charge tracking.
                     // The device needs a few seconds to settle back into wireless mode
                     // before it will respond to GetFeature again. Record the disconnect
@@ -500,8 +525,38 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             remaining -= step;
         }
 
+        level = ApplyChargeCalibrationCorrection(level);
+
         int result = Math.Min((int)Math.Round(level), MaxEstimatedLevel);
         return Math.Max(result, _chargeStartLevel); // Never go below start level
+    }
+
+    private double ApplyChargeCalibrationCorrection(double estimatedLevel)
+    {
+        if (_activeProfile == null)
+            return estimatedLevel;
+
+        if (_chargeStartLevel <= 0 || estimatedLevel <= _chargeStartLevel)
+            return estimatedLevel;
+
+        string deviceKey = _activeProfile.CompositeKey ?? _activeProfile.ModelName;
+        var calibration = _estimationService.GetChargeCalibration(deviceKey);
+        if (calibration == null || calibration.OvershootPercent <= 0)
+            return estimatedLevel;
+
+        double span = Math.Max(1.0, 100.0 - _chargeStartLevel);
+        double progress = Math.Clamp((estimatedLevel - _chargeStartLevel) / span, 0.0, 1.0);
+        if (progress <= 0)
+            return estimatedLevel;
+
+        double confidence = Math.Clamp(
+            calibration.ObservationCount / (double)ChargeCalibrationFullConfidenceObservations,
+            0.25,
+            1.0);
+        double correction = calibration.OvershootPercent * progress * confidence;
+        double corrected = estimatedLevel - correction;
+
+        return Math.Max(corrected, _chargeStartLevel);
     }
 
     private bool TryReadRealtimeChargingLevel(out int level)
@@ -740,6 +795,9 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         {
             _estimationService.AddSample(deviceKey, displayLevel, isCharging);
         }
+
+        TryLearnFromPostUnplugObservation(deviceKey, displayLevel, isCharging, shouldSkipEstimationSample);
+
         var estimate = _estimationService.GetEstimate(deviceKey);
         UpdateEstimate(estimate);
         _successfulReadsSinceLearnedPersist++;
@@ -757,6 +815,42 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         // Process notifications
         _notificationService.ProcessBatteryUpdate(newState, previousState, _settingsService.Current);
+    }
+
+    private void TryLearnFromPostUnplugObservation(string deviceKey, int level, bool isCharging, bool skipEstimationSample)
+    {
+        if (!_awaitingUnplugCalibrationSample)
+            return;
+
+        if (isCharging || skipEstimationSample)
+            return;
+
+        DateTime? unplugTime = _pendingUnplugCalibrationUtc;
+        int? anchorLevel = _pendingUnplugCalibrationAnchorLevel;
+        ClearPendingUnplugCalibration();
+
+        if (!unplugTime.HasValue || !anchorLevel.HasValue)
+            return;
+
+        TimeSpan elapsed = DateTime.UtcNow - unplugTime.Value;
+        if (elapsed <= TimeSpan.Zero || elapsed > MaxUnplugCalibrationWindow)
+            return;
+
+        if (anchorLevel.Value < MinLevelForUnplugCalibration)
+            return;
+
+        int drop = anchorLevel.Value - level;
+        if (drop < MinUnplugCalibrationDrop || drop > MaxUnplugCalibrationDrop)
+            return;
+
+        _estimationService.ObserveChargeDropAfterUnplug(deviceKey, anchorLevel.Value, level, elapsed);
+    }
+
+    private void ClearPendingUnplugCalibration()
+    {
+        _pendingUnplugCalibrationUtc = null;
+        _pendingUnplugCalibrationAnchorLevel = null;
+        _awaitingUnplugCalibrationSample = false;
     }
 
     private void ProcessFailedRead()
@@ -1029,6 +1123,14 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                         data.LearnedDischargeRate, data.LearnedChargeRate,
                         data.DischargeSessionCount, data.ChargeSessionCount);
                 }
+
+                if (data.LearnedChargeOvershootPercent.HasValue && data.ChargeOvershootObservationCount > 0)
+                {
+                    _estimationService.SetChargeCalibration(
+                        key,
+                        data.LearnedChargeOvershootPercent,
+                        data.ChargeOvershootObservationCount);
+                }
             }
         }
         catch (Exception ex)
@@ -1108,11 +1210,25 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 _storageService.UpdateLearnedRates(deviceKey,
                     learned.DischargeRate, learned.ChargeRate,
                     learned.DischargeSessionCount, learned.ChargeSessionCount, force);
+            }
+
+            var calibration = _estimationService.GetChargeCalibration(deviceKey);
+            if (calibration != null)
+            {
+                _storageService.UpdateChargeCalibration(
+                    deviceKey,
+                    calibration.OvershootPercent,
+                    calibration.ObservationCount,
+                    force);
+            }
+
+            if (learned != null || calibration != null)
+            {
                 _lastLearnedRatesPersistUtc = DateTime.UtcNow;
                 _successfulReadsSinceLearnedPersist = 0;
                 if (force)
                 {
-                    _logger.LogDebug("Persisted learned rates for {Key} (forced)", deviceKey);
+                    _logger.LogDebug("Persisted learned data for {Key} (forced)", deviceKey);
                 }
             }
         }

@@ -175,6 +175,24 @@ public class BatteryMonitorReliabilityTests
         monitor.CurrentState.IsCharging.Should().BeTrue();
     }
 
+    [Fact]
+    public void ProcessSuccessfulRead_FirstStableReadAfterUnplug_LearnsCalibration()
+    {
+        var monitor = CreateMonitor(out _, out _, out _, out var estimation);
+        var profile = CreateProfile();
+
+        SetPrivateField(monitor, "_activeProfile", profile);
+        SetPrivateField(monitor, "_awaitingUnplugCalibrationSample", true);
+        SetPrivateField(monitor, "_pendingUnplugCalibrationAnchorLevel", 100);
+        SetPrivateField(monitor, "_pendingUnplugCalibrationUtc", DateTime.UtcNow - TimeSpan.FromSeconds(20));
+
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 86, false, false);
+
+        estimation.Verify(
+            e => e.ObserveChargeDropAfterUnplug(profile.CompositeKey, 100, 86, It.IsAny<TimeSpan>()),
+            Times.Once);
+    }
+
     private static BatteryMonitorService CreateMonitor(
         out Mock<IHidDeviceService> hid,
         out Mock<ISettingsService> settings,
@@ -209,6 +227,7 @@ public class BatteryMonitorReliabilityTests
             IsHistorical = true
         });
         estimation.Setup(e => e.GetLearnedRates(It.IsAny<string>())).Returns((LearnedRates?)null);
+        estimation.Setup(e => e.GetChargeCalibration(It.IsAny<string>())).Returns((ChargeCalibration?)null);
 
         return new BatteryMonitorService(
             logger.Object,

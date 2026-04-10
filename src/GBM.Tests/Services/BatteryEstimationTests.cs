@@ -404,4 +404,39 @@ public class BatteryEstimationTests
         learned!.DischargeRate.Should().BeApproximately(1.0, 0.01);
         learned.DischargeSessionCount.Should().Be(5);
     }
+
+    [Fact]
+    public void ObserveChargeDropAfterUnplug_LearnsChargeOvershootCalibration()
+    {
+        _service.ObserveChargeDropAfterUnplug("calibration", anchorLevel: 100, measuredLevel: 86,
+            elapsed: TimeSpan.FromMinutes(1));
+
+        var calibration = _service.GetChargeCalibration("calibration");
+        calibration.Should().NotBeNull();
+        calibration!.OvershootPercent.Should().BeApproximately(14.0, 0.01);
+        calibration.ObservationCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void ObserveChargeDropAfterUnplug_BlendsAcrossObservations()
+    {
+        _service.ObserveChargeDropAfterUnplug("calibration", anchorLevel: 100, measuredLevel: 90,
+            elapsed: TimeSpan.FromMinutes(1));
+        _service.ObserveChargeDropAfterUnplug("calibration", anchorLevel: 98, measuredLevel: 86,
+            elapsed: TimeSpan.FromMinutes(2));
+
+        var calibration = _service.GetChargeCalibration("calibration");
+        calibration.Should().NotBeNull();
+        calibration!.OvershootPercent.Should().BeApproximately(11.0, 0.01);
+        calibration.ObservationCount.Should().Be(2);
+    }
+
+    [Fact]
+    public void ObserveChargeDropAfterUnplug_IgnoresStaleObservation()
+    {
+        _service.ObserveChargeDropAfterUnplug("stale", anchorLevel: 100, measuredLevel: 85,
+            elapsed: TimeSpan.FromMinutes(20));
+
+        _service.GetChargeCalibration("stale").Should().BeNull();
+    }
 }

@@ -10,4 +10,7 @@ public interface IBatteryEstimationService
     void SetHistoricalRates(string deviceKey, double? dischargeRate, double? chargeRate,
                             int dischargeSessionCount, int chargeSessionCount);
     LearnedRates? GetLearnedRates(string deviceKey);
+    void SetChargeCalibration(string deviceKey, double? overshootPercent, int observationCount);
+    void ObserveChargeDropAfterUnplug(string deviceKey, int anchorLevel, int measuredLevel, TimeSpan elapsed);
+    ChargeCalibration? GetChargeCalibration(string deviceKey);
 }

@@ -1,6 +1,5 @@
 using GBM.Core.Models;
 using Microsoft.Extensions.Logging;
-using System.Runtime.InteropServices;
 
 namespace GBM.Desktop.Services;
 
@@ -55,7 +54,7 @@ public class WindowsToastService : IDisposable
             // Display via direct WinRT API call
             _ = Task.Run(() => ShowToastViaWinRT(title, bodyText, iconUri, audioSrc, type));
 
-            _logger.LogInformation("[TOAST] Delivered [{Type}]: {Title}", type, title);
+            _logger.LogInformation("[TOAST] Queued [{Type}]: {Title}", type, title);
         }
         catch (Exception ex)
         {
@@ -81,27 +80,16 @@ public class WindowsToastService : IDisposable
 
             string toastXml = $@"<toast duration=""short""><visual><binding template=""ToastGeneric"">{logoXml}<text hint-maxLines=""1"">{EscapeXml(title)}</text><text>{EscapeXml(message)}</text><text placement=""attribution"">Glorious Battery Monitor</text></binding></visual><audio src=""{audioSrc}"" loop=""false""/></toast>";
 
-            // Use direct WinRT API with proper COM object cleanup
+            // Use direct WinRT API. CsWinRT projections are not always COM objects,
+            // so explicit ReleaseComObject calls can throw on newer runtimes.
             var doc = new Windows.Data.Xml.Dom.XmlDocument();
-            try
+            doc.LoadXml(toastXml);
+            var toast = new Windows.UI.Notifications.ToastNotification(doc)
             {
-                doc.LoadXml(toastXml);
-                var toast = new Windows.UI.Notifications.ToastNotification(doc);
-                try
-                {
-                    toast.Tag = "battery";
-                    toast.Group = "battery";
-                    _toastNotifier.Show(toast);
-                }
-                finally
-                {
-                    Marshal.ReleaseComObject(toast);
-                }
-            }
-            finally
-            {
-                Marshal.ReleaseComObject(doc);
-            }
+                Tag = "battery",
+                Group = "battery"
+            };
+            _toastNotifier.Show(toast);
 
             _logger.LogDebug("[TOAST] WinRT toast displayed successfully");
         }
@@ -187,8 +175,6 @@ public class WindowsToastService : IDisposable
 
         if (_toastNotifier != null)
         {
-            try { Marshal.ReleaseComObject(_toastNotifier); }
-            catch { }
             _toastNotifier = null;
         }
     }
