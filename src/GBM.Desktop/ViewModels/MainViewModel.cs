@@ -484,7 +484,11 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             var clipboard = desktop.MainWindow?.Clipboard;
             if (clipboard != null)
             {
-                await clipboard.SetTextAsync(DevOutput);
+                var item = new Avalonia.Input.DataTransferItem();
+                item.Set(Avalonia.Input.DataFormat.Text, DevOutput);
+                var data = new Avalonia.Input.DataTransfer();
+                data.Add(item);
+                await clipboard.SetDataAsync(data);
                 ShowToast("Copied to clipboard");
             }
         }
