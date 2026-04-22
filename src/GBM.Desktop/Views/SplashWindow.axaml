@@ -4,7 +4,7 @@
         Title="Glorious Battery Monitor"
         Width="340" Height="220"
         CanResize="False"
-        SystemDecorations="None"
+        WindowDecorations="None"
         WindowStartupLocation="CenterScreen"
         Topmost="True"
         Background="#1B1C23"

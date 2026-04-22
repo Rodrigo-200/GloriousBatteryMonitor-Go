@@ -11,7 +11,6 @@
         Background="{DynamicResource WindowBackgroundBrush}"
         FontFamily="Inter, Segoe UI, Helvetica, Arial, sans-serif"
         ExtendClientAreaToDecorationsHint="True"
-        ExtendClientAreaChromeHints="PreferSystemChrome"
         ExtendClientAreaTitleBarHeightHint="-1"
         WindowStartupLocation="CenterScreen">
 

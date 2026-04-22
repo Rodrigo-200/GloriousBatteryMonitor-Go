@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Data.Core.Plugins;
 using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
 using GBM.Core.Models;
@@ -11,7 +10,6 @@ using GBM.Desktop.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
-using System.Linq;
 
 namespace GBM.Desktop;
 
@@ -32,12 +30,6 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // Remove duplicate data annotation validation
-            var toRemove = BindingPlugins.DataValidators
-                .OfType<DataAnnotationsValidationPlugin>().ToArray();
-            foreach (var p in toRemove)
-                BindingPlugins.DataValidators.Remove(p);
-
             // Build DI container
             var services = new ServiceCollection();
             ConfigureServices(services);
