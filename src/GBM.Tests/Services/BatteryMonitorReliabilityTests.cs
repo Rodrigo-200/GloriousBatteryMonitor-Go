@@ -217,6 +217,27 @@ public class BatteryMonitorReliabilityTests
         monitor.CurrentState.LastChargeTime.Should().NotBeNull();
     }
 
+    [Fact]
+    public void ProcessFailedRead_CandidateG_UsesHigherFailureThresholdBeforeReconnect()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out _, out _);
+        var profile = CreateProfile(PixartBatteryMethod.CandidateG);
+
+        hid.Setup(s => s.IsDevicePresent(It.IsAny<DeviceProfile>())).Returns(false);
+        SetPrivateField(monitor, "_activeProfile", profile);
+        SetPrivateField(monitor, "_lastSuccessfulReadUtc", DateTime.UtcNow - TimeSpan.FromMinutes(10));
+
+        for (int i = 0; i < 9; i++)
+        {
+            InvokePrivate(monitor, "ProcessFailedRead");
+        }
+
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().NotBeNull();
+
+        InvokePrivate(monitor, "ProcessFailedRead");
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeNull();
+    }
+
     private static BatteryMonitorService CreateMonitor(
         out Mock<IHidDeviceService> hid,
         out Mock<ISettingsService> settings,
@@ -262,7 +283,7 @@ public class BatteryMonitorReliabilityTests
             notification.Object);
     }
 
-    private static DeviceProfile CreateProfile()
+    private static DeviceProfile CreateProfile(PixartBatteryMethod method = PixartBatteryMethod.CandidateA)
     {
         return new DeviceProfile
         {
@@ -273,7 +294,7 @@ public class BatteryMonitorReliabilityTests
             ProductId = 0x824D,
             ModelName = "Model D 2 Wireless",
             Protocol = ChipProtocol.Pixart,
-            PixartMethod = PixartBatteryMethod.CandidateA,
+            PixartMethod = method,
             ReportId = 0,
             ReportLength = 64,
             UseFeatureReports = true,
