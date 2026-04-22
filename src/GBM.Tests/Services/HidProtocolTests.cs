@@ -43,6 +43,43 @@ public class HidProtocolTests
     }
 
     [Fact]
+    public void DeviceDatabase_ModelI2_PrimaryVendorMappings_AreCorrect()
+    {
+        var wired = DeviceDatabase.TryGetDevice(0x258A, 0x2014, out var wiredName, out var wiredWireless);
+        wired.Should().BeTrue();
+        wiredName.Should().Be("Model I2");
+        wiredWireless.Should().BeFalse();
+
+        var wireless = DeviceDatabase.TryGetDevice(0x258A, 0x2016, out var wirelessName, out var isWireless);
+        wireless.Should().BeTrue();
+        wirelessName.Should().Be("Model I2");
+        isWireless.Should().BeTrue();
+    }
+
+    [Fact]
+    public void DeviceDatabase_ModelI2_AlternateVendorMappings_AreCorrect()
+    {
+        var wired = DeviceDatabase.TryGetDevice(0x093A, 0x821A, out var wiredName, out var wiredWireless);
+        wired.Should().BeTrue();
+        wiredName.Should().Be("Model I2");
+        wiredWireless.Should().BeFalse();
+
+        var wireless = DeviceDatabase.TryGetDevice(0x093A, 0x821D, out var wirelessName, out var isWireless);
+        wireless.Should().BeTrue();
+        wirelessName.Should().Be("Model I2");
+        isWireless.Should().BeTrue();
+    }
+
+    [Fact]
+    public void DeviceDatabase_ModelI2_WiredPidSet_IncludesBothKnownWiredVariants()
+    {
+        var wiredPids = DeviceDatabase.GetWiredPidsForModel("Model I2");
+
+        wiredPids.Should().Contain((0x258A, 0x2014));
+        wiredPids.Should().Contain((0x093A, 0x821A));
+    }
+
+    [Fact]
     public void DeviceDatabase_IsKnownVendor_RecognizesPrimaryVendor()
     {
         DeviceDatabase.IsKnownVendor(0x258A).Should().BeTrue();
