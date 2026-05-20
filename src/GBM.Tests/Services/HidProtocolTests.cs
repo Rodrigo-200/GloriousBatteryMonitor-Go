@@ -26,6 +26,15 @@ public class HidProtocolTests
     }
 
     [Fact]
+    public void DeviceDatabase_KnownWirelessDevice_ModelOWireless_Works()
+    {
+        var result = DeviceDatabase.TryGetDevice(0x258A, 0x2022, out var name, out var wireless);
+        result.Should().BeTrue();
+        name.Should().Be("Model O");
+        wireless.Should().BeTrue();
+    }
+
+    [Fact]
     public void DeviceDatabase_UnknownDevice_ReturnsFalse()
     {
         var result = DeviceDatabase.TryGetDevice(0x258A, 0xFFFF, out var name, out var wireless);

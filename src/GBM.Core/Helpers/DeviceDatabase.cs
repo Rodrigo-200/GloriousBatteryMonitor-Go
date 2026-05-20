@@ -10,6 +10,7 @@ public static class DeviceDatabase
         // Model O
         { (GloriousVendorId, 0x2011), ("Model O", false) },
         { (GloriousVendorId, 0x2013), ("Model O", true) },
+        { (GloriousVendorId, 0x2022), ("Model O", true) },
         // Model O-
         { (GloriousVendorId, 0x2019), ("Model O-", false) },
         { (GloriousVendorId, 0x2024), ("Model O-", true) },
