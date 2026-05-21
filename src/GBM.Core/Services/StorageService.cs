@@ -129,6 +129,14 @@ public class StorageService : IStorageService
                     deviceData.LastChargeTime = now;
                     deviceData.LastChargeLevel = level;
                 }
+                else if (deviceData.LastChargeLevel.HasValue &&
+                         level > 0 &&
+                         level <= 100 &&
+                         level > deviceData.LastChargeLevel.Value)
+                {
+                    deviceData.LastChargeTime ??= now;
+                    deviceData.LastChargeLevel = level;
+                }
 
                 _cachedChargeData = data;
                 SaveChargeDataInternal(data, force: false);

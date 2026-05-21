@@ -193,6 +193,30 @@ public class BatteryMonitorReliabilityTests
             Times.Once);
     }
 
+    [Fact]
+    public void ProcessSuccessfulRead_NonChargingHigherLevel_PromotesChargedToLevel()
+    {
+        var monitor = CreateMonitor(out _, out _, out var storage, out _);
+        var profile = CreateProfile();
+
+        SetPrivateField(monitor, "_activeProfile", profile);
+        storage.Setup(s => s.GetDeviceChargeData(profile.CompositeKey)).Returns(new DeviceChargeData
+        {
+            CompositeKey = profile.CompositeKey,
+            LastKnownLevel = 75,
+            LastReadTime = DateTime.UtcNow.AddMinutes(-10),
+            LastChargeTime = DateTime.UtcNow.AddMinutes(-10),
+            LastChargeLevel = 75
+        });
+
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 100, false, false);
+
+        monitor.CurrentState.Level.Should().Be(100);
+        monitor.CurrentState.IsCharging.Should().BeFalse();
+        monitor.CurrentState.LastChargeLevel.Should().Be(100);
+        monitor.CurrentState.LastChargeTime.Should().NotBeNull();
+    }
+
     private static BatteryMonitorService CreateMonitor(
         out Mock<IHidDeviceService> hid,
         out Mock<ISettingsService> settings,

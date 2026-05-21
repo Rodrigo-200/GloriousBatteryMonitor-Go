@@ -35,6 +35,56 @@ public class StorageServiceTests
     }
 
     [Fact]
+    public void AddBatterySample_NonChargingHigherLevel_PromotesLastChargeLevel()
+    {
+        string appDataPath = CreateTempDirectory();
+        const string deviceKey = "device";
+
+        try
+        {
+            var service = CreateStorageService(appDataPath);
+            service.AddBatterySample(deviceKey, 75, isCharging: true);
+
+            service.AddBatterySample(deviceKey, 100, isCharging: false);
+
+            var device = service.GetDeviceChargeData(deviceKey);
+            device.Should().NotBeNull();
+            device!.LastKnownLevel.Should().Be(100);
+            device.LastChargeLevel.Should().Be(100);
+            device.LastChargeTime.Should().NotBeNull();
+        }
+        finally
+        {
+            TryDeleteDirectory(appDataPath);
+        }
+    }
+
+    [Fact]
+    public void AddBatterySample_NonChargingLowerLevel_DoesNotReplaceLastChargeLevel()
+    {
+        string appDataPath = CreateTempDirectory();
+        const string deviceKey = "device";
+
+        try
+        {
+            var service = CreateStorageService(appDataPath);
+            service.AddBatterySample(deviceKey, 100, isCharging: true);
+
+            service.AddBatterySample(deviceKey, 95, isCharging: false);
+
+            var device = service.GetDeviceChargeData(deviceKey);
+            device.Should().NotBeNull();
+            device!.LastKnownLevel.Should().Be(95);
+            device.LastChargeLevel.Should().Be(100);
+            device.LastChargeTime.Should().NotBeNull();
+        }
+        finally
+        {
+            TryDeleteDirectory(appDataPath);
+        }
+    }
+
+    [Fact]
     public void UpdateLearnedRates_ForceFlagControlsImmediateDiskPersistence()
     {
         string appDataPath = CreateTempDirectory();

@@ -743,6 +743,8 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         string deviceKey = _activeProfile?.CompositeKey ?? modelName;
         int criticalThreshold = _settingsService.Current.CriticalBatteryThreshold;
 
+        DateTime now = DateTime.UtcNow;
+
         // Look up stored charge info
         var storedData = _storageService.GetDeviceChargeData(deviceKey);
         DateTime? lastChargeTime = storedData?.LastChargeTime;
@@ -751,7 +753,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         // Update charge time tracking
         if (isCharging)
         {
-            lastChargeTime = DateTime.UtcNow;
+            lastChargeTime = now;
+            lastChargeLevel = displayLevel;
+        }
+        else if (ShouldPromoteObservedLevelToLastCharge(displayLevel, lastChargeLevel))
+        {
+            lastChargeTime ??= now;
             lastChargeLevel = displayLevel;
         }
 
@@ -762,7 +769,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             Connection = connection,
             Health = BatteryState.DeriveHealth(displayLevel, criticalThreshold),
             DeviceName = modelName,
-            LastReadTime = DateTime.UtcNow,
+            LastReadTime = now,
             LastChargeTime = lastChargeTime,
             LastChargeLevel = lastChargeLevel
         };
@@ -815,6 +822,14 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         // Process notifications
         _notificationService.ProcessBatteryUpdate(newState, previousState, _settingsService.Current);
+    }
+
+    private static bool ShouldPromoteObservedLevelToLastCharge(int observedLevel, int? lastChargeLevel)
+    {
+        return lastChargeLevel.HasValue &&
+               observedLevel > 0 &&
+               observedLevel <= 100 &&
+               observedLevel > lastChargeLevel.Value;
     }
 
     private void TryLearnFromPostUnplugObservation(string deviceKey, int level, bool isCharging, bool skipEstimationSample)
