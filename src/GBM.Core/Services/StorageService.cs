@@ -116,9 +116,7 @@ public class StorageService : IStorageService
                 // Trim to the last MaxSamplesPerDevice samples
                 if (deviceData.Samples.Count > MaxSamplesPerDevice)
                 {
-                    deviceData.Samples = deviceData.Samples
-                        .Skip(deviceData.Samples.Count - MaxSamplesPerDevice)
-                        .ToList();
+                    deviceData.Samples.RemoveRange(0, deviceData.Samples.Count - MaxSamplesPerDevice);
                 }
 
                 deviceData.LastKnownLevel = level;

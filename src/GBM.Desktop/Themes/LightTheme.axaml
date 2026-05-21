@@ -2,12 +2,12 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- ══════════════════════════════════════════════════
-         DARK-MODE ONLY — This file mirrors DarkTheme.axaml
-         to ensure dark appearance regardless of theme toggle.
+         GLORIOUS BATTERY MONITOR — LIGHT THEME
+         Accent: Electric Cyan #00C8D6
          ══════════════════════════════════════════════════ -->
 
     <!-- ── FluentTheme System Accent Override ── -->
-    <Color x:Key="SystemAccentColor">#00F0FF</Color>
+    <Color x:Key="SystemAccentColor">#00C8D6</Color>
     <Color x:Key="SystemAccentColorDark1">#00C8D6</Color>
     <Color x:Key="SystemAccentColorDark2">#00969E</Color>
     <Color x:Key="SystemAccentColorDark3">#006468</Color>
@@ -16,61 +16,79 @@
     <Color x:Key="SystemAccentColorLight3">#BFFBFF</Color>
 
     <!-- ── Base Surfaces ── -->
-    <Color x:Key="WindowBackground">#0D0D0F</Color>
-    <Color x:Key="Surface">#141418</Color>
-    <Color x:Key="SurfaceBorder">#1E1E26</Color>
-    <Color x:Key="SurfaceHover">#1A1A22</Color>
-    <Color x:Key="Overlay">#E60D0D0F</Color>
+    <Color x:Key="WindowBackground">#F5F5F7</Color>
+    <Color x:Key="Surface">#FFFFFF</Color>
+    <Color x:Key="SurfaceBorder">#E5E5EA</Color>
+    <Color x:Key="SurfaceHover">#F0F0F3</Color>
+    <Color x:Key="Overlay">#33000000</Color>
 
     <!-- ── Typography ── -->
-    <Color x:Key="TextPrimary">#E8E8EC</Color>
-    <Color x:Key="TextSecondary">#7A7A88</Color>
-    <Color x:Key="TextMuted">#3C3C48</Color>
+    <Color x:Key="TextPrimary">#000000</Color>
+    <Color x:Key="TextSecondary">#8E8E93</Color>
+    <Color x:Key="TextMuted">#C7C7CC</Color>
 
     <!-- ── Accent ── -->
-    <Color x:Key="AccentCyan">#00F0FF</Color>
-    <Color x:Key="AccentCyanDim">#0A2A2E</Color>
-    <Color x:Key="AccentCyanHover">#33F3FF</Color>
-    <Color x:Key="AccentCyanPressed">#00BCC8</Color>
+    <Color x:Key="AccentCyan">#00C8D6</Color>
+    <Color x:Key="AccentCyanDim">#E0F5F7</Color>
+    <Color x:Key="AccentCyanHover">#00D8E8</Color>
+    <Color x:Key="AccentCyanPressed">#00A8B4</Color>
+    <Color x:Key="AccentForeground">#1A2430</Color>
 
     <!-- ── Battery Arc ── -->
-    <Color x:Key="BatteryGreen">#00F0FF</Color>
+    <Color x:Key="BatteryGreen">#00C8D6</Color>
     <Color x:Key="BatteryAmber">#FFAA00</Color>
     <Color x:Key="BatteryRed">#FF3355</Color>
-    <Color x:Key="BatteryCharging">#00F0FF</Color>
-    <Color x:Key="BatteryDisconnected">#2A2A34</Color>
+    <Color x:Key="BatteryCharging">#00C8D6</Color>
+    <Color x:Key="BatteryDisconnected">#C8D0DA</Color>
 
     <!-- ── Gauge ── -->
-    <Color x:Key="GaugeTrack">#1A1A22</Color>
+    <Color x:Key="GaugeTrack">#E5E5EA</Color>
 
     <!-- ── Status Badge ── -->
-    <Color x:Key="BadgeConnected">#0A2A2E</Color>
-    <Color x:Key="BadgeConnectedText">#00F0FF</Color>
-    <Color x:Key="BadgeDisconnected">#1E1A20</Color>
-    <Color x:Key="BadgeDisconnectedText">#7A7A88</Color>
-    <Color x:Key="BadgeCharging">#0A2A2E</Color>
-    <Color x:Key="BadgeChargingText">#00F0FF</Color>
-    <Color x:Key="BadgeConnecting">#2A2410</Color>
+    <Color x:Key="BadgeConnected">#E0F5F7</Color>
+    <Color x:Key="BadgeConnectedText">#008A98</Color>
+    <Color x:Key="BadgeDisconnected">#F0F0F3</Color>
+    <Color x:Key="BadgeDisconnectedText">#8E8E93</Color>
+    <Color x:Key="BadgeCharging">#E0F5F7</Color>
+    <Color x:Key="BadgeChargingText">#008A98</Color>
+    <Color x:Key="BadgeConnecting">#FFF4DC</Color>
     <Color x:Key="BadgeConnectingText">#FFAA00</Color>
-    <Color x:Key="BadgeLastKnown">#1A1A22</Color>
-    <Color x:Key="BadgeLastKnownText">#7A7A88</Color>
+    <Color x:Key="BadgeLastKnown">#F0F0F3</Color>
+    <Color x:Key="BadgeLastKnownText">#8E8E93</Color>
+    <Color x:Key="BadgeSleeping">#F0F0F3</Color>
+    <Color x:Key="BadgeSleepingText">#8E8E93</Color>
 
     <!-- ── Toast ── -->
-    <Color x:Key="ToastBackground">#141418</Color>
-    <Color x:Key="ToastText">#E8E8EC</Color>
+    <Color x:Key="ToastBackground">#FFFFFF</Color>
+    <Color x:Key="ToastText">#000000</Color>
 
-    <!-- ── Brushes ── -->
+    <!-- ══════════════════════════════════════════════════
+         BRUSHES
+         ══════════════════════════════════════════════════ -->
+
+    <!-- Base -->
     <SolidColorBrush x:Key="WindowBackgroundBrush"  Color="{DynamicResource WindowBackground}" />
     <SolidColorBrush x:Key="SurfaceBrush"           Color="{DynamicResource Surface}" />
     <SolidColorBrush x:Key="SurfaceBorderBrush"     Color="{DynamicResource SurfaceBorder}" />
     <SolidColorBrush x:Key="SurfaceHoverBrush"      Color="{DynamicResource SurfaceHover}" />
     <SolidColorBrush x:Key="OverlayBrush"           Color="{DynamicResource Overlay}" />
+
+    <!-- Text -->
     <SolidColorBrush x:Key="TextPrimaryBrush"       Color="{DynamicResource TextPrimary}" />
     <SolidColorBrush x:Key="TextSecondaryBrush"     Color="{DynamicResource TextSecondary}" />
     <SolidColorBrush x:Key="TextMutedBrush"         Color="{DynamicResource TextMuted}" />
+
+    <!-- Accent -->
     <SolidColorBrush x:Key="AccentCyanBrush"        Color="{DynamicResource AccentCyan}" />
     <SolidColorBrush x:Key="AccentCyanDimBrush"     Color="{DynamicResource AccentCyanDim}" />
+    <SolidColorBrush x:Key="AccentCyanHoverBrush"   Color="{DynamicResource AccentCyanHover}" />
+    <SolidColorBrush x:Key="AccentCyanPressedBrush" Color="{DynamicResource AccentCyanPressed}" />
+    <SolidColorBrush x:Key="AccentForegroundBrush"  Color="{DynamicResource AccentForeground}" />
+
+    <!-- Gauge -->
     <SolidColorBrush x:Key="GaugeTrackBrush"        Color="{DynamicResource GaugeTrack}" />
+
+    <!-- Toast -->
     <SolidColorBrush x:Key="ToastBackgroundBrush"   Color="{DynamicResource ToastBackground}" />
     <SolidColorBrush x:Key="ToastTextBrush"         Color="{DynamicResource ToastText}" />
 

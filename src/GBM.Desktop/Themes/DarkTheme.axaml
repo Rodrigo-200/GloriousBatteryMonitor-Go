@@ -33,6 +33,7 @@
     <Color x:Key="AccentCyanDim">#122E32</Color>
     <Color x:Key="AccentCyanHover">#33F3FF</Color>
     <Color x:Key="AccentCyanPressed">#00BCC8</Color>
+    <Color x:Key="AccentForeground">#1B1C23</Color>
 
     <!-- ── Battery Arc ── -->
     <Color x:Key="BatteryGreen">#00F0FF</Color>
@@ -81,6 +82,9 @@
     <!-- Accent -->
     <SolidColorBrush x:Key="AccentCyanBrush"        Color="{DynamicResource AccentCyan}" />
     <SolidColorBrush x:Key="AccentCyanDimBrush"     Color="{DynamicResource AccentCyanDim}" />
+    <SolidColorBrush x:Key="AccentCyanHoverBrush"   Color="{DynamicResource AccentCyanHover}" />
+    <SolidColorBrush x:Key="AccentCyanPressedBrush" Color="{DynamicResource AccentCyanPressed}" />
+    <SolidColorBrush x:Key="AccentForegroundBrush"  Color="{DynamicResource AccentForeground}" />
 
     <!-- Gauge -->
     <SolidColorBrush x:Key="GaugeTrackBrush"        Color="{DynamicResource GaugeTrack}" />

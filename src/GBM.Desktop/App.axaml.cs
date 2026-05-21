@@ -15,9 +15,14 @@ namespace GBM.Desktop;
 
 public partial class App : Application
 {
+    private const string DarkThemeUri = "avares://GBM.Desktop/Themes/DarkTheme.axaml";
+    private const string LightThemeUri = "avares://GBM.Desktop/Themes/LightTheme.axaml";
+
     private ServiceProvider? _serviceProvider;
     private TrayIconService? _trayService;
     private Lazy<WindowsToastService>? _lazyToastService;
+    private string _activeThemePreference = "system";
+    private string? _currentThemeResourceUri;
 
     public static ServiceProvider? Services { get; private set; }
 
@@ -38,11 +43,23 @@ public partial class App : Application
 
             // Apply theme from settings
             var settingsService = _serviceProvider.GetRequiredService<ISettingsService>();
-            ApplyTheme(settingsService.Current.Theme);
+            PreviewTheme(settingsService.Current.Theme);
             settingsService.SettingsChanged += s => ApplyTheme(s.Theme);
+            ActualThemeVariantChanged += (_, _) =>
+            {
+                if (string.Equals(_activeThemePreference, "system", StringComparison.Ordinal))
+                    RefreshThemeResources();
+            };
 
             // Prevent auto-shutdown when we close the splash window
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
+
+            if (settingsService.Current.StartMinimized)
+            {
+                _ = RunTrayStartupAsync(desktop);
+                base.OnFrameworkInitializationCompleted();
+                return;
+            }
 
             // Show splash screen immediately
             var splash = new SplashWindow();
@@ -56,6 +73,74 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
+    public void ShowMainWindowFromTray()
+    {
+        if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+            return;
+
+        var mainWindow = EnsureMainWindow(desktop);
+        mainWindow.Show();
+        mainWindow.Activate();
+    }
+
+    public void ToggleMainWindowFromTray()
+    {
+        if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+            return;
+
+        var mainWindow = EnsureMainWindow(desktop);
+        if (mainWindow.IsVisible)
+        {
+            mainWindow.Hide();
+            return;
+        }
+
+        mainWindow.Show();
+        mainWindow.Activate();
+    }
+
+    private MainWindow EnsureMainWindow(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        if (desktop.MainWindow is MainWindow existing)
+            return existing;
+
+        var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
+        var mainWindow = new MainWindow { DataContext = vm };
+        desktop.MainWindow = mainWindow;
+        return mainWindow;
+    }
+
+    private async Task RunTrayStartupAsync(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        try
+        {
+            var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
+            InitializeTrayAndNotifications();
+
+            _ = vm.InitializeAsync();
+            desktop.ShutdownRequested += OnShutdown;
+            await Task.CompletedTask;
+        }
+        catch
+        {
+            try
+            {
+                var mainWindow = EnsureMainWindow(desktop);
+                mainWindow.Show();
+
+                InitializeTrayAndNotifications();
+
+                var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
+                _ = vm.InitializeAsync();
+                desktop.ShutdownRequested += OnShutdown;
+            }
+            catch
+            {
+                // Fatal - nothing we can do.
+            }
+        }
+    }
+
     private async Task RunStartupAsync(
         IClassicDesktopStyleApplicationLifetime desktop,
         SplashWindow splash,
@@ -66,21 +151,8 @@ public partial class App : Application
             splash.SetStatus("Starting...");
 
             var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
-            var mainWindow = new MainWindow { DataContext = vm };
 
-            _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
-            _trayService.Initialize();
-
-            var notificationService = _serviceProvider!.GetRequiredService<INotificationService>();
-            var lazyToast = _serviceProvider!.GetRequiredService<Lazy<WindowsToastService>>();
-            _lazyToastService = lazyToast;
-
-            notificationService.NotificationTriggered += (type, title, message) =>
-            {
-                // Accessing .Value here triggers construction on first notification only.
-                // Subsequent calls reuse the already-constructed singleton.
-                Task.Run(() => lazyToast.Value.ShowNotification(type, title, message));
-            };
+            InitializeTrayAndNotifications();
 
             // Start monitor BEFORE device search so events fire while splash is visible
             _ = vm.InitializeAsync();
@@ -90,7 +162,7 @@ public partial class App : Application
             await splash.ShowDeviceSearchAsync(monitorService, TimeSpan.FromSeconds(20));
 
             // Transition to main window
-            desktop.MainWindow = mainWindow;
+            var mainWindow = EnsureMainWindow(desktop);
             mainWindow.Show();
             splash.Close();
 
@@ -113,8 +185,7 @@ public partial class App : Application
                 splash.Close();
                 desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
 
-                _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
-                _trayService.Initialize();
+                InitializeTrayAndNotifications();
 
                 _ = vm.InitializeAsync();
                 desktop.ShutdownRequested += OnShutdown;
@@ -202,31 +273,109 @@ public partial class App : Application
         services.AddSingleton<MainViewModel>();
     }
 
+    private void InitializeTrayAndNotifications()
+    {
+        if (_trayService == null)
+        {
+            _trayService = _serviceProvider!.GetRequiredService<TrayIconService>();
+            _trayService.Initialize();
+        }
+
+        if (_lazyToastService != null)
+            return;
+
+        var notificationService = _serviceProvider!.GetRequiredService<INotificationService>();
+        var lazyToast = _serviceProvider!.GetRequiredService<Lazy<WindowsToastService>>();
+        _lazyToastService = lazyToast;
+
+        notificationService.NotificationTriggered += (type, title, message) =>
+        {
+            // Accessing .Value here triggers construction on first notification only.
+            // Subsequent calls reuse the already-constructed singleton.
+            Task.Run(() => lazyToast.Value.ShowNotification(type, title, message));
+        };
+    }
+
+    public void PreviewTheme(string theme)
+    {
+        ApplyTheme(theme);
+    }
+
     private void ApplyTheme(string theme)
     {
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
         {
-            // Dark-mode only — always force dark regardless of saved preference
-            RequestedThemeVariant = ThemeVariant.Dark;
+            ApplyThemeCore(theme);
+            return;
+        }
 
-            var resources = Resources as Avalonia.Controls.ResourceDictionary;
-            if (resources?.MergedDictionaries.Count > 0)
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => ApplyThemeCore(theme));
+    }
+
+    private void ApplyThemeCore(string theme)
+    {
+        _activeThemePreference = NormalizeTheme(theme);
+
+        RequestedThemeVariant = _activeThemePreference switch
+        {
+            "dark" => ThemeVariant.Dark,
+            "light" => ThemeVariant.Light,
+            _ => ThemeVariant.Default
+        };
+
+        RefreshThemeResources();
+    }
+
+    private void RefreshThemeResources()
+    {
+        if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(RefreshThemeResources);
+            return;
+        }
+
+        var themeUri = ResolveThemeResourceUri();
+        if (string.Equals(_currentThemeResourceUri, themeUri, StringComparison.Ordinal))
+            return;
+
+        if (Resources is not Avalonia.Controls.ResourceDictionary resources)
+            return;
+
+        try
+        {
+            resources.MergedDictionaries.Clear();
+
+            var resourceInclude = new Avalonia.Markup.Xaml.Styling.ResourceInclude(new Uri(themeUri))
             {
-                resources.MergedDictionaries.Clear();
-            }
+                Source = new Uri(themeUri)
+            };
 
-            var themeUri = "avares://GBM.Desktop/Themes/DarkTheme.axaml";
+            resources.MergedDictionaries.Add(resourceInclude);
+            _currentThemeResourceUri = themeUri;
+        }
+        catch
+        {
+            // Theme resource swaps should never crash the desktop app.
+        }
+    }
 
-            try
-            {
-                var rd = new Avalonia.Markup.Xaml.Styling.ResourceInclude(new System.Uri(themeUri))
-                {
-                    Source = new System.Uri(themeUri)
-                };
-                resources?.MergedDictionaries.Add(rd);
-            }
-            catch { }
-        });
+    private string ResolveThemeResourceUri()
+    {
+        return _activeThemePreference switch
+        {
+            "dark" => DarkThemeUri,
+            "light" => LightThemeUri,
+            _ => ActualThemeVariant == ThemeVariant.Dark ? DarkThemeUri : LightThemeUri
+        };
+    }
+
+    private static string NormalizeTheme(string? theme)
+    {
+        var normalized = string.IsNullOrWhiteSpace(theme)
+            ? "system"
+            : theme.Trim().ToLowerInvariant();
+
+        return normalized is "dark" or "light" ? normalized : "system";
     }
 
     private void OnShutdown(object? sender, ShutdownRequestedEventArgs e)

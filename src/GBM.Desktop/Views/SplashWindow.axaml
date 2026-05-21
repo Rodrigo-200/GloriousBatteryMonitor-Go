@@ -7,11 +7,11 @@
         WindowDecorations="None"
         WindowStartupLocation="CenterScreen"
         Topmost="True"
-        Background="#1B1C23"
-        FontFamily="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+        Background="{DynamicResource WindowBackgroundBrush}"
+        FontFamily="Segoe UI, Helvetica, Arial, sans-serif">
 
-    <Border BorderBrush="#33343F" BorderThickness="1" CornerRadius="8"
-            Background="#1B1C23" ClipToBounds="True">
+    <Border BorderBrush="{DynamicResource SurfaceBorderBrush}" BorderThickness="1" CornerRadius="8"
+            Background="{DynamicResource WindowBackgroundBrush}" ClipToBounds="True">
         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
                     Spacing="12" Margin="24">
 
@@ -22,14 +22,14 @@
 
             <!-- App Name -->
             <TextBlock Text="Glorious Battery Monitor"
-                       Foreground="#00F0FF"
+                       Foreground="{DynamicResource AccentCyanBrush}"
                        FontSize="18" FontWeight="SemiBold"
                        HorizontalAlignment="Center" />
 
             <!-- Status Text -->
             <TextBlock Name="StatusText"
                        Text="Starting..."
-                       Foreground="#8A8A98"
+                       Foreground="{DynamicResource TextSecondaryBrush}"
                        FontSize="12"
                        HorizontalAlignment="Center" />
 
@@ -38,8 +38,8 @@
                          IsIndeterminate="True"
                          Height="3"
                          Width="240"
-                         Foreground="#00F0FF"
-                         Background="#2A2B34"
+                         Foreground="{DynamicResource AccentCyanBrush}"
+                         Background="{DynamicResource SurfaceBorderBrush}"
                          HorizontalAlignment="Center" />
 
             <!-- Determinate Progress Bar (shown during download) -->
@@ -48,12 +48,12 @@
                              Minimum="0" Maximum="100" Value="0"
                              Height="6"
                              Width="240"
-                             Foreground="#00F0FF"
-                             Background="#2A2B34"
+                             Foreground="{DynamicResource AccentCyanBrush}"
+                             Background="{DynamicResource SurfaceBorderBrush}"
                              HorizontalAlignment="Center" />
                 <TextBlock Name="DownloadPercentText"
                            Text="0%"
-                           Foreground="#8A8A98"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
                            FontSize="11"
                            HorizontalAlignment="Center" />
             </StackPanel>
@@ -62,7 +62,7 @@
             <StackPanel Name="DeviceSearchPanel" IsVisible="False" Spacing="8">
                 <TextBlock Name="DeviceStatusText"
                            Text="Searching for mouse..."
-                           Foreground="#8A8A98"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
                            FontSize="11"
                            HorizontalAlignment="Center" />
                 <Button Name="SkipDeviceButton"

@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using GBM.Core.Models;
 using Microsoft.Extensions.Logging;
 
@@ -51,7 +52,7 @@ public class WindowsToastService : IDisposable
             string audioSrc = GetAudioSource(type);
             string bodyText = GetContextualBody(type, message);
 
-            // Display via direct WinRT API call
+            // Display via direct WinRT API call on a background worker.
             _ = Task.Run(() => ShowToastViaWinRT(title, bodyText, iconUri, audioSrc, type));
 
             _logger.LogInformation("[TOAST] Queued [{Type}]: {Title}", type, title);

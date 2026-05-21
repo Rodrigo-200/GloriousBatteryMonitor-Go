@@ -65,6 +65,7 @@ public class HidDeviceService : IHidDeviceService
     public List<DeviceInfo> EnumerateDevices()
     {
         var results = new List<DeviceInfo>();
+        bool isDebugEnabled = _logger.IsEnabled(LogLevel.Debug);
 
         try
         {
@@ -85,18 +86,22 @@ public class HidDeviceService : IHidDeviceService
                         int maxFeature = 0;
                         int maxInput = 0;
                         int maxOutput = 0;
-                        try
-                        {
-                            maxFeature = device.GetMaxFeatureReportLength();
-                            maxInput = device.GetMaxInputReportLength();
-                            maxOutput = device.GetMaxOutputReportLength();
-                        }
-                        catch { }
 
-                        _logger.LogDebug(
-                            "[HID] Found {Model} interface: VID=0x{VID:X4} PID=0x{PID:X4} " +
-                            "MaxFeature={MaxFeat} MaxInput={MaxIn} MaxOutput={MaxOut} Path={Path}",
-                            modelName, vid, pid, maxFeature, maxInput, maxOutput, device.DevicePath);
+                        if (isDebugEnabled)
+                        {
+                            try
+                            {
+                                maxFeature = device.GetMaxFeatureReportLength();
+                                maxInput = device.GetMaxInputReportLength();
+                                maxOutput = device.GetMaxOutputReportLength();
+                            }
+                            catch { }
+
+                            _logger.LogDebug(
+                                "[HID] Found {Model} interface: VID=0x{VID:X4} PID=0x{PID:X4} " +
+                                "MaxFeature={MaxFeat} MaxInput={MaxIn} MaxOutput={MaxOut} Path={Path}",
+                                modelName, vid, pid, maxFeature, maxInput, maxOutput, device.DevicePath);
+                        }
 
                         results.Add(new DeviceInfo
                         {
@@ -175,9 +180,12 @@ public class HidDeviceService : IHidDeviceService
 
                 var payload = BuildFeaturePayload(profile.ReportId, featureLen, command);
 
-                _logger.LogDebug("[HID] SetFeature: ReportId=0x{RID:X2}, Len={Len}, First16={Payload}",
-                    profile.ReportId, featureLen,
-                    BitConverter.ToString(payload, 0, Math.Min(payload.Length, 16)));
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogDebug("[HID] SetFeature: ReportId=0x{RID:X2}, Len={Len}, First16={Payload}",
+                        profile.ReportId, featureLen,
+                        BitConverter.ToString(payload, 0, Math.Min(payload.Length, 16)));
+                }
 
                 stream.SetFeature(payload);
 
@@ -1721,35 +1729,42 @@ public class HidDeviceService : IHidDeviceService
     {
         var payload = new byte[length];
         payload[0] = (byte)reportId;
-
-        // Write command bytes starting at position 1 (after report ID byte)
-        for (int i = 0; i < command.Length && (1 + i) < payload.Length; i++)
-        {
-            payload[1 + i] = command[i];
-        }
+        int commandLength = Math.Min(command.Length, Math.Max(0, payload.Length - 1));
+        Array.Copy(command, 0, payload, 1, commandLength);
 
         return payload;
     }
 
     private void LogFullResponse(byte[] response, string label)
     {
+        if (!_logger.IsEnabled(LogLevel.Debug))
+            return;
+
         // Log first 16 bytes always
         _logger.LogDebug("[HID] {Label} ({Len} bytes): {First16}",
             label, response.Length,
             BitConverter.ToString(response, 0, Math.Min(response.Length, 16)));
 
         // Also log any non-zero bytes beyond position 16 for diagnostics
-        var nonZeroPositions = new List<string>();
+        StringBuilder? nonZeroPositions = null;
         for (int i = 16; i < response.Length; i++)
         {
             if (response[i] != 0)
-                nonZeroPositions.Add($"[{i}]=0x{response[i]:X2}");
+            {
+                nonZeroPositions ??= new StringBuilder();
+                if (nonZeroPositions.Length > 0)
+                {
+                    nonZeroPositions.Append(", ");
+                }
+
+                nonZeroPositions.Append('[').Append(i).Append("]=0x").Append(response[i].ToString("X2"));
+            }
         }
 
-        if (nonZeroPositions.Count > 0)
+        if (nonZeroPositions is { Length: > 0 })
         {
             _logger.LogDebug("[HID] {Label} non-zero bytes beyond offset 16: {Bytes}",
-                label, string.Join(", ", nonZeroPositions));
+                label, nonZeroPositions.ToString());
         }
     }
 

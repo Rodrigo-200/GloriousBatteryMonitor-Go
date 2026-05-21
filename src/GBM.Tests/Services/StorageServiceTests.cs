@@ -152,6 +152,33 @@ public class StorageServiceTests
         }
     }
 
+    [Fact]
+    public void AddBatterySample_TrimsToMaxSamplesWithoutChangingNewestWindow()
+    {
+        string appDataPath = CreateTempDirectory();
+        const string deviceKey = "device";
+
+        try
+        {
+            var service = CreateStorageService(appDataPath);
+
+            for (int level = 0; level < 205; level++)
+            {
+                service.AddBatterySample(deviceKey, level, isCharging: false);
+            }
+
+            var device = service.GetDeviceChargeData(deviceKey);
+            device.Should().NotBeNull();
+            device!.Samples.Should().HaveCount(200);
+            device.Samples[0].Level.Should().Be(5);
+            device.Samples[^1].Level.Should().Be(204);
+        }
+        finally
+        {
+            TryDeleteDirectory(appDataPath);
+        }
+    }
+
     private static StorageService CreateStorageService(string appDataPath)
     {
         var logger = new Mock<ILogger<StorageService>>();

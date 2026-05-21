@@ -61,6 +61,11 @@ public partial class BatteryGauge : UserControl
             _animTimer?.Start();
             UpdateCenterContent();
         }
+        else if (change.Property.Name == "ActualThemeVariant")
+        {
+            InvalidateVisual();
+            UpdateCenterContent();
+        }
     }
 
     private void AnimTick(object? sender, EventArgs e)
@@ -195,4 +200,5 @@ public partial class BatteryGauge : UserControl
         }
         return fallback;
     }
+
 }

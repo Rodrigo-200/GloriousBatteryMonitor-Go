@@ -34,7 +34,9 @@ public partial class StatusBadge : UserControl
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == ConnectionProperty || change.Property == IsChargingProperty)
+        if (change.Property == ConnectionProperty || 
+            change.Property == IsChargingProperty || 
+            change.Property.Name == "ActualThemeVariant")
         {
             UpdateBadge();
         }

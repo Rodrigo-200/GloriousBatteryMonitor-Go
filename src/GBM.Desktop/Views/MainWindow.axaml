@@ -9,15 +9,21 @@
         MinWidth="380" MinHeight="560"
         Icon="/Assets/app-icon.ico"
         Background="{DynamicResource WindowBackgroundBrush}"
-        FontFamily="Inter, Segoe UI, Helvetica, Arial, sans-serif"
+        FontFamily="Segoe UI, Helvetica, Arial, sans-serif"
         ExtendClientAreaToDecorationsHint="True"
         ExtendClientAreaTitleBarHeightHint="-1"
         WindowStartupLocation="CenterScreen">
 
     <Panel>
         <views:DashboardView DataContext="{Binding}" />
-        <views:SettingsView DataContext="{Binding}"
-                            IsVisible="{Binding IsSettingsOpen}" />
+        <ContentControl IsVisible="{Binding IsSettingsOpen}"
+                        Content="{Binding SettingsOverlayContent}">
+            <ContentControl.DataTemplates>
+                <DataTemplate x:DataType="vm:MainViewModel">
+                    <views:SettingsView />
+                </DataTemplate>
+            </ContentControl.DataTemplates>
+        </ContentControl>
 
         <!-- Invisible drag region at the top for window movement -->
         <Border Name="TitleBar"

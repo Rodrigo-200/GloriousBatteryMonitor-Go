@@ -1,10 +1,9 @@
-using System.Collections.ObjectModel;
-using System.Linq;
+using Avalonia.Threading;
+using Avalonia;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GBM.Core.Models;
 using GBM.Core.Services;
-using Avalonia.Threading;
 
 namespace GBM.Desktop.ViewModels;
 
@@ -12,6 +11,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 {
     private const double FullChargeDurationDisplayCapHours = 24.0 * 30.0;
     private static readonly TimeSpan FullChargeDurationRefreshInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan ToastDuration = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MinimumLastSyncUpdateInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly IBatteryMonitorService _monitorService;
     private readonly ISettingsService _settingsService;
@@ -113,10 +114,21 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         LoadSettings();
     }
 
+    public bool IsSystemThemeSelected => CurrentTheme == "system";
+    public bool IsDarkThemeSelected => CurrentTheme == "dark";
+    public bool IsLightThemeSelected => CurrentTheme == "light";
+    public int ThemeSelectedIndex => CurrentTheme switch
+    {
+        "dark" => 1,
+        "light" => 2,
+        _ => 0
+    };
+    public object? SettingsOverlayContent => IsSettingsOpen ? this : null;
+
     public async Task InitializeAsync()
     {
         await _monitorService.StartAsync();
-        StartSyncTimer();
+        StartLastSyncTimer();
 
         if (_updateService.IsUpdatePendingRestart())
         {
@@ -235,7 +247,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             else
                 ChargedToText = "—";
 
-            UpdateLastSyncText();
+            UpdateLastSyncTextAndSchedule();
         });
     }
 
@@ -348,8 +360,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         NotificationCooldownMinutes = s.NotificationCooldownMinutes;
         DebugLogging = s.DebugLogging;
         EnableBetaUpdates = s.EnableBetaUpdates;
-        CurrentTheme = s.Theme;
-        IsDarkTheme = s.Theme == "dark";
+        CurrentTheme = NormalizeTheme(s.Theme);
+        IsDarkTheme = CurrentTheme == "dark";
     }
 
     private void TryEnableBetaByDefaultForPrereleaseBuild()
@@ -391,6 +403,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void CloseSettings()
     {
+        LoadSettings();
+        PreviewTheme(CurrentTheme);
         IsSettingsOpen = false;
     }
 
@@ -441,8 +455,14 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void ToggleTheme()
     {
-        IsDarkTheme = !IsDarkTheme;
-        CurrentTheme = IsDarkTheme ? "dark" : "light";
+        SetTheme(IsDarkTheme ? "light" : "dark");
+    }
+
+    [RelayCommand]
+    private void SetTheme(string? theme)
+    {
+        CurrentTheme = NormalizeTheme(theme);
+        PreviewTheme(CurrentTheme);
     }
 
     [RelayCommand]
@@ -611,8 +631,22 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     }
 
     private bool _disposed;
-    private System.Timers.Timer? _toastTimer;
-    private System.Timers.Timer? _syncTimer;
+    private DispatcherTimer? _toastTimer;
+    private DispatcherTimer? _lastSyncTimer;
+
+    partial void OnCurrentThemeChanged(string value)
+    {
+        IsDarkTheme = value == "dark";
+        OnPropertyChanged(nameof(IsSystemThemeSelected));
+        OnPropertyChanged(nameof(IsDarkThemeSelected));
+        OnPropertyChanged(nameof(IsLightThemeSelected));
+        OnPropertyChanged(nameof(ThemeSelectedIndex));
+    }
+
+    partial void OnIsSettingsOpenChanged(bool value)
+    {
+        OnPropertyChanged(nameof(SettingsOverlayContent));
+    }
 
     public void Dispose()
     {
@@ -620,23 +654,46 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         _disposed = true;
         _monitorService.BatteryStateChanged -= OnBatteryStateChanged;
         _monitorService.EstimateChanged -= OnEstimateChanged;
-        _syncTimer?.Stop();
-        _syncTimer?.Dispose();
-        _syncTimer = null;
+        _lastSyncTimer?.Stop();
+        _lastSyncTimer = null;
         _toastTimer?.Stop();
-        _toastTimer?.Dispose();
         _toastTimer = null;
     }
 
-    private void StartSyncTimer()
+    private void StartLastSyncTimer()
     {
-        _syncTimer = new System.Timers.Timer(1000);
-        _syncTimer.Elapsed += (_, _) =>
+        _lastSyncTimer ??= new DispatcherTimer();
+        _lastSyncTimer.Stop();
+        _lastSyncTimer.Tick -= OnLastSyncTimerTick;
+        _lastSyncTimer.Tick += OnLastSyncTimerTick;
+        UpdateLastSyncTextAndSchedule();
+    }
+
+    private void OnLastSyncTimerTick(object? sender, EventArgs e)
+    {
+        _lastSyncTimer?.Stop();
+        UpdateLastSyncTextAndSchedule();
+    }
+
+    private void UpdateLastSyncTextAndSchedule()
+    {
+        UpdateLastSyncText();
+        ScheduleNextLastSyncUpdate();
+    }
+
+    private void ScheduleNextLastSyncUpdate()
+    {
+        if (_lastSyncTimer == null)
+            return;
+
+        if (_lastReadTime == null)
         {
-            Dispatcher.UIThread.Post(UpdateLastSyncText);
-        };
-        _syncTimer.AutoReset = true;
-        _syncTimer.Start();
+            _lastSyncTimer.Stop();
+            return;
+        }
+
+        _lastSyncTimer.Interval = GetNextLastSyncUpdateDelay(_lastReadTime.Value, DateTime.UtcNow);
+        _lastSyncTimer.Start();
     }
 
     private void UpdateLastSyncText()
@@ -656,20 +713,62 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             : $"{(int)elapsed.TotalDays}d ago";
     }
 
+    private static TimeSpan GetNextLastSyncUpdateDelay(DateTime lastReadTimeUtc, DateTime nowUtc)
+    {
+        var elapsed = nowUtc - lastReadTimeUtc;
+        if (elapsed < TimeSpan.Zero)
+            return TimeSpan.FromSeconds(1);
+
+        TimeSpan delay = elapsed.TotalSeconds < 5
+            ? TimeSpan.FromSeconds(5) - elapsed
+            : elapsed.TotalSeconds < 60
+                ? TimeSpan.FromSeconds(Math.Floor(elapsed.TotalSeconds) + 1) - elapsed
+                : elapsed.TotalMinutes < 60
+                    ? TimeSpan.FromMinutes(Math.Floor(elapsed.TotalMinutes) + 1) - elapsed
+                    : elapsed.TotalHours < 24
+                        ? TimeSpan.FromHours(Math.Floor(elapsed.TotalHours) + 1) - elapsed
+                        : TimeSpan.FromDays(Math.Floor(elapsed.TotalDays) + 1) - elapsed;
+
+        return delay <= TimeSpan.Zero ? MinimumLastSyncUpdateInterval : delay;
+    }
+
     public void ShowToast(string message)
     {
         ToastMessage = message;
         IsToastVisible = true;
-        _toastTimer?.Stop();
-        _toastTimer?.Dispose();
-        _toastTimer = new System.Timers.Timer(3000);
-        _toastTimer.Elapsed += (_, _) =>
+
+        var toastTimer = _toastTimer ??= new DispatcherTimer
         {
-            Dispatcher.UIThread.Post(() => IsToastVisible = false);
-            _toastTimer?.Dispose();
-            _toastTimer = null;
+            Interval = ToastDuration
         };
-        _toastTimer.AutoReset = false;
-        _toastTimer.Start();
+
+        toastTimer.Stop();
+        toastTimer.Tick -= OnToastTimerTick;
+        toastTimer.Tick += OnToastTimerTick;
+        toastTimer.Start();
+    }
+
+    private void OnToastTimerTick(object? sender, EventArgs e)
+    {
+        if (_toastTimer == null)
+            return;
+
+        _toastTimer.Stop();
+        IsToastVisible = false;
+    }
+
+    private void PreviewTheme(string theme)
+    {
+        if (Application.Current is App app)
+            app.PreviewTheme(theme);
+    }
+
+    private static string NormalizeTheme(string? theme)
+    {
+        var normalized = string.IsNullOrWhiteSpace(theme)
+            ? "system"
+            : theme.Trim().ToLowerInvariant();
+
+        return normalized is "dark" or "light" ? normalized : "system";
     }
 }

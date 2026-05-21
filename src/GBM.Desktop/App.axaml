@@ -1,7 +1,7 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="GBM.Desktop.App"
-             RequestedThemeVariant="Dark">
+             RequestedThemeVariant="Default">
 
     <Application.Styles>
         <FluentTheme />
@@ -38,10 +38,76 @@
             <Setter Property="BorderBrush" Value="{DynamicResource SurfaceBorderBrush}" />
         </Style>
 
+        <!-- ── Stat Card (Glassmorphism / Shadow) ── -->
+        <Style Selector="Border.stat-card">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="BoxShadow" Value="0 4 12 0 #0A000000" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Background" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.stat-card:pointerover">
+            <Setter Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
+            <Setter Property="RenderTransform" Value="scale(1.02)" />
+        </Style>
+
+        <!-- ── Settings Card ── -->
+        <Style Selector="Border.settings-card">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="BoxShadow" Value="0 2 8 0 #0A000000" />
+            <Setter Property="Padding" Value="4" />
+        </Style>
+
+        <!-- ── Setting Row (Hoverable Pill) ── -->
+        <Style Selector="Border.setting-row">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="12,10" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- ── Theme Choice (Segmented Control Pill) ── -->
+        <Style Selector="Button.theme-choice">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.theme-choice /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.theme-choice:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.theme-choice.selected">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
         <!-- ── Accent Button (cyan) ── -->
         <Style Selector="Button.accent">
             <Setter Property="Background" Value="{DynamicResource AccentCyanBrush}" />
-            <Setter Property="Foreground" Value="#1B1C23" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentForegroundBrush}" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="Padding" Value="24,10" />
@@ -50,10 +116,10 @@
             <Setter Property="Cursor" Value="Hand" />
         </Style>
         <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="#33F3FF" />
+            <Setter Property="Background" Value="{DynamicResource AccentCyanHoverBrush}" />
         </Style>
         <Style Selector="Button.accent:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="#00BCC8" />
+            <Setter Property="Background" Value="{DynamicResource AccentCyanPressedBrush}" />
         </Style>
 
         <!-- ── Muted Button (cancel/secondary) ── -->
@@ -72,7 +138,7 @@
             <Setter Property="BorderBrush" Value="{DynamicResource SurfaceBorderBrush}" />
         </Style>
 
-        <!-- ── NumericUpDown ── -->
+        <!-- ── Premium NumericUpDown ── -->
         <Style Selector="NumericUpDown">
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="FontSize" Value="13" />
@@ -89,10 +155,63 @@
             <Setter Property="BorderThickness" Value="0" />
         </Style>
 
-        <!-- ── ToggleSwitch ── -->
+        <!-- ── Premium ToggleSwitch (Squircle matching Theme Switcher) ── -->
         <Style Selector="ToggleSwitch">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
             <Setter Property="OnContent" Value="" />
             <Setter Property="OffContent" Value="" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Grid Background="Transparent" ColumnDefinitions="Auto,*">
+                        <!-- Dummy panel to satisfy Avalonia strict template requirements -->
+                        <Panel x:Name="PART_MovingKnobs" IsVisible="False" />
+
+                        <ContentPresenter x:Name="PART_ContentPresenter"
+                                          Grid.Column="0"
+                                          Content="{TemplateBinding Content}"
+                                          VerticalAlignment="Center"
+                                          Margin="0,0,12,0"
+                                          IsVisible="{TemplateBinding Content, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                        <Border x:Name="SwitchTrack"
+                                Grid.Column="1"
+                                Width="44" Height="24"
+                                CornerRadius="8"
+                                Background="{DynamicResource WindowBackgroundBrush}"
+                                BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                                BorderThickness="1"
+                                VerticalAlignment="Center">
+                            <Border.Transitions>
+                                <Transitions>
+                                    <BrushTransition Property="Background" Duration="0:0:0.15" />
+                                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                                </Transitions>
+                            </Border.Transitions>
+                            <Border x:Name="SwitchKnob"
+                                    Width="16" Height="16"
+                                    CornerRadius="6"
+                                    Background="{DynamicResource TextSecondaryBrush}"
+                                    HorizontalAlignment="Left"
+                                    Margin="3,0,0,0"
+                                    BoxShadow="0 1 4 0 #33000000">
+                                <Border.Transitions>
+                                    <Transitions>
+                                        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
+                                    </Transitions>
+                                </Border.Transitions>
+                            </Border>
+                        </Border>
+                    </Grid>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="ToggleSwitch:checked /template/ Border#SwitchTrack">
+            <Setter Property="Background" Value="{DynamicResource AccentCyanBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentCyanBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch:checked /template/ Border#SwitchKnob">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+            <Setter Property="RenderTransform" Value="translateX(22px)" />
         </Style>
 
     </Application.Styles>

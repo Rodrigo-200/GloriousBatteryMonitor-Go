@@ -1,6 +1,7 @@
 using FluentAssertions;
 using GBM.Core.Models;
 using GBM.Core.Services;
+using GBM.Desktop.ViewModels;
 using Moq;
 using Xunit;
 
@@ -137,5 +138,116 @@ public class MainViewModelTests
         original.NotificationCooldownMinutes.Should().Be(15);
         original.EnableBetaUpdates.Should().BeTrue();
         original.HasSetBetaChannelPreference.Should().BeTrue();
+    }
+
+    [Fact]
+    public void SetThemeCommand_NormalizesTheme_AndUpdatesSelectionState()
+    {
+        var settingsService = new TestSettingsService(new AppSettings { Theme = "system" });
+        var viewModel = CreateViewModel(settingsService);
+
+        viewModel.SetThemeCommand.Execute(" LIGHT ");
+
+        viewModel.CurrentTheme.Should().Be("light");
+        viewModel.ThemeSelectedIndex.Should().Be(2);
+        viewModel.IsLightThemeSelected.Should().BeTrue();
+        viewModel.IsDarkThemeSelected.Should().BeFalse();
+        viewModel.IsSystemThemeSelected.Should().BeFalse();
+    }
+
+    [Fact]
+    public void CloseSettingsCommand_RevertsUnsavedThemePreview()
+    {
+        var settingsService = new TestSettingsService(new AppSettings { Theme = "dark" });
+        var viewModel = CreateViewModel(settingsService);
+
+        viewModel.OpenSettingsCommand.Execute(null);
+        viewModel.SetThemeCommand.Execute("light");
+
+        viewModel.CloseSettingsCommand.Execute(null);
+
+        viewModel.CurrentTheme.Should().Be("dark");
+        viewModel.ThemeSelectedIndex.Should().Be(1);
+        viewModel.IsDarkThemeSelected.Should().BeTrue();
+        viewModel.IsSettingsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public void SaveSettingsCommand_PersistsPreviewedTheme()
+    {
+        var settingsService = new TestSettingsService(new AppSettings { Theme = "system" });
+        var viewModel = CreateViewModel(settingsService);
+
+        viewModel.OpenSettingsCommand.Execute(null);
+        viewModel.SetThemeCommand.Execute("dark");
+        viewModel.SaveSettingsCommand.Execute(null);
+
+        settingsService.Current.Theme.Should().Be("dark");
+        viewModel.ThemeSelectedIndex.Should().Be(1);
+        settingsService.SaveCallCount.Should().Be(1);
+        viewModel.IsSettingsOpen.Should().BeFalse();
+    }
+
+    private static MainViewModel CreateViewModel(TestSettingsService settingsService)
+    {
+        var monitorService = new Mock<IBatteryMonitorService>();
+        monitorService.SetupGet(x => x.CurrentState).Returns(BatteryState.Disconnected);
+        monitorService.SetupGet(x => x.CurrentEstimate).Returns(BatteryEstimate.Invalid);
+        monitorService.SetupGet(x => x.IsRunning).Returns(false);
+
+        var hidService = new Mock<IHidDeviceService>();
+
+        var autoStartService = new Mock<IAutoStartService>();
+        var updateService = new Mock<IUpdateService>();
+        updateService.SetupGet(x => x.CurrentVersion).Returns("3.3.0");
+        updateService.Setup(x => x.IsUpdatePendingRestart()).Returns(false);
+        updateService.Setup(x => x.CheckForUpdateAsync()).ReturnsAsync((UpdateCheckResult?)null);
+        updateService.Setup(x => x.DownloadUpdateAsync(It.IsAny<IProgress<int>?>())).ReturnsAsync(false);
+
+        var storageService = new Mock<IStorageService>();
+        storageService.Setup(x => x.LoadChargeData()).Returns(new ChargeData());
+        storageService.Setup(x => x.LoadProfiles()).Returns([]);
+
+        var estimationService = new Mock<IBatteryEstimationService>();
+
+        return new MainViewModel(
+            monitorService.Object,
+            settingsService,
+            hidService.Object,
+            autoStartService.Object,
+            updateService.Object,
+            storageService.Object,
+            estimationService.Object);
+    }
+
+    private sealed class TestSettingsService : ISettingsService
+    {
+        private AppSettings _current;
+
+        public TestSettingsService(AppSettings current)
+        {
+            _current = current.Clone();
+        }
+
+        public AppSettings Current => _current;
+        public int SaveCallCount { get; private set; }
+
+        public event Action<AppSettings>? SettingsChanged;
+
+        public void Load()
+        {
+        }
+
+        public void Save(AppSettings settings)
+        {
+            SaveCallCount++;
+            _current = settings.Clone();
+            SettingsChanged?.Invoke(_current);
+        }
+
+        public string GetAppDataPath()
+        {
+            return string.Empty;
+        }
     }
 }

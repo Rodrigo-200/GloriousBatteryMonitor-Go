@@ -1,13 +1,11 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using GBM.Core.Models;
 using GBM.Core.Services;
 using Microsoft.Extensions.Logging;
 using System;
-using System.IO;
 
 namespace GBM.Desktop.Services;
 
@@ -25,6 +23,9 @@ public class TrayIconService : IDisposable
     private bool _lastCharging;
     private bool _lastConnected;
     private bool _lastShowPercentage;
+    private string _lastTooltipText = string.Empty;
+    private string _lastInfoHeaderText = string.Empty;
+    private string _lastUpdateHeaderText = string.Empty;
 
     public TrayIconService(
         IBatteryMonitorService monitorService,
@@ -74,6 +75,7 @@ public class TrayIconService : IDisposable
                 Menu = _menu,
                 IsVisible = true
             };
+            _lastTooltipText = _trayIcon.ToolTipText ?? string.Empty;
             _trayIcon.Clicked += (_, _) => ToggleMainWindow();
 
             // Try to set icon from embedded resource
@@ -91,6 +93,7 @@ public class TrayIconService : IDisposable
             _monitorService.BatteryStateChanged += OnBatteryStateChanged;
             _settingsService.SettingsChanged += OnSettingsChanged;
             _lastShowPercentage = _settingsService.Current.ShowPercentageOnTrayIcon;
+            _lastInfoHeaderText = _infoItem.Header?.ToString() ?? string.Empty;
             _logger.LogInformation("[TRAY] Tray icon initialized");
         }
         catch (Exception ex)
@@ -121,28 +124,18 @@ public class TrayIconService : IDisposable
                     UpdateTrayIcon();
 
                 // Update tooltip
-                if (_trayIcon != null)
-                {
-                    if (!_lastConnected)
-                    {
-                        _trayIcon.ToolTipText = state.Connection == ConnectionState.LastKnown
-                            ? $"Last known: {state.Level}%"
-                            : "Mouse Not Found";
-                    }
-                    else
-                    {
-                        var chargingText = state.IsCharging ? " (Charging)" : "";
-                        _trayIcon.ToolTipText = $"{state.DeviceName} — {state.Level}%{chargingText}";
-                    }
-                }
+                var toolTipText = !_lastConnected
+                    ? state.Connection == ConnectionState.LastKnown
+                        ? $"Last known: {state.Level}%"
+                        : "Mouse Not Found"
+                    : $"{state.DeviceName} — {state.Level}%{(state.IsCharging ? " (Charging)" : string.Empty)}";
+                UpdateToolTipText(toolTipText);
 
                 // Update menu info item
-                if (_infoItem != null)
-                {
-                    _infoItem.Header = _lastConnected
-                        ? $"{state.DeviceName} — {state.Level}%"
-                        : "Mouse Not Found";
-                }
+                var infoHeader = _lastConnected
+                    ? $"{state.DeviceName} — {state.Level}%"
+                    : "Mouse Not Found";
+                UpdateInfoHeader(infoHeader);
             });
         }
         catch (Exception ex)
@@ -184,36 +177,45 @@ public class TrayIconService : IDisposable
         {
             if (_updateItem != null)
             {
-                _updateItem.Header = $"Update Available ({version})";
+                var header = $"Update Available ({version})";
+                if (!string.Equals(_lastUpdateHeaderText, header, StringComparison.Ordinal))
+                {
+                    _updateItem.Header = header;
+                    _lastUpdateHeaderText = header;
+                }
                 _updateItem.IsVisible = true;
             }
         });
     }
 
+    private void UpdateToolTipText(string text)
+    {
+        if (_trayIcon == null || string.Equals(_lastTooltipText, text, StringComparison.Ordinal))
+            return;
+
+        _trayIcon.ToolTipText = text;
+        _lastTooltipText = text;
+    }
+
+    private void UpdateInfoHeader(string text)
+    {
+        if (_infoItem == null || string.Equals(_lastInfoHeaderText, text, StringComparison.Ordinal))
+            return;
+
+        _infoItem.Header = text;
+        _lastInfoHeaderText = text;
+    }
+
     private void ShowMainWindow()
     {
-        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-        {
-            desktop.MainWindow?.Show();
-            desktop.MainWindow?.Activate();
-        }
+        if (Application.Current is App app)
+            app.ShowMainWindowFromTray();
     }
 
     private void ToggleMainWindow()
     {
-        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-        {
-            var window = desktop.MainWindow;
-            if (window == null) return;
-
-            if (window.IsVisible)
-                window.Hide();
-            else
-            {
-                window.Show();
-                window.Activate();
-            }
-        }
+        if (Application.Current is App app)
+            app.ToggleMainWindowFromTray();
     }
 
     public void Dispose()
