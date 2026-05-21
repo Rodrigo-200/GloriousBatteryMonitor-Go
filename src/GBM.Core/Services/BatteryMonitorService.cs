@@ -901,14 +901,6 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 return;
             }
 
-            bool hasAbsenceEvidence = HasCorroboratedAbsenceEvidence();
-            if (!hasAbsenceEvidence)
-            {
-                _logger.LogInformation(
-                    "[MONITOR] Reconnect gated: failure threshold met but device path is still present");
-                return;
-            }
-
             if (DateTime.UtcNow - _lastReconnectTriggerUtc < ReconnectCooldown)
             {
                 _logger.LogInformation(
@@ -917,9 +909,20 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 return;
             }
 
-            _logger.LogWarning(
-                "Max consecutive failures reached ({Count}) with corroborated absence evidence. Attempting reconnect.",
-                _consecutiveFailures);
+            bool hasAbsenceEvidence = HasCorroboratedAbsenceEvidence();
+            if (hasAbsenceEvidence)
+            {
+                _logger.LogWarning(
+                    "Max consecutive failures reached ({Count}) with corroborated absence evidence. Attempting reconnect.",
+                    _consecutiveFailures);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Max consecutive failures reached ({Count}) while HID path is still present. " +
+                    "Marking battery telemetry stale and forcing rediscovery.",
+                    _consecutiveFailures);
+            }
 
             // Transition to LastKnown before full disconnect
             if (CurrentState.Connection == ConnectionState.Connected ||
@@ -1084,10 +1087,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 if (profile.Protocol == ChipProtocol.Pixart
                     && profile.PixartMethod != PixartBatteryMethod.CandidateD)
                 {
-                    // For CandidateF, verify the sibling input interface (col05) still exists.
+                    // For split-interface Pixart methods, verify the sibling input interface
+                    // (col05) still exists.
                     // If the sibling is missing (e.g. dongle plugged into different USB port),
                     // the profile is stale and should trigger a re-probe instead.
-                    if (profile.PixartMethod == PixartBatteryMethod.CandidateF
+                    if ((profile.PixartMethod == PixartBatteryMethod.CandidateF ||
+                         profile.PixartMethod == PixartBatteryMethod.CandidateG)
                         && !string.IsNullOrEmpty(profile.SiblingDevicePath)
                         && !_hidDeviceService.IsDevicePresent(new DeviceProfile
                         {
@@ -1098,9 +1103,9 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                         }))
                     {
                         _logger.LogDebug(
-                            "Cached CandidateF profile for {Model}: sibling input interface " +
+                            "Cached {Method} profile for {Model}: sibling input interface " +
                             "not found at {SiblingPath}, will re-probe",
-                            profile.ModelName, profile.SiblingDevicePath);
+                            profile.PixartMethod, profile.ModelName, profile.SiblingDevicePath);
                         continue;
                     }
 

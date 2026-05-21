@@ -1608,6 +1608,32 @@ public class HidDeviceService : IHidDeviceService
                                 {
                                     sb.AppendLine($"  Pixart Candidate F: FAILED ({pex.GetType().Name}: {pex.Message})");
                                 }
+                                // Candidate G: write-triggered cross-interface probe (current D2 fallback)
+                                try
+                                {
+                                    var tempInfo = new DeviceInfo
+                                    {
+                                        VendorId = device.VendorID,
+                                        ProductId = device.ProductID,
+                                        DevicePath = device.DevicePath,
+                                        ModelName = SafeGetProductName(device)
+                                    };
+                                    var sibling = FindPixartSiblingInputDevice(device, tempInfo);
+                                    if (sibling != null)
+                                    {
+                                        string strategyKey = GetCandidateGStrategyKey(device.DevicePath, sibling.DevicePath);
+                                        var resultG = TryPixartCandidateG(device, sibling, _logger, strategyKey);
+                                        sb.AppendLine($"  Pixart Candidate G: {(resultG.Success ? $"battery={resultG.BatteryLevel}%, charging={resultG.IsCharging}" : "no valid response")} (sibling={sibling.DevicePath})");
+                                    }
+                                    else
+                                    {
+                                        sb.AppendLine("  Pixart Candidate G: no sibling input interface found");
+                                    }
+                                }
+                                catch (Exception pex)
+                                {
+                                    sb.AppendLine($"  Pixart Candidate G: FAILED ({pex.GetType().Name}: {pex.Message})");
+                                }
                                 try
                                 {
                                     var resultA = TryPixartCandidateA(stream, featureLen);
