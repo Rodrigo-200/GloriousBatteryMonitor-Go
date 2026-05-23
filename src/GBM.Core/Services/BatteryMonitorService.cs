@@ -1078,46 +1078,6 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     return;
                 }
 
-                // For Pixart passive-read methods (CandidateE, CandidateF, CandidateG), the
-                // device won't emit data on cold start until triggered. Trust the saved
-                // profile if the device path is present - the normal poll loop will handle reads.
-                // Do NOT trust CandidateD: it's synchronous GetFeature, so if ReadBattery
-                // failed above it means the response was rejected (false positive filter).
-                // Letting CandidateD fall through forces a re-probe that discovers F/G.
-                if (profile.Protocol == ChipProtocol.Pixart
-                    && profile.PixartMethod != PixartBatteryMethod.CandidateD)
-                {
-                    // For split-interface Pixart methods, verify the sibling input interface
-                    // (col05) still exists.
-                    // If the sibling is missing (e.g. dongle plugged into different USB port),
-                    // the profile is stale and should trigger a re-probe instead.
-                    if ((profile.PixartMethod == PixartBatteryMethod.CandidateF ||
-                         profile.PixartMethod == PixartBatteryMethod.CandidateG)
-                        && !string.IsNullOrEmpty(profile.SiblingDevicePath)
-                        && !_hidDeviceService.IsDevicePresent(new DeviceProfile
-                        {
-                            DevicePath = profile.SiblingDevicePath,
-                            VendorId = profile.VendorId,
-                            ProductId = profile.ProductId,
-                            Protocol = ChipProtocol.Pixart
-                        }))
-                    {
-                        _logger.LogDebug(
-                            "Cached {Method} profile for {Model}: sibling input interface " +
-                            "not found at {SiblingPath}, will re-probe",
-                            profile.PixartMethod, profile.ModelName, profile.SiblingDevicePath);
-                        continue;
-                    }
-
-                    _logger.LogInformation(
-                        "Restored cached Pixart profile for {Model} (device present, " +
-                        "method={Method}, skipping initial read test)",
-                        profile.ModelName, profile.PixartMethod);
-                    ReportProbeStatus($"Reconnecting to {profile.ModelName}...");
-                    _activeProfile = profile;
-                    return;
-                }
-
                 _logger.LogDebug(
                     "Cached profile for {Model} (method={Method}) failed read and not eligible " +
                     "for cold-start trust, will re-probe",

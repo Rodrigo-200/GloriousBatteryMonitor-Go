@@ -290,6 +290,21 @@ public class BatteryMonitorReliabilityTests
         GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeNull();
     }
 
+    [Fact]
+    public void TryRestoreCachedProfile_PixartProfileRequiresSuccessfulRead()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out _);
+        var profile = CreateProfile(PixartBatteryMethod.CandidateG);
+
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { profile });
+        hid.Setup(s => s.IsDevicePresent(It.IsAny<DeviceProfile>())).Returns(true);
+        hid.Setup(s => s.ReadBattery(profile)).Returns((false, 0, false));
+
+        InvokePrivate(monitor, "TryRestoreCachedProfile");
+
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeNull();
+    }
+
     private static BatteryMonitorService CreateMonitor(
         out Mock<IHidDeviceService> hid,
         out Mock<ISettingsService> settings,
