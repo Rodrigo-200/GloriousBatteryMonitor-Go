@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Threading;
 using HidSharp;
@@ -13,9 +14,11 @@ internal static class Program
     private static readonly ConcurrentQueue<string> Log = new();
     private static readonly ConcurrentDictionary<string, CancellationTokenSource> ActiveCaptures = new();
     private static readonly object ConsoleLock = new();
+    private static bool ModelI2Only;
 
-    private static void Main()
+    private static void Main(string[] args)
     {
+        ModelI2Only = args.Contains("--model-i2", StringComparer.OrdinalIgnoreCase);
         var cts = new CancellationTokenSource();
 
         var savePath = Path.Combine(
@@ -23,13 +26,16 @@ internal static class Program
             "gbm_capture.txt");
 
         Console.WriteLine("=== GBM HID Capture Tool ===");
-        Console.WriteLine("Capturing from ALL Glorious interfaces (VID 0x093A and 0x258A)");
-        Console.WriteLine("Plug in your mouse cable AND leave the dongle plugged in.");
-        Console.WriteLine("Move the mouse around during capture.");
-        Console.WriteLine("Press ENTER to stop and save.");
+        Console.WriteLine(ModelI2Only
+            ? "Capturing Model I2 interfaces only (0x093A:0x821D/0x821A)"
+            : "Capturing from ALL Glorious interfaces (VID 0x093A and 0x258A)");
+        Console.WriteLine("Close Glorious Battery Monitor and Glorious CORE before continuing.");
+        Console.WriteLine("Leave the dongle plugged in, unplug the mouse cable, and keep moving the mouse.");
         Console.WriteLine();
         Console.WriteLine($"Saving to: {savePath}");
-        Console.WriteLine("Starting capture...");
+        Console.WriteLine("Press ENTER when the mouse is working wirelessly.");
+        Console.ReadLine();
+        LogPhase("A: dongle only (wireless)");
         Console.WriteLine();
 
         // Initial enumeration
@@ -48,10 +54,23 @@ internal static class Program
         };
         hotplugThread.Start();
 
-        Console.WriteLine();
+        Console.WriteLine("Capturing wireless mode for 60 seconds...");
+        Thread.Sleep(TimeSpan.FromSeconds(60));
 
-        // Wait for ENTER
+        Console.WriteLine();
+        Console.WriteLine("Plug in the mouse cable but leave the dongle connected, then press ENTER.");
         Console.ReadLine();
+        LogPhase("B: dongle and cable connected");
+        Console.WriteLine("Capturing wired transition for 60 seconds...");
+        Thread.Sleep(TimeSpan.FromSeconds(60));
+
+        Console.WriteLine();
+        Console.WriteLine("Unplug the mouse cable, keep the dongle connected, move the mouse, then press ENTER.");
+        Console.ReadLine();
+        LogPhase("C: cable unplugged, dongle only again");
+        Console.WriteLine("Capturing wireless recovery for 60 seconds...");
+        Thread.Sleep(TimeSpan.FromSeconds(60));
+
         cts.Cancel();
 
         // Give threads a moment to wind down
@@ -69,12 +88,21 @@ internal static class Program
         Console.WriteLine("Send this file for analysis.");
     }
 
+    private static void LogPhase(string phase)
+    {
+        var line = $"[{DateTime.Now:O}] [PHASE] {phase}";
+        WriteLineSync(line);
+        Log.Enqueue(line);
+    }
+
     private static List<HidDevice> EnumerateGloriousDevices()
     {
         var list = new List<HidDevice>();
         foreach (var device in DeviceList.Local.GetHidDevices())
         {
-            if (device.VendorID == GloriousVendorId || device.VendorID == AlternateVendorId)
+            bool isModelI2 = device.VendorID == AlternateVendorId &&
+                             (device.ProductID == 0x821D || device.ProductID == 0x821A);
+            if (ModelI2Only ? isModelI2 : device.VendorID == GloriousVendorId || device.VendorID == AlternateVendorId)
                 list.Add(device);
         }
         return list;
@@ -84,14 +112,27 @@ internal static class Program
     {
         int maxFeature = dev.GetMaxFeatureReportLength();
         int maxInput = dev.GetMaxInputReportLength();
+        int maxOutput = dev.GetMaxOutputReportLength();
+        string product;
+        try { product = dev.GetProductName() ?? "N/A"; } catch { product = "N/A"; }
         var line = $"[FOUND] VID=0x{dev.VendorID:X4} PID=0x{dev.ProductID:X4} " +
-                   $"MaxFeature={maxFeature} MaxInput={maxInput} Path={dev.DevicePath}";
+                   $"Product=\"{product}\" Release=0x{dev.ReleaseNumberBcd:X4} " +
+                   $"MaxFeature={maxFeature} MaxInput={maxInput} MaxOutput={maxOutput} Path={dev.DevicePath}";
         WriteLineSync(line);
         Log.Enqueue(line);
     }
 
     private static void StartCapture(HidDevice dev, CancellationToken token)
     {
+        int maxInput = dev.GetMaxInputReportLength();
+        int maxFeature = dev.GetMaxFeatureReportLength();
+
+        // Model I2 battery traffic uses col01 (64-byte feature trigger) and
+        // col05 (8-byte input response). Avoid opening Windows-owned pointer/
+        // keyboard collections, which only add expected access errors.
+        if (ModelI2Only && maxInput != 8 && maxFeature < 64)
+            return;
+
         var path = dev.DevicePath;
         if (ActiveCaptures.ContainsKey(path))
             return;
@@ -99,9 +140,6 @@ internal static class Program
         var captureCts = CancellationTokenSource.CreateLinkedTokenSource(token);
         if (!ActiveCaptures.TryAdd(path, captureCts))
             return;
-
-        int maxInput = dev.GetMaxInputReportLength();
-        int maxFeature = dev.GetMaxFeatureReportLength();
 
         // Only capture interfaces that have input reports (maxInput > 0)
         // Also capture feature-only interfaces via GetFeature polling
@@ -153,7 +191,6 @@ internal static class Program
                         var ts = DateTime.Now.ToString("HH:mm:ss.fff");
                         var line = $"[{ts}] VID=0x{dev.VendorID:X4} PID=0x{dev.ProductID:X4} " +
                                    $"Path={dev.DevicePath} | (timeout)";
-                        WriteLineSync(line);
                         Log.Enqueue(line);
                     }
                 }
@@ -163,7 +200,6 @@ internal static class Program
                 var ts = DateTime.Now.ToString("HH:mm:ss.fff");
                 var line = $"[{ts}] VID=0x{dev.VendorID:X4} PID=0x{dev.ProductID:X4} " +
                            $"Path={dev.DevicePath} | ERROR: {ex.Message}";
-                WriteLineSync(line);
                 Log.Enqueue(line);
 
                 Thread.Sleep(1000);
@@ -177,23 +213,22 @@ internal static class Program
 
     private static void FeatureCaptureLoop(HidDevice dev, CancellationToken token)
     {
-        // Poll GetFeature with common report IDs every 5 seconds
-        byte[] reportIds = { 0x00, 0x03, 0x04, 0x05, 0x06 };
+        // Candidate F report IDs, in the same order used by the app.
+        byte[] reportIds = { 0x03, 0x00, 0x01, 0x02 };
 
         while (!token.IsCancellationRequested)
         {
-            HidStream? stream = null;
             try
             {
-                stream = dev.Open();
-                stream.ReadTimeout = 2000;
-
                 foreach (var rid in reportIds)
                 {
                     if (token.IsCancellationRequested) break;
 
+                    var elapsed = Stopwatch.StartNew();
                     try
                     {
+                        using var stream = dev.Open();
+                        stream.ReadTimeout = 2000;
                         var buf = new byte[dev.GetMaxFeatureReportLength()];
                         buf[0] = rid;
                         stream.GetFeature(buf);
@@ -201,7 +236,7 @@ internal static class Program
                         var ts = DateTime.Now.ToString("HH:mm:ss.fff");
                         var hex = BitConverter.ToString(buf).Replace("-", " ").ToLowerInvariant();
                         var line = $"[{ts}] VID=0x{dev.VendorID:X4} PID=0x{dev.ProductID:X4} " +
-                                   $"Path={dev.DevicePath} | GetFeature(RID=0x{rid:X2}): {hex}";
+                                   $"Path={dev.DevicePath} | GetFeature(RID=0x{rid:X2}, {elapsed.ElapsedMilliseconds}ms): {hex}";
                         WriteLineSync(line);
                         Log.Enqueue(line);
                     }
@@ -209,8 +244,7 @@ internal static class Program
                     {
                         var ts = DateTime.Now.ToString("HH:mm:ss.fff");
                         var line = $"[{ts}] VID=0x{dev.VendorID:X4} PID=0x{dev.ProductID:X4} " +
-                                   $"Path={dev.DevicePath} | GetFeature(RID=0x{rid:X2}): ERROR {ex.Message}";
-                        WriteLineSync(line);
+                                   $"Path={dev.DevicePath} | GetFeature(RID=0x{rid:X2}, {elapsed.ElapsedMilliseconds}ms): ERROR {ex.Message}";
                         Log.Enqueue(line);
                     }
                 }
@@ -220,12 +254,7 @@ internal static class Program
                 var ts = DateTime.Now.ToString("HH:mm:ss.fff");
                 var line = $"[{ts}] VID=0x{dev.VendorID:X4} PID=0x{dev.ProductID:X4} " +
                            $"Path={dev.DevicePath} | FeatureLoop ERROR: {ex.Message}";
-                WriteLineSync(line);
                 Log.Enqueue(line);
-            }
-            finally
-            {
-                try { stream?.Dispose(); } catch { }
             }
 
             // Wait 5 seconds before next poll round
