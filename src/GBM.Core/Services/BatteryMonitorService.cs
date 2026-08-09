@@ -17,6 +17,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
     private DeviceProfile? _activeProfile;
+    private DeviceProfile? _lastActivatedProfile;
     private int _consecutiveFailures;
     private DateTime _lastReconnectAttempt = DateTime.MinValue;
     private DateTime _lastReconnectTriggerUtc = DateTime.MinValue;
@@ -26,7 +27,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private DateTime _lastLearnedRatesPersistUtc = DateTime.MinValue;
     private int _successfulReadsSinceLearnedPersist;
     private bool _disposed;
-    private bool _rescanRequested;
+    private int _rescanRequested;
 
     // Probe exhaustion: when known devices are present but all probe candidates fail,
     // avoid re-entering "Connecting" state every poll cycle (which takes 15-20s per attempt
@@ -197,46 +198,16 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     public void TriggerRescan()
     {
         _logger.LogInformation("Rescan triggered");
-
-        string? activeDeviceKey = _activeProfile?.CompositeKey;
-        if (!string.IsNullOrWhiteSpace(activeDeviceKey))
-        {
-            _estimationService.Reset(activeDeviceKey);
-        }
-        else if (!string.IsNullOrWhiteSpace(CurrentState.DeviceName))
-        {
-            _estimationService.Reset(CurrentState.DeviceName);
-        }
-
-        _rescanRequested = true;
-        _activeProfile = null;
-        _consecutiveFailures = 0;
-        _consecutiveZeroReads = 0;
-        _lastPositiveLevel = 0;
-        _lastSuccessfulReadUtc = DateTime.MinValue;
-        _lastReconnectTriggerUtc = DateTime.MinValue;
-        _lastAbsenceCheckUtc = DateTime.MinValue;
-        _lastAbsenceCheckResult = false;
-        _lastLearnedRatesPersistUtc = DateTime.MinValue;
-        _successfulReadsSinceLearnedPersist = 0;
-        _lastWiredPresent = false;
-        _chargeStartTime = null;
-        _chargeStartLevel = 0;
-        _cableDisconnectTime = null;
-        _pendingUnplugCalibrationUtc = null;
-        _pendingUnplugCalibrationAnchorLevel = null;
-        _awaitingUnplugCalibrationSample = false;
-        _probeExhausted = false;
-        _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
+        Interlocked.Exchange(ref _rescanRequested, 1);
     }
 
     private async Task PollingLoop(CancellationToken cancellationToken)
     {
-        // Try to restore cached profile first
-        TryRestoreCachedProfile();
-
         // Seed estimation service with historical rates from disk
         SeedHistoricalRates();
+
+        // Try to restore cached profile after historical rates are available.
+        TryRestoreCachedProfile();
 
         // Check if USB cable is already plugged in at startup (PID 0x824A present).
         // Without this, the wired-presence transition only fires on hot-plug events,
@@ -291,17 +262,27 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
 
         try
         {
-            if (_rescanRequested)
+            bool rescanRequested = Interlocked.Exchange(ref _rescanRequested, 0) == 1;
+            if (rescanRequested)
             {
-                _rescanRequested = false;
-                _activeProfile = null;
                 _consecutiveFailures = 0;
+                _lastReconnectAttempt = DateTime.MinValue;
+                _probeExhausted = false;
+                _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
             }
 
-            // If no active device, try to find one
-            if (_activeProfile == null)
+            // A manual rescan validates/discovers without discarding the last working
+            // profile or charge level. CandidateG reads can block for tens of seconds,
+            // so clearing live state from the UI thread would race an in-flight poll.
+            if (rescanRequested || _activeProfile == null)
             {
                 AttemptDeviceDiscovery();
+
+                if (rescanRequested && _activeProfile != null &&
+                    !_hidDeviceService.IsDevicePresent(_activeProfile))
+                {
+                    _activeProfile = null;
+                }
 
                 if (_activeProfile == null)
                 {
@@ -610,7 +591,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             // Only show "Connecting" on fresh probe attempts.
             // After exhaustion, stay in NotConnected to avoid a misleading
             // "connecting" -> "not connected" loop every poll cycle.
-            if (!_probeExhausted)
+            if (!_probeExhausted && _activeProfile == null)
                 UpdateConnectionState(ConnectionState.Connecting);
 
             ReportProbeStatus("Scanning for Glorious devices...");
@@ -619,6 +600,17 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             var savedProfiles = _storageService.LoadProfiles();
             foreach (var profile in savedProfiles)
             {
+                if (TryRestoreWiredPixartProfile(profile))
+                {
+                    _probeExhausted = false;
+                    _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
+                    _logger.LogInformation(
+                        "Restored cached Pixart profile for {Model} while wired (live read unavailable)",
+                        profile.ModelName);
+                    ReportProbeStatus($"Found {profile.ModelName}");
+                    return;
+                }
+
                 // For CandidateF/G, a single ReadBattery attempt often fails due to
                 // the intermittent response pattern (2 fail / 1 success). Retry up to
                 // 5 times with a short delay before giving up on the saved profile.
@@ -645,7 +637,8 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                         _logger.LogInformation("Reconnected using cached profile for {Model} (attempt {Attempt}/{Max})",
                             profile.ModelName, attempt, maxAttempts);
                         ReportProbeStatus($"Found {profile.ModelName}");
-                        _activeProfile = profile;
+                        ActivateProfile(profile);
+                        ProcessSuccessfulRead(testResult.BatteryLevel, testResult.IsCharging);
                         profile.LastSeen = DateTime.UtcNow;
                         _storageService.SaveProfiles(savedProfiles);
                         return;
@@ -672,7 +665,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
                     _logger.LogInformation("Discovered device: {Model} via probing", profile.ModelName);
                     ReportProbeStatus($"Found {profile.ModelName}");
-                    _activeProfile = profile;
+                    ActivateProfile(profile);
 
                     // Save this profile for faster reconnection
                     var profiles = _storageService.LoadProfiles();
@@ -711,6 +704,8 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         _lastSuccessfulReadUtc = DateTime.UtcNow;
         _lastAbsenceCheckResult = false;
         _consecutiveFailures = 0;
+        _probeExhausted = false;
+        _exhaustedProbeDebounce = TimeSpan.FromSeconds(60);
 
         // When the mouse is sleeping (Status 0xA4), the dongle returns Level=0%.
         // Use the last known level instead and track consecutive zero reads.
@@ -901,14 +896,6 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 return;
             }
 
-            bool hasAbsenceEvidence = HasCorroboratedAbsenceEvidence();
-            if (!hasAbsenceEvidence)
-            {
-                _logger.LogInformation(
-                    "[MONITOR] Reconnect gated: failure threshold met but device path is still present");
-                return;
-            }
-
             if (DateTime.UtcNow - _lastReconnectTriggerUtc < ReconnectCooldown)
             {
                 _logger.LogInformation(
@@ -917,9 +904,20 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 return;
             }
 
-            _logger.LogWarning(
-                "Max consecutive failures reached ({Count}) with corroborated absence evidence. Attempting reconnect.",
-                _consecutiveFailures);
+            bool hasAbsenceEvidence = HasCorroboratedAbsenceEvidence();
+            if (hasAbsenceEvidence)
+            {
+                _logger.LogWarning(
+                    "Max consecutive failures reached ({Count}) with corroborated absence evidence. Attempting reconnect.",
+                    _consecutiveFailures);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Max consecutive failures reached ({Count}) while HID path is still present. " +
+                    "Marking battery telemetry stale and forcing rediscovery.",
+                    _consecutiveFailures);
+            }
 
             // Transition to LastKnown before full disconnect
             if (CurrentState.Connection == ConnectionState.Connected ||
@@ -1057,6 +1055,15 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
             var ordered = profiles.OrderByDescending(p => p.LastSeen);
             foreach (var profile in ordered)
             {
+                if (TryRestoreWiredPixartProfile(profile))
+                {
+                    _logger.LogInformation(
+                        "Restored cached Pixart profile for {Model} while wired (live read unavailable)",
+                        profile.ModelName);
+                    ReportProbeStatus($"Reconnecting to {profile.ModelName}...");
+                    return;
+                }
+
                 // First check if the HID device is still present on the system
                 if (!_hidDeviceService.IsDevicePresent(profile))
                 {
@@ -1071,45 +1078,8 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 {
                     _logger.LogInformation("Restored cached profile for {Model} (read OK)", profile.ModelName);
                     ReportProbeStatus($"Reconnecting to {profile.ModelName}...");
-                    _activeProfile = profile;
-                    return;
-                }
-
-                // For Pixart passive-read methods (CandidateE, CandidateF, CandidateG), the
-                // device won't emit data on cold start until triggered. Trust the saved
-                // profile if the device path is present - the normal poll loop will handle reads.
-                // Do NOT trust CandidateD: it's synchronous GetFeature, so if ReadBattery
-                // failed above it means the response was rejected (false positive filter).
-                // Letting CandidateD fall through forces a re-probe that discovers F/G.
-                if (profile.Protocol == ChipProtocol.Pixart
-                    && profile.PixartMethod != PixartBatteryMethod.CandidateD)
-                {
-                    // For CandidateF, verify the sibling input interface (col05) still exists.
-                    // If the sibling is missing (e.g. dongle plugged into different USB port),
-                    // the profile is stale and should trigger a re-probe instead.
-                    if (profile.PixartMethod == PixartBatteryMethod.CandidateF
-                        && !string.IsNullOrEmpty(profile.SiblingDevicePath)
-                        && !_hidDeviceService.IsDevicePresent(new DeviceProfile
-                        {
-                            DevicePath = profile.SiblingDevicePath,
-                            VendorId = profile.VendorId,
-                            ProductId = profile.ProductId,
-                            Protocol = ChipProtocol.Pixart
-                        }))
-                    {
-                        _logger.LogDebug(
-                            "Cached CandidateF profile for {Model}: sibling input interface " +
-                            "not found at {SiblingPath}, will re-probe",
-                            profile.ModelName, profile.SiblingDevicePath);
-                        continue;
-                    }
-
-                    _logger.LogInformation(
-                        "Restored cached Pixart profile for {Model} (device present, " +
-                        "method={Method}, skipping initial read test)",
-                        profile.ModelName, profile.PixartMethod);
-                    ReportProbeStatus($"Reconnecting to {profile.ModelName}...");
-                    _activeProfile = profile;
+                    ActivateProfile(profile);
+                    ProcessSuccessfulRead(result.BatteryLevel, result.IsCharging);
                     return;
                 }
 
@@ -1123,6 +1093,59 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         {
             _logger.LogWarning(ex, "Failed to restore cached profile");
         }
+    }
+
+    private bool TryRestoreWiredPixartProfile(DeviceProfile profile)
+    {
+        if (profile.Protocol != ChipProtocol.Pixart ||
+            !_hidDeviceService.IsDevicePresent(profile) ||
+            !_hidDeviceService.IsWiredDevicePresent(profile.ModelName))
+        {
+            return false;
+        }
+
+        ActivateProfile(profile);
+        return true;
+    }
+
+    private void ActivateProfile(DeviceProfile profile)
+    {
+        DeviceProfile? previousProfile = _activeProfile ?? _lastActivatedProfile;
+        if (previousProfile != null && !IsSamePhysicalProfile(previousProfile, profile))
+            ResetDeviceTracking(previousProfile);
+
+        _activeProfile = profile;
+        _lastActivatedProfile = profile;
+    }
+
+    private static bool IsSamePhysicalProfile(DeviceProfile left, DeviceProfile right)
+    {
+        return string.Equals(left.DevicePath, right.DevicePath, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(left.SiblingDevicePath, right.SiblingDevicePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void ResetDeviceTracking(DeviceProfile previousProfile)
+    {
+        string previousDeviceKey = !string.IsNullOrWhiteSpace(previousProfile.CompositeKey)
+            ? previousProfile.CompositeKey
+            : previousProfile.ModelName;
+        if (!string.IsNullOrWhiteSpace(previousDeviceKey))
+            _estimationService.Reset(previousDeviceKey);
+
+        _consecutiveFailures = 0;
+        _consecutiveZeroReads = 0;
+        _lastPositiveLevel = 0;
+        _lastSuccessfulReadUtc = DateTime.MinValue;
+        _lastReconnectTriggerUtc = DateTime.MinValue;
+        _lastAbsenceCheckUtc = DateTime.MinValue;
+        _lastAbsenceCheckResult = false;
+        _lastLearnedRatesPersistUtc = DateTime.MinValue;
+        _successfulReadsSinceLearnedPersist = 0;
+        _lastWiredPresent = false;
+        _chargeStartTime = null;
+        _chargeStartLevel = 0;
+        _cableDisconnectTime = null;
+        ClearPendingUnplugCalibration();
     }
 
     private void SeedHistoricalRates()

@@ -486,6 +486,8 @@ public class HidDeviceService : IHidDeviceService
         // GetFeature-only probe: read feature reports WITHOUT a prior SetFeature write.
         // The mi_01&col01 interface on 0x093A:0x824D rejects SetFeature entirely,
         // but may respond to GetFeature with battery data already populated by firmware.
+        int featureLen = GetSafeFeatureReportLength(device);
+
         for (byte reportId = 0x00; reportId <= 0x0F; reportId++)
         {
             try
@@ -493,7 +495,7 @@ public class HidDeviceService : IHidDeviceService
                 using var stream = device.Open();
                 stream.ReadTimeout = 2000;
 
-                var buf = new byte[65]; // 64 bytes + report ID byte
+                var buf = new byte[featureLen];
                 buf[0] = reportId;
 
                 stream.GetFeature(buf);
@@ -656,6 +658,7 @@ public class HidDeviceService : IHidDeviceService
             // Windows queues input reports per-handle; closing and reopening between
             // RIDs would discard any report that arrived after the handle was closed.
             using var inputStream = inputDevice.Open();
+            int featureLen = GetSafeFeatureReportLength(triggerDevice);
 
             foreach (var (reportId, timeoutMs) in CandidateFProbeRids)
             {
@@ -667,7 +670,7 @@ public class HidDeviceService : IHidDeviceService
                     using var triggerStream = triggerDevice.Open();
                     triggerStream.ReadTimeout = 2000;
 
-                    var triggerBuf = new byte[65]; // 64 bytes + report ID
+                    var triggerBuf = new byte[featureLen];
                     triggerBuf[0] = reportId;
 
                     try
@@ -852,6 +855,8 @@ public class HidDeviceService : IHidDeviceService
     private (bool Success, int BatteryLevel, bool IsCharging) TryPixartCandidateGPrimerSequence(
         HidDevice triggerDevice, HidStream inputStream, ILogger logger, int primerAttempts)
     {
+        int featureLen = GetSafeFeatureReportLength(triggerDevice);
+
         for (int attempt = 1; attempt <= primerAttempts; attempt++)
         {
             try
@@ -859,7 +864,7 @@ public class HidDeviceService : IHidDeviceService
                 using var primerStream = triggerDevice.Open();
                 primerStream.ReadTimeout = CandidateGPrimerTriggerTimeoutMs;
 
-                var primerBuf = new byte[65];
+                var primerBuf = new byte[featureLen];
                 primerBuf[0] = 0x03;
 
                 try
@@ -1561,75 +1566,117 @@ public class HidDeviceService : IHidDeviceService
                     sb.AppendLine($"  Protocol: {(isPixart ? "Pixart" : "Sinowealth")}");
 
                     // Try a quick battery probe on each interface
-                    try
+                    if (isPixart)
                     {
-                        using var stream = device.Open();
-                        stream.ReadTimeout = 1000;
-                        stream.WriteTimeout = 1000;
-
-                        int featureLen = device.GetMaxFeatureReportLength();
+                        int featureLen = 0;
+                        try { featureLen = device.GetMaxFeatureReportLength(); } catch { }
                         if (featureLen > 0)
                         {
-                            if (isPixart)
+                            // Pixart probes open their own streams. Do not keep a diagnostic
+                            // stream open here, because Candidate F/G need separate col01/col05
+                            // handles and a held col01 handle can look like exclusive-access
+                            // failure on some systems.
+                            try
                             {
-                                // Pixart probe — try each candidate
-                                try
+                                var resultD = TryPixartCandidateD(device, _logger);
+                                sb.AppendLine($"  Pixart Candidate D: {(resultD.Success ? $"battery={resultD.BatteryLevel}%, charging={resultD.IsCharging}" : "no valid response")}");
+                            }
+                            catch (Exception pex)
+                            {
+                                sb.AppendLine($"  Pixart Candidate D: FAILED ({pex.GetType().Name}: {pex.Message})");
+                            }
+
+                            try
+                            {
+                                var tempInfo = new DeviceInfo
                                 {
-                                    var resultD = TryPixartCandidateD(device, _logger);
-                                    sb.AppendLine($"  Pixart Candidate D: {(resultD.Success ? $"battery={resultD.BatteryLevel}%, charging={resultD.IsCharging}" : "no valid response")}");
+                                    VendorId = device.VendorID,
+                                    ProductId = device.ProductID,
+                                    DevicePath = device.DevicePath,
+                                    ModelName = SafeGetProductName(device)
+                                };
+                                var sibling = FindPixartSiblingInputDevice(device, tempInfo);
+                                if (sibling != null)
+                                {
+                                    var resultF = TryPixartCandidateF(device, sibling, _logger);
+                                    sb.AppendLine($"  Pixart Candidate F: {(resultF.Success ? $"battery={resultF.BatteryLevel}%, charging={resultF.IsCharging}" : "no valid response")} (sibling={sibling.DevicePath})");
                                 }
-                                catch (Exception pex)
+                                else
                                 {
-                                    sb.AppendLine($"  Pixart Candidate D: FAILED ({pex.GetType().Name}: {pex.Message})");
-                                }
-                                // Candidate F: cross-interface (needs sibling col05)
-                                try
-                                {
-                                    // Build a temporary DeviceInfo for sibling lookup
-                                    var tempInfo = new DeviceInfo
-                                    {
-                                        VendorId = device.VendorID,
-                                        ProductId = device.ProductID,
-                                        DevicePath = device.DevicePath,
-                                        ModelName = SafeGetProductName(device)
-                                    };
-                                    var sibling = FindPixartSiblingInputDevice(device, tempInfo);
-                                    if (sibling != null)
-                                    {
-                                        var resultF = TryPixartCandidateF(device, sibling, _logger);
-                                        sb.AppendLine($"  Pixart Candidate F: {(resultF.Success ? $"battery={resultF.BatteryLevel}%, charging={resultF.IsCharging}" : "no valid response")} (sibling={sibling.DevicePath})");
-                                    }
-                                    else
-                                    {
-                                        sb.AppendLine("  Pixart Candidate F: no sibling input interface found");
-                                    }
-                                }
-                                catch (Exception pex)
-                                {
-                                    sb.AppendLine($"  Pixart Candidate F: FAILED ({pex.GetType().Name}: {pex.Message})");
-                                }
-                                try
-                                {
-                                    var resultA = TryPixartCandidateA(stream, featureLen);
-                                    sb.AppendLine($"  Pixart Candidate A: {(resultA.Success ? $"battery={resultA.BatteryLevel}%, charging={resultA.IsCharging}" : "no valid response")}");
-                                }
-                                catch (Exception pex)
-                                {
-                                    sb.AppendLine($"  Pixart Candidate A: FAILED ({pex.GetType().Name}: {pex.Message})");
-                                }
-                                try
-                                {
-                                    var resultB = TryPixartCandidateB(stream, featureLen);
-                                    sb.AppendLine($"  Pixart Candidate B: {(resultB.Success ? $"battery={resultB.BatteryLevel}%, charging={resultB.IsCharging}" : "no valid response")}");
-                                }
-                                catch (Exception pex)
-                                {
-                                    sb.AppendLine($"  Pixart Candidate B: FAILED ({pex.GetType().Name}: {pex.Message})");
+                                    sb.AppendLine("  Pixart Candidate F: no sibling input interface found");
                                 }
                             }
-                            else
+                            catch (Exception pex)
                             {
-                                // Sinowealth probe
+                                sb.AppendLine($"  Pixart Candidate F: FAILED ({pex.GetType().Name}: {pex.Message})");
+                            }
+
+                            try
+                            {
+                                var tempInfo = new DeviceInfo
+                                {
+                                    VendorId = device.VendorID,
+                                    ProductId = device.ProductID,
+                                    DevicePath = device.DevicePath,
+                                    ModelName = SafeGetProductName(device)
+                                };
+                                var sibling = FindPixartSiblingInputDevice(device, tempInfo);
+                                if (sibling != null)
+                                {
+                                    string strategyKey = GetCandidateGStrategyKey(device.DevicePath, sibling.DevicePath);
+                                    var resultG = TryPixartCandidateG(device, sibling, _logger, strategyKey);
+                                    sb.AppendLine($"  Pixart Candidate G: {(resultG.Success ? $"battery={resultG.BatteryLevel}%, charging={resultG.IsCharging}" : "no valid response")} (sibling={sibling.DevicePath})");
+                                }
+                                else
+                                {
+                                    sb.AppendLine("  Pixart Candidate G: no sibling input interface found");
+                                }
+                            }
+                            catch (Exception pex)
+                            {
+                                sb.AppendLine($"  Pixart Candidate G: FAILED ({pex.GetType().Name}: {pex.Message})");
+                            }
+
+                            try
+                            {
+                                using var stream = device.Open();
+                                stream.ReadTimeout = 1000;
+                                stream.WriteTimeout = 1000;
+
+                                var resultA = TryPixartCandidateA(stream, featureLen);
+                                sb.AppendLine($"  Pixart Candidate A: {(resultA.Success ? $"battery={resultA.BatteryLevel}%, charging={resultA.IsCharging}" : "no valid response")}");
+                            }
+                            catch (Exception pex)
+                            {
+                                sb.AppendLine($"  Pixart Candidate A: FAILED ({pex.GetType().Name}: {pex.Message})");
+                            }
+
+                            try
+                            {
+                                using var stream = device.Open();
+                                stream.ReadTimeout = 1000;
+                                stream.WriteTimeout = 1000;
+
+                                var resultB = TryPixartCandidateB(stream, featureLen);
+                                sb.AppendLine($"  Pixart Candidate B: {(resultB.Success ? $"battery={resultB.BatteryLevel}%, charging={resultB.IsCharging}" : "no valid response")}");
+                            }
+                            catch (Exception pex)
+                            {
+                                sb.AppendLine($"  Pixart Candidate B: FAILED ({pex.GetType().Name}: {pex.Message})");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        try
+                        {
+                            using var stream = device.Open();
+                            stream.ReadTimeout = 1000;
+                            stream.WriteTimeout = 1000;
+
+                            int featureLen = device.GetMaxFeatureReportLength();
+                            if (featureLen > 0)
+                            {
                                 foreach (int rid in new[] { 0x04, 0x00 })
                                 {
                                     try
@@ -1649,10 +1696,10 @@ public class HidDeviceService : IHidDeviceService
                                 }
                             }
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        sb.AppendLine($"  Open/probe: FAILED ({ex.GetType().Name}: {ex.Message})");
+                        catch (Exception ex)
+                        {
+                            sb.AppendLine($"  Open/probe: FAILED ({ex.GetType().Name}: {ex.Message})");
+                        }
                     }
 
                     sb.AppendLine();
@@ -1733,6 +1780,22 @@ public class HidDeviceService : IHidDeviceService
         Array.Copy(command, 0, payload, 1, commandLength);
 
         return payload;
+    }
+
+    private static int GetSafeFeatureReportLength(HidDevice device)
+    {
+        try
+        {
+            int length = device.GetMaxFeatureReportLength();
+            if (length > 0)
+                return length;
+        }
+        catch
+        {
+            // Fall back to the known Pixart feature report size used by D2-class receivers.
+        }
+
+        return 64;
     }
 
     private void LogFullResponse(byte[] response, string label)

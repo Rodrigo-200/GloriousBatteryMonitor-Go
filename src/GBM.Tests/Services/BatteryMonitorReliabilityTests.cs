@@ -11,13 +11,13 @@ namespace GBM.Tests.Services;
 public class BatteryMonitorReliabilityTests
 {
     [Fact]
-    public void ProcessFailedRead_DoesNotReconnect_WhenAbsenceIsNotCorroborated()
+    public void ProcessFailedRead_DoesNotReconnect_WhenRecentSuccessIsWithinWindow()
     {
         var monitor = CreateMonitor(out var hid, out _, out _, out _);
         var profile = CreateProfile();
 
         SetPrivateField(monitor, "_activeProfile", profile);
-        SetPrivateField(monitor, "_lastSuccessfulReadUtc", DateTime.UtcNow - TimeSpan.FromMinutes(10));
+        SetPrivateField(monitor, "_lastSuccessfulReadUtc", DateTime.UtcNow);
 
         hid.Setup(s => s.IsDevicePresent(It.IsAny<DeviceProfile>())).Returns(true);
         hid.Setup(s => s.EnumerateDevices()).Returns(new List<DeviceInfo>
@@ -38,6 +38,40 @@ public class BatteryMonitorReliabilityTests
         InvokePrivate(monitor, "ProcessFailedRead");
 
         GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void ProcessFailedRead_WhenTelemetryIsStaleButDevicePresent_TransitionsToLastKnown()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out _, out _);
+        var profile = CreateProfile();
+
+        SetPrivateField(monitor, "_activeProfile", profile);
+
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 62, false, false);
+        SetPrivateField(monitor, "_lastSuccessfulReadUtc", DateTime.UtcNow - TimeSpan.FromMinutes(10));
+
+        hid.Setup(s => s.IsDevicePresent(It.IsAny<DeviceProfile>())).Returns(true);
+        hid.Setup(s => s.EnumerateDevices()).Returns(new List<DeviceInfo>
+        {
+            new()
+            {
+                VendorId = 0x093A,
+                ProductId = 0x824D,
+                ReleaseNumber = 1,
+                IsWireless = true,
+                DevicePath = "trigger",
+                ModelName = "Model D 2 Wireless"
+            }
+        });
+
+        InvokePrivate(monitor, "ProcessFailedRead");
+        InvokePrivate(monitor, "ProcessFailedRead");
+        InvokePrivate(monitor, "ProcessFailedRead");
+
+        monitor.CurrentState.Connection.Should().Be(ConnectionState.LastKnown);
+        monitor.CurrentState.Level.Should().Be(62);
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeNull();
     }
 
     [Fact]
@@ -236,6 +270,191 @@ public class BatteryMonitorReliabilityTests
 
         InvokePrivate(monitor, "ProcessFailedRead");
         GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeNull();
+    }
+
+    [Fact]
+    public void TryRestoreCachedProfile_CandidateGRequiresSiblingInputInterface()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out _);
+        var profile = CreateProfile(PixartBatteryMethod.CandidateG);
+
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { profile });
+        hid.Setup(s => s.IsDevicePresent(It.Is<DeviceProfile>(p => p.DevicePath == profile.DevicePath)))
+            .Returns(true);
+        hid.Setup(s => s.IsDevicePresent(It.Is<DeviceProfile>(p => p.DevicePath == profile.SiblingDevicePath)))
+            .Returns(false);
+        hid.Setup(s => s.ReadBattery(profile)).Returns((false, 0, false));
+
+        InvokePrivate(monitor, "TryRestoreCachedProfile");
+
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeNull();
+    }
+
+    [Fact]
+    public void TryRestoreCachedProfile_PixartProfileRequiresSuccessfulRead()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out _);
+        var profile = CreateProfile(PixartBatteryMethod.CandidateG);
+
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { profile });
+        hid.Setup(s => s.IsDevicePresent(It.IsAny<DeviceProfile>())).Returns(true);
+        hid.Setup(s => s.ReadBattery(profile)).Returns((false, 0, false));
+
+        InvokePrivate(monitor, "TryRestoreCachedProfile");
+
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeNull();
+    }
+
+    [Fact]
+    public void TryRestoreCachedProfile_SuccessfulReadUpdatesCurrentState()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out _);
+        var profile = CreateProfile(PixartBatteryMethod.CandidateF);
+
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { profile });
+        hid.Setup(s => s.IsDevicePresent(profile)).Returns(true);
+        hid.Setup(s => s.ReadBattery(profile)).Returns((true, 99, false));
+
+        InvokePrivate(monitor, "TryRestoreCachedProfile");
+
+        monitor.CurrentState.Connection.Should().Be(ConnectionState.Connected);
+        monitor.CurrentState.Level.Should().Be(99);
+        hid.Verify(s => s.ReadBattery(profile), Times.Once);
+    }
+
+    [Fact]
+    public async Task TriggerRescan_DuringWiredRead_DoesNotCorruptState()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out _, out _);
+        var profile = CreateProfile(PixartBatteryMethod.CandidateG);
+        using var readStarted = new ManualResetEventSlim();
+        using var releaseRead = new ManualResetEventSlim();
+
+        SetPrivateField(monitor, "_activeProfile", profile);
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 96, false, false);
+        SetPrivateField(monitor, "_lastWiredPresent", true);
+        SetPrivateField(monitor, "_chargeStartTime", DateTime.UtcNow);
+        SetPrivateField(monitor, "_chargeStartLevel", 96);
+
+        hid.Setup(s => s.IsWiredDevicePresent(profile.ModelName)).Returns(true);
+        hid.Setup(s => s.ReadBattery(profile)).Returns(() =>
+        {
+            readStarted.Set();
+            releaseRead.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            return (false, 0, false);
+        });
+
+        Task poll = Task.Run(() => InvokePrivateAsync(monitor, "PollOnceAsync", CancellationToken.None));
+        readStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        monitor.TriggerRescan();
+        releaseRead.Set();
+        await poll;
+
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeSameAs(profile);
+        GetPrivateField<int>(monitor, "_lastPositiveLevel").Should().Be(96);
+        GetPrivateField<int>(monitor, "_chargeStartLevel").Should().Be(96);
+        monitor.CurrentState.Level.Should().Be(96);
+        monitor.CurrentState.DeviceName.Should().Be(profile.ModelName);
+        monitor.CurrentState.IsCharging.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PollOnceAsync_ManualRescanMissPreservesWorkingWirelessProfileAndState()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out _);
+        var profile = CreateProfile(PixartBatteryMethod.CandidateA);
+        var publishedConnections = new List<ConnectionState>();
+
+        SetPrivateField(monitor, "_activeProfile", profile);
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 97, false, false);
+        monitor.BatteryStateChanged += state => publishedConnections.Add(state.Connection);
+
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { profile });
+        hid.Setup(s => s.IsDevicePresent(profile)).Returns(true);
+        hid.Setup(s => s.ReadBattery(profile)).Returns((false, 0, false));
+        hid.Setup(s => s.EnumerateDevices()).Returns(new List<DeviceInfo>());
+
+        monitor.TriggerRescan();
+        await InvokePrivateAsync(monitor, "PollOnceAsync", CancellationToken.None);
+
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeSameAs(profile);
+        monitor.CurrentState.Connection.Should().Be(ConnectionState.Connected);
+        monitor.CurrentState.Level.Should().Be(97);
+        publishedConnections.Should().NotContain(ConnectionState.Connecting);
+        publishedConnections.Should().NotContain(ConnectionState.NotConnected);
+    }
+
+    [Fact]
+    public async Task PollOnceAsync_ManualRescanToDifferentHidPathsResetsDeviceTracking()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out var estimation);
+        var original = CreateProfile(PixartBatteryMethod.CandidateA);
+        var replacement = CreateProfile(PixartBatteryMethod.CandidateA);
+        replacement.DevicePath = "replacement-trigger";
+        replacement.SiblingDevicePath = "replacement-input";
+
+        SetPrivateField(monitor, "_activeProfile", original);
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 97, true, false);
+        SetPrivateField(monitor, "_lastWiredPresent", true);
+        SetPrivateField(monitor, "_chargeStartTime", DateTime.UtcNow);
+        SetPrivateField(monitor, "_chargeStartLevel", 97);
+        SetPrivateField(monitor, "_awaitingUnplugCalibrationSample", true);
+
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { replacement });
+        hid.Setup(s => s.IsDevicePresent(replacement)).Returns(true);
+        hid.Setup(s => s.ReadBattery(replacement)).Returns((true, 55, false));
+
+        monitor.TriggerRescan();
+        await InvokePrivateAsync(monitor, "PollOnceAsync", CancellationToken.None);
+
+        GetPrivateField<DeviceProfile?>(monitor, "_activeProfile").Should().BeSameAs(replacement);
+        GetPrivateField<int>(monitor, "_lastPositiveLevel").Should().Be(55);
+        GetPrivateField<int>(monitor, "_chargeStartLevel").Should().Be(0);
+        GetPrivateField<bool>(monitor, "_lastWiredPresent").Should().BeFalse();
+        GetPrivateField<bool>(monitor, "_awaitingUnplugCalibrationSample").Should().BeFalse();
+        monitor.CurrentState.Level.Should().Be(55);
+        estimation.Verify(e => e.Reset(original.CompositeKey), Times.Once);
+    }
+
+    [Fact]
+    public void ActivateProfile_DifferentHidPathsAfterDisconnectResetsPriorDeviceTracking()
+    {
+        var monitor = CreateMonitor(out _, out _, out _, out var estimation);
+        var original = CreateProfile(PixartBatteryMethod.CandidateA);
+        var replacement = CreateProfile(PixartBatteryMethod.CandidateA);
+        replacement.DevicePath = "replacement-trigger";
+        replacement.SiblingDevicePath = "replacement-input";
+
+        InvokePrivate(monitor, "ActivateProfile", original);
+        InvokePrivate(monitor, "ProcessSuccessfulRead", 97, true, false);
+        SetPrivateField(monitor, "_lastWiredPresent", true);
+        SetPrivateField(monitor, "_chargeStartLevel", 97);
+        SetPrivateField(monitor, "_awaitingUnplugCalibrationSample", true);
+        SetPrivateField(monitor, "_activeProfile", null);
+
+        InvokePrivate(monitor, "ActivateProfile", replacement);
+
+        GetPrivateField<int>(monitor, "_lastPositiveLevel").Should().Be(0);
+        GetPrivateField<int>(monitor, "_chargeStartLevel").Should().Be(0);
+        GetPrivateField<bool>(monitor, "_lastWiredPresent").Should().BeFalse();
+        GetPrivateField<bool>(monitor, "_awaitingUnplugCalibrationSample").Should().BeFalse();
+        estimation.Verify(e => e.Reset(original.CompositeKey), Times.Once);
+    }
+
+    [Fact]
+    public void AttemptDeviceDiscovery_SuccessfulCachedReadUpdatesCurrentState()
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out _);
+        var profile = CreateProfile(PixartBatteryMethod.CandidateF);
+
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { profile });
+        hid.Setup(s => s.ReadBattery(profile)).Returns((true, 98, false));
+
+        InvokePrivate(monitor, "AttemptDeviceDiscovery");
+
+        monitor.CurrentState.Connection.Should().Be(ConnectionState.Connected);
+        monitor.CurrentState.Level.Should().Be(98);
+        hid.Verify(s => s.ReadBattery(profile), Times.Once);
     }
 
     private static BatteryMonitorService CreateMonitor(
