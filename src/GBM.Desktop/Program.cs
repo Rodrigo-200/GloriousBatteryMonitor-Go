@@ -1,4 +1,5 @@
 using Avalonia;
+using GBM.Desktop.Services;
 using System.Linq;
 using Velopack;
 
@@ -8,6 +9,7 @@ internal sealed class Program
 {
     internal const string SkipUpdateCheckArg = "--gbm-skip-update-check-once";
     internal static bool SkipUpdateCheckOnLaunch { get; private set; }
+    internal static SingleInstanceCoordinator? SingleInstance { get; private set; }
 
     [STAThread]
     public static void Main(string[] args)
@@ -16,10 +18,17 @@ internal sealed class Program
         // this non-packaged app. Must be called before any notification API.
         SetCurrentProcessExplicitAppUserModelID("GloriousBatteryMonitor.App");
 
-        // Prevent multiple instances — exit silently if already running
-        using var mutex = new Mutex(true, "GloriousBatteryMonitor_SingleInstance", out bool isNew);
-        if (!isNew)
+        using var singleInstance = SingleInstanceCoordinator.CreateForCurrentSession();
+        if (!singleInstance.IsPrimaryInstance)
+        {
+            _ = singleInstance
+                .NotifyPrimaryInstanceAsync(TimeSpan.FromSeconds(3))
+                .GetAwaiter()
+                .GetResult();
             return;
+        }
+
+        SingleInstance = singleInstance;
 
         SkipUpdateCheckOnLaunch = args.Any(a =>
             string.Equals(a, SkipUpdateCheckArg, StringComparison.OrdinalIgnoreCase));
@@ -27,8 +36,15 @@ internal sealed class Program
             .Where(a => !string.Equals(a, SkipUpdateCheckArg, StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
-        VelopackApp.Build().Run();
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(filteredArgs);
+        try
+        {
+            VelopackApp.Build().Run();
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime(filteredArgs);
+        }
+        finally
+        {
+            SingleInstance = null;
+        }
     }
 
     public static AppBuilder BuildAvaloniaApp()

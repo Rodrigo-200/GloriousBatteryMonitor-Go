@@ -54,6 +54,9 @@ public partial class App : Application
             // Prevent auto-shutdown when we close the splash window
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
 
+            Program.SingleInstance?.RegisterActivationHandler(
+                () => Avalonia.Threading.Dispatcher.UIThread.Post(ShowMainWindowFromExternalLaunch));
+
             if (settingsService.Current.StartMinimized)
             {
                 _ = RunTrayStartupAsync(desktop);
@@ -78,9 +81,7 @@ public partial class App : Application
         if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
             return;
 
-        var mainWindow = EnsureMainWindow(desktop);
-        mainWindow.Show();
-        mainWindow.Activate();
+        RestoreAndActivate(EnsureMainWindow(desktop));
     }
 
     public void ToggleMainWindowFromTray()
@@ -95,8 +96,32 @@ public partial class App : Application
             return;
         }
 
-        mainWindow.Show();
-        mainWindow.Activate();
+        RestoreAndActivate(mainWindow);
+    }
+
+    private void ShowMainWindowFromExternalLaunch()
+    {
+        if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+            return;
+
+        if (desktop.MainWindow is SplashWindow splash && splash.IsVisible)
+        {
+            RestoreAndActivate(splash);
+            return;
+        }
+
+        RestoreAndActivate(EnsureMainWindow(desktop));
+    }
+
+    private static void RestoreAndActivate(Avalonia.Controls.Window window)
+    {
+        if (window.WindowState == Avalonia.Controls.WindowState.Minimized)
+            window.WindowState = Avalonia.Controls.WindowState.Normal;
+
+        if (!window.IsVisible)
+            window.Show();
+
+        window.Activate();
     }
 
     private MainWindow EnsureMainWindow(IClassicDesktopStyleApplicationLifetime desktop)
