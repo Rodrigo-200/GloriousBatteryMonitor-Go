@@ -2,9 +2,9 @@
 
 ## Commit Message Format
 
-This repo uses Conventional Commits for fully automated versioning.
-You never set a version number manually — the CI derives it from your
-commit messages.
+This repo uses Conventional Commits to keep the history and generated
+changelog organized. Release versions are selected deliberately and published
+from annotated semantic-version tags; CI does not create tags automatically.
 
 ### Format
 ```
@@ -15,7 +15,7 @@ commit messages.
 [optional footer]
 ```
 
-### Types and their version impact
+### Types and their intended version impact
 
 | Prefix | Version bump | Example |
 |--------|-------------|---------|
@@ -26,12 +26,22 @@ commit messages.
 | `refactor:` | Patch | `refactor: extract HID read logic` |
 | `BREAKING CHANGE:` in body | Major (1.0.0 → 2.0.0) | Any commit whose body contains `BREAKING CHANGE:` |
 
-### What happens when you push to main
+### Publishing a release
 
-1. CI builds and tests your code
-2. Auto-tagger reads commits since last tag, determines version bump, creates tag
-3. Release workflow fires from that tag
-4. Velopack packages the app (full installer + delta patch)
-5. GitHub Release is created automatically with a generated changelog
+1. Merge the intended release commits into `main` and confirm CI passes.
+2. Select the next semantic version from the accumulated user-facing changes.
+3. Create an annotated tag on the tested `main` commit, for example:
 
-You do nothing except push good commits.
+   ```powershell
+   git tag -a v3.4.1 -m "Glorious Battery Monitor v3.4.1"
+   git push origin v3.4.1
+   ```
+
+4. The tag-driven Release workflow builds and tests the solution, publishes the
+   self-contained Windows app, and creates the Velopack installer, portable
+   package, update manifests, and GitHub release.
+5. Confirm the workflow and release assets succeeded, then replace the generated
+   changelog with the curated stable-release notes when appropriate.
+
+Use SemVer prerelease identifiers such as `v3.4.2-beta.1`; ambiguous forms such
+as `v3.4.2-beta1` are rejected by the Release workflow.
