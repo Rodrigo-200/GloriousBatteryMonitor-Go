@@ -20,6 +20,7 @@ public partial class App : Application
 
     private ServiceProvider? _serviceProvider;
     private TrayIconService? _trayService;
+    private BatteryWidgetWindow? _batteryWidgetWindow;
     private Lazy<WindowsToastService>? _lazyToastService;
     private string _activeThemePreference = "system";
     private string? _currentThemeResourceUri;
@@ -43,8 +44,13 @@ public partial class App : Application
 
             // Apply theme from settings
             var settingsService = _serviceProvider.GetRequiredService<ISettingsService>();
+            Localization.Apply(settingsService.Current.Language);
             PreviewTheme(settingsService.Current.Theme);
-            settingsService.SettingsChanged += s => ApplyTheme(s.Theme);
+            settingsService.SettingsChanged += s =>
+            {
+                ApplyTheme(s.Theme);
+                Localization.Apply(s.Language);
+            };
             ActualThemeVariantChanged += (_, _) =>
             {
                 if (string.Equals(_activeThemePreference, "system", StringComparison.Ordinal))
@@ -82,6 +88,16 @@ public partial class App : Application
             return;
 
         RestoreAndActivate(EnsureMainWindow(desktop));
+    }
+
+    public void ShowSettingsFromTray()
+    {
+        if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+            return;
+        var mainWindow = EnsureMainWindow(desktop);
+        RestoreAndActivate(mainWindow);
+        if (mainWindow.DataContext is MainViewModel vm)
+            vm.OpenSettingsCommand.Execute(null);
     }
 
     public void ToggleMainWindowFromTray()
@@ -131,6 +147,7 @@ public partial class App : Application
 
         var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
         var mainWindow = new MainWindow { DataContext = vm };
+        mainWindow.ConfigurePlacement(_serviceProvider!.GetRequiredService<ISettingsService>());
         desktop.MainWindow = mainWindow;
         return mainWindow;
     }
@@ -143,6 +160,7 @@ public partial class App : Application
             InitializeTrayAndNotifications();
 
             _ = vm.InitializeAsync();
+            ShowBatteryWidget(vm);
             desktop.ShutdownRequested += OnShutdown;
             await Task.CompletedTask;
         }
@@ -157,6 +175,7 @@ public partial class App : Application
 
                 var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
                 _ = vm.InitializeAsync();
+                ShowBatteryWidget(vm);
                 desktop.ShutdownRequested += OnShutdown;
             }
             catch
@@ -189,6 +208,7 @@ public partial class App : Application
             // Transition to main window
             var mainWindow = EnsureMainWindow(desktop);
             mainWindow.Show();
+            ShowBatteryWidget(vm);
             splash.Close();
 
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
@@ -205,8 +225,10 @@ public partial class App : Application
             {
                 var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
                 var mainWindow = new MainWindow { DataContext = vm };
+                mainWindow.ConfigurePlacement(_serviceProvider!.GetRequiredService<ISettingsService>());
                 desktop.MainWindow = mainWindow;
                 mainWindow.Show();
+                ShowBatteryWidget(vm);
                 splash.Close();
                 desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
 
@@ -290,12 +312,23 @@ public partial class App : Application
 
         // Desktop services
         services.AddSingleton<TrayIconService>();
+        services.AddSingleton<BatteryAlertSoundService>();
+        services.AddSingleton<MouseDpiMonitorService>();
         services.AddSingleton<WindowsToastService>();
         services.AddSingleton<Lazy<WindowsToastService>>(sp =>
             new Lazy<WindowsToastService>(() => sp.GetRequiredService<WindowsToastService>()));
 
         // ViewModels
-        services.AddSingleton<MainViewModel>();
+        services.AddSingleton<MainViewModel>(sp => new MainViewModel(
+            sp.GetRequiredService<IBatteryMonitorService>(),
+            sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<IHidDeviceService>(),
+            sp.GetRequiredService<IAutoStartService>(),
+            sp.GetRequiredService<IUpdateService>(),
+            sp.GetRequiredService<IStorageService>(),
+            sp.GetRequiredService<IBatteryEstimationService>(),
+            sp.GetRequiredService<BatteryAlertSoundService>(),
+            sp.GetRequiredService<MouseDpiMonitorService>()));
     }
 
     private void InitializeTrayAndNotifications()
@@ -405,6 +438,14 @@ public partial class App : Application
 
     private void OnShutdown(object? sender, ShutdownRequestedEventArgs e)
     {
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop &&
+            desktop.MainWindow is MainWindow mainWindow)
+            mainWindow.SavePlacement();
+
+        _batteryWidgetWindow?.SavePlacement();
+        _batteryWidgetWindow?.ClosePermanently();
+        _batteryWidgetWindow = null;
+
         // Only dispose if the lazy was ever initialized (i.e. at least one notification fired)
         if (_lazyToastService?.IsValueCreated == true)
             _lazyToastService.Value.Dispose();
@@ -419,6 +460,24 @@ public partial class App : Application
             _ = monitor.StopAsync();
         }
         _serviceProvider?.Dispose();
+    }
+
+    public void ShowBatteryWidgetFromTray()
+    {
+        if (_serviceProvider != null)
+            ShowBatteryWidget(_serviceProvider.GetRequiredService<MainViewModel>(), activate: true);
+    }
+
+    private void ShowBatteryWidget(MainViewModel viewModel, bool activate = false)
+    {
+        _batteryWidgetWindow ??= new BatteryWidgetWindow { DataContext = viewModel };
+        _batteryWidgetWindow.ConfigurePlacement(_serviceProvider!.GetRequiredService<ISettingsService>());
+
+        if (!_batteryWidgetWindow.IsVisible)
+            _batteryWidgetWindow.Show();
+
+        if (activate)
+            _batteryWidgetWindow.Activate();
     }
 
     private static string GetSettingsPath()

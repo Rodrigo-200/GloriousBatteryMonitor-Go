@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Media;
 using GBM.Core.Models;
+using GBM.Desktop.Services;
 
 namespace GBM.Desktop.Controls;
 
@@ -29,6 +30,7 @@ public partial class StatusBadge : UserControl
     public StatusBadge()
     {
         InitializeComponent();
+        Localization.LanguageChanged += UpdateBadge;
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -55,7 +57,7 @@ public partial class StatusBadge : UserControl
         if (IsCharging && Connection == ConnectionState.Connected)
         {
             colorKey = "BadgeChargingText";
-            label = "Charging";
+            label = Localization.Text("Charging");
             showBolt = true;
         }
         else
@@ -64,23 +66,23 @@ public partial class StatusBadge : UserControl
             {
                 case ConnectionState.Connected:
                     colorKey = "BadgeConnectedText";
-                    label = "Connected";
+                    label = Localization.Text("Connected");
                     break;
                 case ConnectionState.Connecting:
                     colorKey = "BadgeConnectingText";
-                    label = "Connecting";
+                    label = Localization.Text("Connecting");
                     break;
                 case ConnectionState.LastKnown:
                     colorKey = "BadgeLastKnownText";
-                    label = "Last Known";
+                    label = Localization.Text("LastKnown");
                     break;
                 case ConnectionState.Sleeping:
                     colorKey = "BadgeSleepingText";
-                    label = "Sleeping";
+                    label = Localization.Text("Sleeping");
                     break;
                 default:
                     colorKey = "BadgeDisconnectedText";
-                    label = "Disconnected";
+                    label = Localization.Text("Disconnected");
                     break;
             }
         }
