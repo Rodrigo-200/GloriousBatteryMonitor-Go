@@ -1,11 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Platform;
 using GBM.Core.Models;
 using GBM.Core.Services;
 using Microsoft.Extensions.Logging;
+using Microsoft.Win32;
 using System;
+using System.IO;
+using System.Threading;
 
 namespace GBM.Desktop.Services;
 
@@ -18,7 +20,14 @@ public class TrayIconService : IDisposable
     private NativeMenu? _menu;
     private NativeMenuItem? _infoItem;
     private NativeMenuItem? _updateItem;
+    private NativeMenuItem? _rescanItem;
+    private NativeMenuItem? _showItem;
+    private NativeMenuItem? _widgetItem;
+    private NativeMenuItem? _settingsItem;
+    private NativeMenuItem? _quitItem;
     private WindowIcon? _currentIcon;
+    private Timer? _promotionTimer;
+    private int _promotionAttempts;
     private int _lastLevel;
     private bool _lastCharging;
     private bool _lastConnected;
@@ -43,7 +52,7 @@ public class TrayIconService : IDisposable
         {
             _menu = new NativeMenu();
 
-            _infoItem = new NativeMenuItem("Mouse Not Found") { IsEnabled = false };
+            _infoItem = new NativeMenuItem(Localization.Text("MouseNotFound")) { IsEnabled = false };
             _menu.Items.Add(_infoItem);
             _menu.Items.Add(new NativeMenuItemSeparator());
 
@@ -51,23 +60,31 @@ public class TrayIconService : IDisposable
             _updateItem.Click += (_, _) => { /* Could open browser */ };
             _menu.Items.Add(_updateItem);
 
-            var rescanItem = new NativeMenuItem("Rescan");
-            rescanItem.Click += (_, _) => _monitorService.TriggerRescan();
-            _menu.Items.Add(rescanItem);
+            _rescanItem = new NativeMenuItem(Localization.Text("Rescan"));
+            _rescanItem.Click += (_, _) => _monitorService.TriggerRescan();
+            _menu.Items.Add(_rescanItem);
 
-            var showItem = new NativeMenuItem("Show Window");
-            showItem.Click += (_, _) => ShowMainWindow();
-            _menu.Items.Add(showItem);
+            _showItem = new NativeMenuItem(Localization.Text("MainWindow"));
+            _showItem.Click += (_, _) => ShowMainWindow();
+            _menu.Items.Add(_showItem);
+
+            _widgetItem = new NativeMenuItem(Localization.Text("Widget"));
+            _widgetItem.Click += (_, _) => ShowBatteryWidget();
+            _menu.Items.Add(_widgetItem);
+
+            _settingsItem = new NativeMenuItem(Localization.Text("Settings"));
+            _settingsItem.Click += (_, _) => ShowSettings();
+            _menu.Items.Add(_settingsItem);
 
             _menu.Items.Add(new NativeMenuItemSeparator());
 
-            var quitItem = new NativeMenuItem("Quit");
-            quitItem.Click += (_, _) =>
+            _quitItem = new NativeMenuItem(Localization.Text("Quit"));
+            _quitItem.Click += (_, _) =>
             {
                 if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
                     desktop.Shutdown();
             };
-            _menu.Items.Add(quitItem);
+            _menu.Items.Add(_quitItem);
 
             _trayIcon = new TrayIcon
             {
@@ -77,29 +94,34 @@ public class TrayIconService : IDisposable
             };
             _lastTooltipText = _trayIcon.ToolTipText ?? string.Empty;
             _trayIcon.Clicked += (_, _) => ToggleMainWindow();
-
-            // Try to set icon from embedded resource
-            try
-            {
-                var uri = new Uri("avares://GBM.Desktop/Assets/app-icon.ico");
-                _currentIcon = new WindowIcon(AssetLoader.Open(uri));
-                _trayIcon.Icon = _currentIcon;
-            }
-            catch
-            {
-                // Icon not critical
-            }
+            _lastShowPercentage = _settingsService.Current.ShowPercentageOnTrayIcon;
+            _currentIcon = TrayIconRenderer.RenderIcon(0, false, false, _lastShowPercentage);
+            _trayIcon.Icon = _currentIcon;
+            StartPromotingOwnIcon();
 
             _monitorService.BatteryStateChanged += OnBatteryStateChanged;
             _settingsService.SettingsChanged += OnSettingsChanged;
-            _lastShowPercentage = _settingsService.Current.ShowPercentageOnTrayIcon;
             _lastInfoHeaderText = _infoItem.Header?.ToString() ?? string.Empty;
+            Localization.LanguageChanged += UpdateMenuLanguage;
             _logger.LogInformation("[TRAY] Tray icon initialized");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[TRAY] Failed to initialize tray icon");
         }
+    }
+
+    private void OnSettingsChanged(AppSettings settings)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var showPercentage = settings.ShowPercentageOnTrayIcon;
+            if (showPercentage == _lastShowPercentage)
+                return;
+
+            _lastShowPercentage = showPercentage;
+            UpdateTrayIcon();
+        });
     }
 
     private void OnBatteryStateChanged(BatteryState state)
@@ -126,15 +148,15 @@ public class TrayIconService : IDisposable
                 // Update tooltip
                 var toolTipText = !_lastConnected
                     ? state.Connection == ConnectionState.LastKnown
-                        ? $"Last known: {state.Level}%"
-                        : "Mouse Not Found"
-                    : $"{state.DeviceName} — {state.Level}%{(state.IsCharging ? " (Charging)" : string.Empty)}";
+                        ? $"{Localization.Text("LastKnown")}: {state.Level}%"
+                        : Localization.Text("MouseNotFound")
+                    : $"{state.DeviceName} — {state.Level}%{(state.IsCharging ? $" ({Localization.Text("Charging")})" : string.Empty)}";
                 UpdateToolTipText(toolTipText);
 
                 // Update menu info item
                 var infoHeader = _lastConnected
                     ? $"{state.DeviceName} — {state.Level}%"
-                    : "Mouse Not Found";
+                    : Localization.Text("MouseNotFound");
                 UpdateInfoHeader(infoHeader);
             });
         }
@@ -142,19 +164,6 @@ public class TrayIconService : IDisposable
         {
             _logger.LogError(ex, "[TRAY] Error updating tray");
         }
-    }
-
-    private void OnSettingsChanged(AppSettings settings)
-    {
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-        {
-            var showPercentage = settings.ShowPercentageOnTrayIcon;
-            if (showPercentage != _lastShowPercentage)
-            {
-                _lastShowPercentage = showPercentage;
-                UpdateTrayIcon();
-            }
-        });
     }
 
     private void UpdateTrayIcon()
@@ -169,6 +178,7 @@ public class TrayIconService : IDisposable
             _currentIcon = icon;
             _trayIcon.Icon = icon;
         }
+        _trayIcon.IsVisible = true;
     }
 
     public void ShowUpdateAvailable(string version)
@@ -218,10 +228,96 @@ public class TrayIconService : IDisposable
             app.ToggleMainWindowFromTray();
     }
 
+    private void ShowSettings()
+    {
+        if (Application.Current is App app) app.ShowSettingsFromTray();
+    }
+
+    private void StartPromotingOwnIcon()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        // Explorer creates its per-icon record shortly after Shell_NotifyIcon registration.
+        _promotionTimer = new Timer(_ =>
+        {
+            if (TryPromoteOwnIcon() || Interlocked.Increment(ref _promotionAttempts) >= 20)
+            {
+                _promotionTimer?.Dispose();
+                _promotionTimer = null;
+            }
+        }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3));
+    }
+
+    private static bool TryPromoteOwnIcon()
+    {
+        var processPath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processPath))
+            return false;
+
+        using var settings = Registry.CurrentUser.OpenSubKey(
+            @"Control Panel\NotifyIconSettings", writable: false);
+        if (settings == null)
+            return false;
+
+        var promoted = false;
+        foreach (var name in settings.GetSubKeyNames())
+        {
+            using var iconSettings = settings.OpenSubKey(name, writable: true);
+            var executable = iconSettings?.GetValue("ExecutablePath") as string;
+            if (iconSettings == null || !PathsEqual(executable, processPath))
+                continue;
+
+            iconSettings.SetValue("IsPromoted", 1, RegistryValueKind.DWord);
+            promoted = true;
+        }
+
+        return promoted;
+    }
+
+    private static bool PathsEqual(string? left, string right)
+    {
+        if (string.IsNullOrWhiteSpace(left))
+            return false;
+        try
+        {
+            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private void UpdateMenuLanguage()
+    {
+        if (_menu == null) return;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            // Native menu captions are refreshed in-place while preserving menu actions.
+            if (_infoItem != null && !_lastConnected) _infoItem.Header = Localization.Text("MouseNotFound");
+            if (_rescanItem != null) _rescanItem.Header = Localization.Text("Rescan");
+            if (_showItem != null) _showItem.Header = Localization.Text("MainWindow");
+            if (_widgetItem != null) _widgetItem.Header = Localization.Text("Widget");
+            if (_settingsItem != null) _settingsItem.Header = Localization.Text("Settings");
+            if (_quitItem != null) _quitItem.Header = Localization.Text("Quit");
+        });
+    }
+
+    private void ShowBatteryWidget()
+    {
+        if (Application.Current is App app)
+            app.ShowBatteryWidgetFromTray();
+    }
+
     public void Dispose()
     {
         _monitorService.BatteryStateChanged -= OnBatteryStateChanged;
         _settingsService.SettingsChanged -= OnSettingsChanged;
+        Localization.LanguageChanged -= UpdateMenuLanguage;
+        _promotionTimer?.Dispose();
+        _promotionTimer = null;
         if (_trayIcon != null)
         {
             _trayIcon.IsVisible = false;

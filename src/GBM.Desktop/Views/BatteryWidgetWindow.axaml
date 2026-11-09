@@ -1,0 +1,83 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:GBM.Desktop.ViewModels"
+        xmlns:converters="using:GBM.Desktop.Converters"
+        xmlns:controls="using:GBM.Desktop.Controls"
+        x:Class="GBM.Desktop.Views.BatteryWidgetWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Battery Widget"
+        SizeToContent="Manual"
+        Width="156"
+        Height="24"
+        CanResize="False"
+        WindowDecorations="None"
+        ShowInTaskbar="False"
+        Topmost="True"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        WindowStartupLocation="Manual">
+
+    <Window.Resources>
+        <ResourceDictionary>
+            <converters:BatteryLevelToColorConverter x:Key="BatteryColorConverter" />
+            <ContextMenu x:Key="WidgetContextMenu">
+                <MenuItem Header="{DynamicResource Settings}" Click="OnWidgetSettingsClicked" />
+            </ContextMenu>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Border Name="WidgetSurface"
+            Background="Transparent"
+            BorderThickness="0"
+            Padding="0"
+            ContextMenu="{StaticResource WidgetContextMenu}">
+        <Grid Background="Transparent" VerticalAlignment="Center">
+            <Grid Name="DragRegion"
+                  ColumnDefinitions="Auto,Auto,Auto,Auto"
+                  VerticalAlignment="Center"
+                  Cursor="SizeAll">
+                <controls:BatteryIcon Grid.Column="0"
+                                      Width="12" Height="18"
+                                      VerticalAlignment="Center"
+                                      Level="{Binding BatteryLevel}"
+                                      IsCharging="{Binding IsCharging}"
+                                      IsConnected="{Binding IsConnected}" />
+
+                <TextBlock Grid.Column="1"
+                           Text="{Binding BatteryPercentText}"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Center"
+                           Margin="4,0,0,0">
+                    <TextBlock.Foreground>
+                        <MultiBinding Converter="{StaticResource BatteryColorConverter}">
+                            <Binding Path="BatteryLevel" />
+                            <Binding Path="IsCharging" />
+                            <Binding Path="IsConnected" />
+                        </MultiBinding>
+                    </TextBlock.Foreground>
+                </TextBlock>
+
+                <TextBlock Grid.Column="2"
+                           Text="⚡"
+                           FontSize="8"
+                           VerticalAlignment="Center"
+                           Margin="0,0,1,0"
+                           IsVisible="{Binding IsCharging}"
+                           Foreground="#B58AFF" />
+
+                <TextBlock Grid.Column="3"
+                           Text="{Binding CurrentDpiText}"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           Margin="8,0,0,0"
+                           TextWrapping="NoWrap"
+                           Foreground="{Binding DpiColorHex}"
+                           ToolTip.Tip="{Binding DpiTooltip}" />
+            </Grid>
+
+        </Grid>
+    </Border>
+</Window>

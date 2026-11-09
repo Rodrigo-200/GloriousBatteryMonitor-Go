@@ -2,8 +2,15 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:GBM.Desktop.ViewModels"
              xmlns:controls="using:GBM.Desktop.Controls"
+             xmlns:converters="using:GBM.Desktop.Converters"
              x:Class="GBM.Desktop.Views.DashboardView"
              x:DataType="vm:MainViewModel">
+
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <converters:BatteryLevelToColorConverter x:Key="BatteryColorConverter" />
+        </ResourceDictionary>
+    </UserControl.Resources>
 
     <Panel Background="{DynamicResource WindowBackgroundBrush}">
         <Grid RowDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto"
@@ -15,21 +22,32 @@
                         Classes="ghost"
                         HorizontalAlignment="Right"
                         Command="{Binding OpenSettingsCommand}"
-                        ToolTip.Tip="Settings">
+                        ToolTip.Tip="{DynamicResource Settings}">
                     <PathIcon Width="18" Height="18"
                               Foreground="{DynamicResource TextSecondaryBrush}"
                               Data="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
                 </Button>
             </Grid>
 
-            <!-- ── Row 1: Hero Battery Arc Gauge ── -->
-            <controls:BatteryGauge Grid.Row="1"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Width="270"
-                                   Level="{Binding BatteryLevel}"
-                                   IsCharging="{Binding IsCharging}"
-                                   IsConnected="{Binding IsConnected}" />
+            <!-- ── Row 1: Battery in the widget style ── -->
+            <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto" ColumnSpacing="14"
+                  HorizontalAlignment="Center" VerticalAlignment="Center">
+                <controls:BatteryIcon Width="42" Height="68" VerticalAlignment="Center"
+                                      Level="{Binding BatteryLevel}" IsCharging="{Binding IsCharging}"
+                                      IsConnected="{Binding IsConnected}" />
+                <TextBlock Grid.Column="1" Text="{Binding BatteryPercentText}" FontSize="54"
+                           FontWeight="Bold" VerticalAlignment="Center">
+                    <TextBlock.Foreground>
+                        <MultiBinding Converter="{StaticResource BatteryColorConverter}">
+                            <Binding Path="BatteryLevel" />
+                            <Binding Path="IsCharging" />
+                            <Binding Path="IsConnected" />
+                        </MultiBinding>
+                    </TextBlock.Foreground>
+                </TextBlock>
+                <TextBlock Grid.Column="2" Text="⚡" FontSize="18" Foreground="#8b5cf6"
+                           VerticalAlignment="Center" IsVisible="{Binding IsCharging}" />
+            </Grid>
 
             <!-- ── Row 2: Device Name + Connection Status ── -->
             <StackPanel Grid.Row="2"
@@ -46,6 +64,11 @@
                 <controls:StatusBadge HorizontalAlignment="Center"
                                       Connection="{Binding ConnectionState}"
                                       IsCharging="{Binding IsCharging}" />
+
+                <TextBlock Text="{Binding CurrentDpiText}"
+                           FontSize="13" FontWeight="SemiBold"
+                           Foreground="{Binding DpiColorHex}"
+                           HorizontalAlignment="Center" ToolTip.Tip="{Binding DpiTooltip}" />
             </StackPanel>
 
             <!-- ── Row 3: Stat Cards (2-up) ── -->
@@ -59,12 +82,13 @@
                         Padding="18,16">
                     <StackPanel Spacing="6">
                         <TextBlock Text="{Binding EstimateLabel}"
-                                   FontSize="11"
+                                   FontSize="10"
                                    FontWeight="Medium"
                                    Foreground="{DynamicResource TextMutedBrush}"
-                                   LetterSpacing="0.5" />
+                                   LetterSpacing="0.25"
+                                   TextWrapping="Wrap" />
                         <TextBlock Text="{Binding TimeRemainingText}"
-                                   FontSize="22"
+                                   FontSize="18"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextPrimaryBrush}" />
                     </StackPanel>
@@ -75,7 +99,7 @@
                         Classes="stat-card"
                         Padding="18,16">
                     <StackPanel Spacing="6">
-                        <TextBlock Text="CHARGED TO"
+                        <TextBlock Text="{DynamicResource ChargedTo}"
                                    FontSize="11"
                                    FontWeight="Medium"
                                    Foreground="{DynamicResource TextMutedBrush}"
@@ -95,7 +119,7 @@
                     Margin="0,0,0,12">
                 <Grid RowDefinitions="Auto,12,Auto,12,Auto">
                     <Grid ColumnDefinitions="Auto,*">
-                        <TextBlock Text="FULL CHARGE LASTS"
+                        <TextBlock Text="{DynamicResource FullChargeLasts}"
                                    FontSize="11"
                                    FontWeight="Medium"
                                    Foreground="{DynamicResource TextMutedBrush}"
@@ -110,7 +134,7 @@
                                    VerticalAlignment="Center" />
                     </Grid>
                     <Grid Grid.Row="2" ColumnDefinitions="Auto,*">
-                        <TextBlock Text="LAST CHARGE"
+                        <TextBlock Text="{DynamicResource LastCharge}"
                                    FontSize="11"
                                    FontWeight="Medium"
                                    Foreground="{DynamicResource TextMutedBrush}"
@@ -125,7 +149,7 @@
                                    VerticalAlignment="Center" />
                     </Grid>
                     <Grid Grid.Row="4" ColumnDefinitions="Auto,*">
-                        <TextBlock Text="LAST SYNC"
+                        <TextBlock Text="{DynamicResource LastSync}"
                                    FontSize="11"
                                    FontWeight="Medium"
                                    Foreground="{DynamicResource TextMutedBrush}"

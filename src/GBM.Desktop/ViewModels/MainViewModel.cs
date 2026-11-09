@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GBM.Core.Models;
 using GBM.Core.Services;
+using GBM.Desktop.Services;
 
 namespace GBM.Desktop.ViewModels;
 
@@ -21,21 +22,31 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private readonly IUpdateService _updateService;
     private readonly IStorageService _storageService;
     private readonly IBatteryEstimationService _estimationService;
+    private readonly BatteryAlertSoundService? _batteryAlertSoundService;
+    private readonly MouseDpiMonitorService? _dpiMonitorService;
     private bool _betaDefaultAppliedThisSession;
+    private readonly object _criticalSoundLock = new();
+    private bool _criticalSoundFired;
+    private string _criticalSoundDeviceName = string.Empty;
+    private const int CriticalSoundThreshold = 10;
 
     // Battery state properties
     [ObservableProperty] private int _batteryLevel;
+    [ObservableProperty] private string _batteryPercentText = "—";
     [ObservableProperty] private bool _isCharging;
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private string _deviceName = "Glorious Mouse";
     [ObservableProperty] private ConnectionState _connectionState = ConnectionState.NotConnected;
     [ObservableProperty] private string _statusText = "Not Connected";
+    [ObservableProperty] private string _currentDpiText = "DPI —";
+    [ObservableProperty] private string _dpiColorHex = "#929AA5";
+    [ObservableProperty] private string _dpiTooltip = "Ожидание отчёта мыши о DPI";
 
     // Estimation
     [ObservableProperty] private bool _hasEstimate;
     [ObservableProperty] private TimeSpan _timeRemaining;
     [ObservableProperty] private string _timeRemainingText = "—";
-    [ObservableProperty] private string _estimateLabel = "Time Remaining";
+    [ObservableProperty] private string _estimateLabel = "";
 
     // Charge history
     [ObservableProperty] private string _lastChargedText = "—";
@@ -55,7 +66,10 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private bool _startWithOS;
     [ObservableProperty] private bool _startMinimized;
     [ObservableProperty] private bool _notificationsEnabled;
+    [ObservableProperty] private string _criticalBatterySoundPath = string.Empty;
     [ObservableProperty] private bool _showPercentageOnTray;
+    [ObservableProperty] private string _language = "system";
+    [ObservableProperty] private int _languageSelectedIndex;
     [ObservableProperty] private int _refreshInterval = 5;
     [ObservableProperty] private int _lowThreshold = 20;
     [ObservableProperty] private int _criticalThreshold = 10;
@@ -98,7 +112,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         IAutoStartService autoStartService,
         IUpdateService updateService,
         IStorageService storageService,
-        IBatteryEstimationService estimationService)
+        IBatteryEstimationService estimationService,
+        BatteryAlertSoundService? batteryAlertSoundService = null,
+        MouseDpiMonitorService? dpiMonitorService = null)
     {
         _monitorService = monitorService;
         _settingsService = settingsService;
@@ -107,11 +123,38 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         _updateService = updateService;
         _storageService = storageService;
         _estimationService = estimationService;
+        _batteryAlertSoundService = batteryAlertSoundService;
+        _dpiMonitorService = dpiMonitorService;
+        if (_dpiMonitorService != null)
+            _dpiMonitorService.DpiChanged += OnDpiChanged;
 
         _monitorService.BatteryStateChanged += OnBatteryStateChanged;
         _monitorService.EstimateChanged += OnEstimateChanged;
 
         LoadSettings();
+    }
+
+    private void OnDpiChanged(int stage, int dpiX, int dpiY, string? deviceColor)
+    {
+        // The receiver reports the active DPI, but not the customized color saved in CORE.
+        // These are the Model O Pro factory stage colors.
+        var color = stage switch
+        {
+            0 => (Hex: "#E7C84A", Name: "жёлтый"),
+            1 => (Hex: "#4EA5FF", Name: "синий"),
+            2 => (Hex: "#FF8C42", Name: "оранжевый"),
+            3 => (Hex: "#50C878", Name: "зелёный"),
+            _ => (Hex: "#929AA5", Name: "цвет по умолчанию неизвестен")
+        };
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            CurrentDpiText = dpiX == dpiY ? $"{dpiX} DPI" : $"{dpiX}×{dpiY} DPI";
+            DpiColorHex = deviceColor ?? color.Hex;
+            DpiTooltip = deviceColor != null
+                ? $"Ступень {stage + 1}: {dpiX}×{dpiY} DPI. Цвет прочитан из профиля мыши."
+                : $"Ступень {stage + 1}: {dpiX}×{dpiY} DPI, {color.Name}. Цвет взят из заводской схемы.";
+        });
     }
 
     public bool IsSystemThemeSelected => CurrentTheme == "system";
@@ -124,6 +167,10 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         _ => 0
     };
     public object? SettingsOverlayContent => IsSettingsOpen ? this : null;
+    public bool HasCriticalBatterySound => !string.IsNullOrWhiteSpace(CriticalBatterySoundPath);
+    public string CriticalBatterySoundName => HasCriticalBatterySound
+        ? Path.GetFileName(CriticalBatterySoundPath)
+        : "No sound selected";
 
     public async Task InitializeAsync()
     {
@@ -223,6 +270,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     private void OnBatteryStateChanged(BatteryState state)
     {
+        ProcessCriticalBatterySound(state);
+
         Dispatcher.UIThread.Post(() =>
         {
             BatteryLevel = state.Level;
@@ -230,9 +279,10 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             IsConnected = state.Connection == ConnectionState.Connected ||
                          state.Connection == ConnectionState.LastKnown ||
                          state.Connection == ConnectionState.Sleeping;
+            BatteryPercentText = IsConnected ? $"{state.Level}%" : "—";
             DeviceName = state.DeviceName;
             ConnectionState = state.Connection;
-            EstimateLabel = state.IsCharging ? "Time to Full" : "Time Remaining";
+            EstimateLabel = Localization.Text(state.IsCharging ? "TimeToFull" : "TimeRemaining");
 
             if (state.LastReadTime > DateTime.MinValue)
                 _lastReadTime = state.LastReadTime;
@@ -249,6 +299,49 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
             UpdateLastSyncTextAndSchedule();
         });
+    }
+
+    private void ProcessCriticalBatterySound(BatteryState state)
+    {
+        string? soundPath = null;
+
+        lock (_criticalSoundLock)
+        {
+            bool isBelowThreshold = state.Connection == ConnectionState.Connected &&
+                                    !state.IsCharging &&
+                                    state.Level <= CriticalSoundThreshold;
+
+            if (!isBelowThreshold)
+            {
+                _criticalSoundFired = false;
+                _criticalSoundDeviceName = state.DeviceName;
+                return;
+            }
+
+            if (!string.Equals(_criticalSoundDeviceName, state.DeviceName, StringComparison.Ordinal))
+            {
+                _criticalSoundDeviceName = state.DeviceName;
+                _criticalSoundFired = false;
+            }
+
+            if (_criticalSoundFired)
+                return;
+
+            _criticalSoundFired = true;
+            soundPath = _settingsService.Current.CriticalBatterySoundPath;
+        }
+
+        if (!string.IsNullOrWhiteSpace(soundPath) && _batteryAlertSoundService != null)
+            _ = _batteryAlertSoundService.PlayAsync(soundPath);
+    }
+
+    partial void OnCriticalBatterySoundPathChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasCriticalBatterySound));
+        OnPropertyChanged(nameof(CriticalBatterySoundName));
+
+        lock (_criticalSoundLock)
+            _criticalSoundFired = false;
     }
 
     private void OnEstimateChanged(BatteryEstimate estimate)
@@ -326,8 +419,29 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         FullChargeDurationText = "—";
     }
 
-    private static string FormatDuration(TimeSpan span, bool includeMinutesForDays = false)
+    private string FormatDuration(TimeSpan span, bool includeMinutesForDays = false)
     {
+        if (Localization.CurrentLanguage == "ru")
+        {
+            int daysRu = (int)span.TotalDays;
+            int hoursRu = span.Hours;
+            int minsRu = span.Minutes;
+            if (span.TotalHours >= 24)
+            {
+                var result = $"{daysRu} {RussianUnit(daysRu, "день", "дня", "дней")}";
+                if (hoursRu > 0 || includeMinutesForDays)
+                    result += $" {hoursRu} {RussianUnit(hoursRu, "час", "часа", "часов")}";
+                if (includeMinutesForDays && minsRu > 0)
+                    result += $" {minsRu} {RussianUnit(minsRu, "минута", "минуты", "минут")}";
+                return result;
+            }
+
+            int totalHours = (int)span.TotalHours;
+            return totalHours > 0
+                ? $"{totalHours} {RussianUnit(totalHours, "час", "часа", "часов")} {minsRu} {RussianUnit(minsRu, "минута", "минуты", "минут")}"
+                : $"{minsRu} {RussianUnit(minsRu, "минута", "минуты", "минут")}";
+        }
+
         if (span.TotalHours >= 24)
         {
             int days = (int)span.TotalDays;
@@ -345,6 +459,13 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         return shortHours > 0 ? $"{shortHours}h {shortMins}m" : $"{shortMins}m";
     }
 
+    private static string RussianUnit(int value, string one, string few, string many)
+    {
+        var n = Math.Abs(value) % 100;
+        if (n is >= 11 and <= 14) return many;
+        return (Math.Abs(value) % 10) switch { 1 => one, >= 2 and <= 4 => few, _ => many };
+    }
+
     private void LoadSettings()
     {
         TryEnableBetaByDefaultForPrereleaseBuild();
@@ -353,7 +474,10 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         StartWithOS = s.StartWithOS;
         StartMinimized = s.StartMinimized;
         NotificationsEnabled = s.NotificationsEnabled;
+        CriticalBatterySoundPath = s.CriticalBatterySoundPath;
         ShowPercentageOnTray = s.ShowPercentageOnTrayIcon;
+        Language = Localization.Normalize(s.Language);
+        LanguageSelectedIndex = Language switch { "ru" => 2, "en" => 1, _ => 0 };
         RefreshInterval = s.RefreshIntervalSeconds;
         LowThreshold = s.LowBatteryThreshold;
         CriticalThreshold = s.CriticalBatteryThreshold;
@@ -413,21 +537,21 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         bool oldBetaSetting = _settingsService.Current.EnableBetaUpdates;
 
-        var settings = new AppSettings
-        {
-            StartWithOS = StartWithOS,
-            StartMinimized = StartMinimized,
-            NotificationsEnabled = NotificationsEnabled,
-            ShowPercentageOnTrayIcon = ShowPercentageOnTray,
-            RefreshIntervalSeconds = Math.Clamp(RefreshInterval, 1, 60),
-            LowBatteryThreshold = Math.Clamp(LowThreshold, 5, 50),
-            CriticalBatteryThreshold = Math.Clamp(CriticalThreshold, 5, 30),
-            NotificationCooldownMinutes = Math.Clamp(NotificationCooldownMinutes, 1, 60),
-            DebugLogging = DebugLogging,
-            Theme = CurrentTheme,
-            EnableBetaUpdates = EnableBetaUpdates,
-            HasSetBetaChannelPreference = true
-        };
+        var settings = _settingsService.Current.Clone();
+        settings.StartWithOS = StartWithOS;
+        settings.StartMinimized = StartMinimized;
+        settings.NotificationsEnabled = NotificationsEnabled;
+        settings.CriticalBatterySoundPath = CriticalBatterySoundPath;
+        settings.ShowPercentageOnTrayIcon = ShowPercentageOnTray;
+        settings.Language = Language;
+        settings.RefreshIntervalSeconds = Math.Clamp(RefreshInterval, 1, 60);
+        settings.LowBatteryThreshold = Math.Clamp(LowThreshold, 5, 50);
+        settings.CriticalBatteryThreshold = Math.Clamp(CriticalThreshold, 5, 30);
+        settings.NotificationCooldownMinutes = Math.Clamp(NotificationCooldownMinutes, 1, 60);
+        settings.DebugLogging = DebugLogging;
+        settings.Theme = CurrentTheme;
+        settings.EnableBetaUpdates = EnableBetaUpdates;
+        settings.HasSetBetaChannelPreference = true;
 
         bool betaSettingChanged = oldBetaSetting != settings.EnableBetaUpdates;
 
@@ -450,6 +574,16 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
             _ = CheckForUpdateAsync();
         }
+    }
+
+    [RelayCommand]
+    private async Task TestCriticalBatterySoundAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CriticalBatterySoundPath) || _batteryAlertSoundService == null)
+            return;
+
+        if (!await _batteryAlertSoundService.PlayAsync(CriticalBatterySoundPath))
+            ShowToast("Could not play the selected sound file");
     }
 
     [RelayCommand]
@@ -643,6 +777,19 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ThemeSelectedIndex));
     }
 
+    partial void OnLanguageChanged(string value)
+    {
+        Localization.Apply(value);
+        LanguageSelectedIndex = value switch { "ru" => 2, "en" => 1, _ => 0 };
+        EstimateLabel = Localization.Text(IsCharging ? "TimeToFull" : "TimeRemaining");
+        UpdateLastSyncText();
+    }
+
+    partial void OnLanguageSelectedIndexChanged(int value)
+    {
+        Language = value switch { 2 => "ru", 1 => "en", _ => "system" };
+    }
+
     partial void OnIsSettingsOpenChanged(bool value)
     {
         OnPropertyChanged(nameof(SettingsOverlayContent));
@@ -652,6 +799,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        if (_dpiMonitorService != null)
+            _dpiMonitorService.DpiChanged -= OnDpiChanged;
         _monitorService.BatteryStateChanged -= OnBatteryStateChanged;
         _monitorService.EstimateChanged -= OnEstimateChanged;
         _lastSyncTimer?.Stop();
@@ -706,11 +855,30 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
         var elapsed = DateTime.UtcNow - _lastReadTime.Value;
 
-        LastSyncText = elapsed.TotalSeconds < 5 ? "Just now"
-            : elapsed.TotalSeconds < 60 ? $"{(int)elapsed.TotalSeconds}s ago"
-            : elapsed.TotalMinutes < 60 ? $"{(int)elapsed.TotalMinutes}m ago"
-            : elapsed.TotalHours < 24 ? $"{(int)elapsed.TotalHours}h ago"
-            : $"{(int)elapsed.TotalDays}d ago";
+        if (elapsed.TotalSeconds < 5)
+        {
+            LastSyncText = Localization.Text("JustNow");
+            return;
+        }
+
+        if (Localization.CurrentLanguage == "ru")
+        {
+            var amount = elapsed.TotalMinutes < 1 ? (int)elapsed.TotalSeconds
+                : elapsed.TotalHours < 1 ? (int)elapsed.TotalMinutes
+                : elapsed.TotalDays < 1 ? (int)elapsed.TotalHours : (int)elapsed.TotalDays;
+            var unit = elapsed.TotalMinutes < 1 ? RussianUnit(amount, "секунда", "секунды", "секунд")
+                : elapsed.TotalHours < 1 ? RussianUnit(amount, "минута", "минуты", "минут")
+                : elapsed.TotalDays < 1 ? RussianUnit(amount, "час", "часа", "часов")
+                : RussianUnit(amount, "день", "дня", "дней");
+            LastSyncText = $"{amount} {unit} назад";
+        }
+        else
+        {
+            LastSyncText = elapsed.TotalSeconds < 60 ? $"{(int)elapsed.TotalSeconds}s ago"
+                : elapsed.TotalMinutes < 60 ? $"{(int)elapsed.TotalMinutes}m ago"
+                : elapsed.TotalHours < 24 ? $"{(int)elapsed.TotalHours}h ago"
+                : $"{(int)elapsed.TotalDays}d ago";
+        }
     }
 
     private static TimeSpan GetNextLastSyncUpdateDelay(DateTime lastReadTimeUtc, DateTime nowUtc)

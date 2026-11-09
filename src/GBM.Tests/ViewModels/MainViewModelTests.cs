@@ -188,6 +188,18 @@ public class MainViewModelTests
         viewModel.IsSettingsOpen.Should().BeFalse();
     }
 
+    [Fact]
+    public void SaveSettingsCommand_PreservesTrayPercentageOption()
+    {
+        var settingsService = new TestSettingsService(new AppSettings());
+        var viewModel = CreateViewModel(settingsService);
+
+        viewModel.ShowPercentageOnTray = true;
+        viewModel.SaveSettingsCommand.Execute(null);
+
+        settingsService.Current.ShowPercentageOnTrayIcon.Should().BeTrue();
+    }
+
     private static MainViewModel CreateViewModel(TestSettingsService settingsService)
     {
         var monitorService = new Mock<IBatteryMonitorService>();

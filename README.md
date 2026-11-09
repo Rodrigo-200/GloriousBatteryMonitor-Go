@@ -61,8 +61,7 @@
 
 ## 🖱️ Supported Devices
 
-> Tested and confirmed working with **Model D/D2 Wireless**.  
-> Active work is ongoing to support the **Model I2 Wireless**.
+> The wireless **Model O Pro** is recognized by the app and uses the Glorious HID battery reader. Its battery query has not yet been confirmed on physical Model O Pro hardware, so treat support as experimental until verified with your mouse.
 
 | Model | Wired | Wireless | Status |
 |-------|-------|----------|:------:|
@@ -73,7 +72,7 @@
 | Model D- | ❔ | ❔ | Untested |
 | **Model D2** | ✅ | ✅ | ✅ Working |
 | Model I2 | ✅ | ✅ | ✅ Working |
-| Model O Pro | ❔ | ❔ | Untested |
+| **Model O Pro** | ❔ | 🧪 | Experimental — wireless PID recognized; hardware verification pending |
 
 **Known Vendor IDs:** `0x258A` (Glorious LLC), `0x093A` (Pixart — used by newer receivers)
 
@@ -83,7 +82,7 @@
 ```
 Model O:      0x2011 (Wired), 0x2013 (Wireless)
 Model O-:     0x2019 (Wired), 0x2024 (Wireless)
-Model O Pro:  0x2017 (Wired), 0x2018 (Wireless)
+Model O Pro:  0x2017 (Wired), 0x2018 (Wireless), 0x2027 (2.4 GHz receiver)
 Model O2:     0x2009 (Wired), 0x200b (Wireless)
 Model D:      0x2012 (Wired), 0x2023 (Wireless)
 Model D-:     0x2015 (Wired), 0x2025 (Wireless)
@@ -93,6 +92,14 @@ Model I2:     0x2014 (Wired), 0x2016 (Wireless)
 ```
 
 </details>
+
+### Model O Pro quick start
+
+1. Connect the mouse with its 2.4 GHz receiver and turn it on.
+2. Build and run the app using the instructions below. The app should identify it as **Model O Pro** and begin probing its battery interface automatically.
+3. If the app reports **Disconnected** or cannot read a level, close Glorious CORE while checking, then open an issue with the debug log at `%APPDATA%\GloriousBatteryMonitor\debug.log` and the mouse's VID/PID. The receiver must remain connected during the reading.
+
+The wired PID (`0x2017`) is listed for identification; this battery monitor is primarily intended to read charge while the mouse is wireless through its receiver.
 
 ---
 

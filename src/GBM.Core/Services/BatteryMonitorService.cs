@@ -77,6 +77,8 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
     private const int MaxEstimatedLevel = 99;     // Can't confirm 100% without real reading
     private const int SuspiciousChargingLowThreshold = 10;
     private const int SuspiciousChargingDropThreshold = 20;
+    private const int BatteryReadMaxAttempts = 10;
+    private static readonly TimeSpan BatteryReadRetryDelay = TimeSpan.FromMilliseconds(250);
 
     private static readonly TimeSpan ReconnectDebounce = TimeSpan.FromMilliseconds(900);
     private static readonly TimeSpan ReconnectCooldown = TimeSpan.FromSeconds(45);
@@ -396,7 +398,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 _cableDisconnectTime = null;
 
                 // Normal wireless mode - read from dongle.
-                var result = _hidDeviceService.ReadBattery(_activeProfile);
+                var result = ReadBatteryWithRetries(_activeProfile);
                 if (result.Success)
                 {
                     _consecutiveFailures = 0;
@@ -547,7 +549,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         if (_activeProfile == null)
             return false;
 
-        var result = _hidDeviceService.ReadBattery(_activeProfile);
+        var result = ReadBatteryWithRetries(_activeProfile);
         if (!result.Success || result.BatteryLevel <= 0 || result.BatteryLevel > 100)
             return false;
 
@@ -574,6 +576,45 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         bool implausibleDrop = (_lastPositiveLevel - level) >= SuspiciousChargingDropThreshold;
 
         return implausiblyLow || implausibleDrop;
+    }
+
+    private (bool Success, int BatteryLevel, bool IsCharging) ReadBatteryWithRetries(DeviceProfile profile)
+    {
+        // Pixart candidates have transport-specific retry strategies and can already
+        // block for several seconds per read. Keep their existing behavior unchanged.
+        if (profile.Protocol == ChipProtocol.Pixart)
+            return _hidDeviceService.ReadBattery(profile);
+
+        (bool Success, int BatteryLevel, bool IsCharging) result = default;
+        for (int attempt = 1; attempt <= BatteryReadMaxAttempts; attempt++)
+        {
+            result = _hidDeviceService.ReadBattery(profile);
+            if (result.Success)
+            {
+                if (attempt > 1)
+                {
+                    _logger.LogDebug(
+                        "[MONITOR] Battery response received on retry {Attempt}/{Max} for {Model}",
+                        attempt, BatteryReadMaxAttempts, profile.ModelName);
+                }
+
+                return result;
+            }
+
+            if (attempt < BatteryReadMaxAttempts)
+            {
+                _logger.LogDebug(
+                    "[MONITOR] No battery response for {Model}; retry {NextAttempt}/{Max} in {Delay}ms",
+                    profile.ModelName, attempt + 1, BatteryReadMaxAttempts,
+                    (int)BatteryReadRetryDelay.TotalMilliseconds);
+                Thread.Sleep(BatteryReadRetryDelay);
+            }
+        }
+
+        _logger.LogDebug(
+            "[MONITOR] No battery response for {Model} after {Max} attempts",
+            profile.ModelName, BatteryReadMaxAttempts);
+        return result;
     }
 
     private void AttemptDeviceDiscovery()
@@ -618,7 +659,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     && (profile.PixartMethod == PixartBatteryMethod.CandidateF
                         || profile.PixartMethod == PixartBatteryMethod.CandidateG);
 
-                int maxAttempts = isIntermittent ? 5 : 1;
+                int maxAttempts = GetSavedProfileMaxAttempts(profile);
 
                 if (isIntermittent && maxAttempts > 1)
                 {
@@ -647,9 +688,12 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     if (attempt < maxAttempts)
                     {
                         _logger.LogDebug(
-                            "[MONITOR] Saved profile retry {Attempt}/{Max} failed for {Model}, waiting 5s...",
+                            "[MONITOR] Saved profile retry {Attempt}/{Max} failed for {Model}",
                             attempt, maxAttempts, profile.ModelName);
-                        Thread.Sleep(5000);
+                        if (isIntermittent)
+                            Thread.Sleep(5000);
+                        else
+                            Thread.Sleep(BatteryReadRetryDelay);
                     }
                 }
             }
@@ -697,6 +741,18 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         {
             _logger.LogError(ex, "Error during device discovery");
         }
+    }
+
+    internal static int GetSavedProfileMaxAttempts(DeviceProfile profile)
+    {
+        if (profile.Protocol == ChipProtocol.Sinowealth)
+            return BatteryReadMaxAttempts;
+
+        if (profile.Protocol == ChipProtocol.Pixart
+            && profile.PixartMethod is PixartBatteryMethod.CandidateF or PixartBatteryMethod.CandidateG)
+            return 5;
+
+        return 1;
     }
 
     private void ProcessSuccessfulRead(int level, bool isCharging, bool skipEstimationSample = false)
@@ -1073,7 +1129,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                 }
 
                 // Try an immediate battery read - works for Sinowealth and some Pixart methods
-                var result = _hidDeviceService.ReadBattery(profile);
+                var result = ReadBatteryWithRetries(profile);
                 if (result.Success)
                 {
                     _logger.LogInformation("Restored cached profile for {Model} (read OK)", profile.ModelName);
