@@ -4,6 +4,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace GBM.Desktop.Services;
 
@@ -22,10 +23,10 @@ internal static class TrayIconRenderer
     private static readonly Color GrayColor = Color.Parse("#6B7280");
     private static readonly Color OutlineColor = Color.Parse("#9CA3AF");
 
-    public static WindowIcon? RenderIcon(int level, bool isCharging, bool isConnected)
+    public static WindowIcon? RenderIcon(int level, bool isCharging, bool isConnected, bool showPercentage)
     {
         level = Math.Clamp(level, 0, 100);
-        var cacheKey = NormalizeKey(level, isCharging, isConnected);
+        var cacheKey = NormalizeKey(level, isCharging, isConnected, showPercentage);
 
         try
         {
@@ -42,6 +43,7 @@ internal static class TrayIconRenderer
                     Level = cacheKey.Level,
                     IsCharging = cacheKey.IsCharging,
                     IsConnected = cacheKey.IsConnected,
+                    ShowPercentage = cacheKey.ShowPercentage,
                     Width = IconSize,
                     Height = IconSize
                 };
@@ -63,15 +65,15 @@ internal static class TrayIconRenderer
         }
     }
 
-    private static IconCacheKey NormalizeKey(int level, bool isCharging, bool isConnected)
+    private static IconCacheKey NormalizeKey(int level, bool isCharging, bool isConnected, bool showPercentage)
     {
         if (!isConnected)
         {
             // Disconnected icon rendering does not vary by level/charging/percentage mode.
-            return new IconCacheKey(0, false, false);
+            return new IconCacheKey(0, false, false, false);
         }
 
-        return new IconCacheKey(level, isCharging, true);
+        return new IconCacheKey(level, isCharging, true, showPercentage);
     }
 
     private static void TouchCacheEntry(CacheEntry entry)
@@ -115,7 +117,8 @@ internal static class TrayIconRenderer
     private readonly record struct IconCacheKey(
         int Level,
         bool IsCharging,
-        bool IsConnected);
+        bool IsConnected,
+        bool ShowPercentage);
 
     private static Color GetFillColor(int level, bool isCharging, bool isConnected)
     {
@@ -131,9 +134,34 @@ internal static class TrayIconRenderer
         public int Level { get; init; }
         public bool IsCharging { get; init; }
         public bool IsConnected { get; init; }
+        public bool ShowPercentage { get; init; }
         public override void Render(DrawingContext context)
         {
-            RenderBatteryMode(context);
+            if (ShouldRenderPercentage(IsConnected, ShowPercentage))
+                RenderPercentageMode(context);
+            else
+                RenderBatteryMode(context);
+        }
+
+        private void RenderPercentageMode(DrawingContext ctx)
+        {
+            var fillColor = GetFillColor(Level, IsCharging, IsConnected);
+            var fontSize = Level >= 100 ? 14.0 : (Level >= 10 ? 18.0 : 22.0);
+            var formattedText = new FormattedText(
+                Level.ToString(CultureInfo.InvariantCulture),
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold),
+                fontSize,
+                new SolidColorBrush(fillColor));
+
+            ctx.DrawText(formattedText, new Point(
+                (IconSize - formattedText.Width) / 2.0,
+                (IconSize - formattedText.Height) / 2.0));
+
+            if (IsCharging)
+                ctx.DrawRectangle(new SolidColorBrush(BlueColor), null,
+                    new RoundedRect(new Rect(24, 24, 6, 6), 3));
         }
 
         private void RenderBatteryMode(DrawingContext ctx)
@@ -156,4 +184,7 @@ internal static class TrayIconRenderer
             }
         }
     }
+
+    internal static bool ShouldRenderPercentage(bool isConnected, bool showPercentage)
+        => isConnected && showPercentage;
 }

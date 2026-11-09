@@ -14,6 +14,7 @@ namespace GBM.Desktop.Services;
 public class TrayIconService : IDisposable
 {
     private readonly IBatteryMonitorService _monitorService;
+    private readonly ISettingsService _settingsService;
     private readonly ILogger<TrayIconService> _logger;
     private TrayIcon? _trayIcon;
     private NativeMenu? _menu;
@@ -30,15 +31,18 @@ public class TrayIconService : IDisposable
     private int _lastLevel;
     private bool _lastCharging;
     private bool _lastConnected;
+    private bool _lastShowPercentage;
     private string _lastTooltipText = string.Empty;
     private string _lastInfoHeaderText = string.Empty;
     private string _lastUpdateHeaderText = string.Empty;
 
     public TrayIconService(
         IBatteryMonitorService monitorService,
+        ISettingsService settingsService,
         ILogger<TrayIconService> logger)
     {
         _monitorService = monitorService;
+        _settingsService = settingsService;
         _logger = logger;
     }
 
@@ -90,11 +94,13 @@ public class TrayIconService : IDisposable
             };
             _lastTooltipText = _trayIcon.ToolTipText ?? string.Empty;
             _trayIcon.Clicked += (_, _) => ToggleMainWindow();
-            _currentIcon = TrayIconRenderer.RenderIcon(0, false, false);
+            _lastShowPercentage = _settingsService.Current.ShowPercentageOnTrayIcon;
+            _currentIcon = TrayIconRenderer.RenderIcon(0, false, false, _lastShowPercentage);
             _trayIcon.Icon = _currentIcon;
             StartPromotingOwnIcon();
 
             _monitorService.BatteryStateChanged += OnBatteryStateChanged;
+            _settingsService.SettingsChanged += OnSettingsChanged;
             _lastInfoHeaderText = _infoItem.Header?.ToString() ?? string.Empty;
             Localization.LanguageChanged += UpdateMenuLanguage;
             _logger.LogInformation("[TRAY] Tray icon initialized");
@@ -103,6 +109,19 @@ public class TrayIconService : IDisposable
         {
             _logger.LogError(ex, "[TRAY] Failed to initialize tray icon");
         }
+    }
+
+    private void OnSettingsChanged(AppSettings settings)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var showPercentage = settings.ShowPercentageOnTrayIcon;
+            if (showPercentage == _lastShowPercentage)
+                return;
+
+            _lastShowPercentage = showPercentage;
+            UpdateTrayIcon();
+        });
     }
 
     private void OnBatteryStateChanged(BatteryState state)
@@ -151,7 +170,8 @@ public class TrayIconService : IDisposable
     {
         if (_trayIcon == null) return;
 
-        var icon = TrayIconRenderer.RenderIcon(_lastLevel, _lastCharging, _lastConnected);
+        var icon = TrayIconRenderer.RenderIcon(
+            _lastLevel, _lastCharging, _lastConnected, _lastShowPercentage);
 
         if (icon != null && !ReferenceEquals(_currentIcon, icon))
         {
@@ -294,6 +314,7 @@ public class TrayIconService : IDisposable
     public void Dispose()
     {
         _monitorService.BatteryStateChanged -= OnBatteryStateChanged;
+        _settingsService.SettingsChanged -= OnSettingsChanged;
         Localization.LanguageChanged -= UpdateMenuLanguage;
         _promotionTimer?.Dispose();
         _promotionTimer = null;

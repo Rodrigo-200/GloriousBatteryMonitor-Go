@@ -659,7 +659,7 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
                     && (profile.PixartMethod == PixartBatteryMethod.CandidateF
                         || profile.PixartMethod == PixartBatteryMethod.CandidateG);
 
-                int maxAttempts = isIntermittent ? 5 : BatteryReadMaxAttempts;
+                int maxAttempts = GetSavedProfileMaxAttempts(profile);
 
                 if (isIntermittent && maxAttempts > 1)
                 {
@@ -741,6 +741,18 @@ public class BatteryMonitorService : IBatteryMonitorService, IDisposable
         {
             _logger.LogError(ex, "Error during device discovery");
         }
+    }
+
+    internal static int GetSavedProfileMaxAttempts(DeviceProfile profile)
+    {
+        if (profile.Protocol == ChipProtocol.Sinowealth)
+            return BatteryReadMaxAttempts;
+
+        if (profile.Protocol == ChipProtocol.Pixart
+            && profile.PixartMethod is PixartBatteryMethod.CandidateF or PixartBatteryMethod.CandidateG)
+            return 5;
+
+        return 1;
     }
 
     private void ProcessSuccessfulRead(int level, bool isCharging, bool skipEstimationSample = false)

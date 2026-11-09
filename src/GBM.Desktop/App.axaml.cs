@@ -24,6 +24,7 @@ public partial class App : Application
     private Lazy<WindowsToastService>? _lazyToastService;
     private string _activeThemePreference = "system";
     private string? _currentThemeResourceUri;
+    private LanguagePreferenceTracker? _languagePreferenceTracker;
 
     public static ServiceProvider? Services { get; private set; }
 
@@ -44,12 +45,14 @@ public partial class App : Application
 
             // Apply theme from settings
             var settingsService = _serviceProvider.GetRequiredService<ISettingsService>();
+            _languagePreferenceTracker = new LanguagePreferenceTracker(settingsService.Current.Language);
             Localization.Apply(settingsService.Current.Language);
             PreviewTheme(settingsService.Current.Theme);
             settingsService.SettingsChanged += s =>
             {
                 ApplyTheme(s.Theme);
-                Localization.Apply(s.Language);
+                if (_languagePreferenceTracker?.HasChanged(s.Language) == true)
+                    Localization.Apply(s.Language);
             };
             ActualThemeVariantChanged += (_, _) =>
             {
