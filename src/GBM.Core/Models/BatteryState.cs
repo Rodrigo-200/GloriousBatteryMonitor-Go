@@ -24,6 +24,8 @@ public record BatteryState
     public ConnectionState Connection { get; init; }
     public BatteryHealth Health { get; init; }
     public string DeviceName { get; init; } = "Glorious Mouse";
+    public int VendorId { get; init; }
+    public int ProductId { get; init; }
     public DateTime LastReadTime { get; init; }
     public DateTime? LastChargeTime { get; init; }
     public int? LastChargeLevel { get; init; }

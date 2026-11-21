@@ -61,8 +61,7 @@
 
 ## 🖱️ Supported Devices
 
-> Tested and confirmed working with **Model D/D2 Wireless**.  
-> Active work is ongoing to support the **Model I2 Wireless**.
+> **Model D/D2 Wireless** and **Model I2 Wireless** are supported. Model O Pro battery and DPI reporting were tested on one `258A:2027` wireless receiver in [PR #75](https://github.com/Rodrigo-200/GloriousBatteryMonitor-Go/pull/75). Other Model O Pro variants still need hardware verification.
 
 | Model | Wired | Wireless | Status |
 |-------|-------|----------|:------:|
@@ -73,7 +72,7 @@
 | Model D- | ❔ | ❔ | Untested |
 | **Model D2** | ✅ | ✅ | ✅ Working |
 | Model I2 | ✅ | ✅ | ✅ Working |
-| Model O Pro | ❔ | ❔ | Untested |
+| **Model O Pro** | ❔ | 🧪 | Experimental — `258A:2027` receiver |
 
 **Known Vendor IDs:** `0x258A` (Glorious LLC), `0x093A` (Pixart — used by newer receivers)
 
@@ -83,7 +82,7 @@
 ```
 Model O:      0x2011 (Wired), 0x2013 (Wireless)
 Model O-:     0x2019 (Wired), 0x2024 (Wireless)
-Model O Pro:  0x2017 (Wired), 0x2018 (Wireless)
+Model O Pro:  0x2017 (Wired), 0x2018 (Wireless), 0x2027 (2.4 GHz receiver)
 Model O2:     0x2009 (Wired), 0x200b (Wireless)
 Model D:      0x2012 (Wired), 0x2023 (Wireless)
 Model D-:     0x2015 (Wired), 0x2025 (Wireless)
@@ -93,6 +92,14 @@ Model I2:     0x2014 (Wired), 0x2016 (Wireless)
 ```
 
 </details>
+
+### Model O Pro quick start
+
+1. Connect the mouse with its 2.4 GHz receiver and turn it on.
+2. Build and run the app using the instructions below. The app should identify it as **Model O Pro** and begin probing its battery interface automatically.
+3. If the app reports **Disconnected** or cannot read a level, close Glorious CORE while checking, then open an issue with the mouse's VID/PID and the relevant lines from `%APPDATA%\GloriousBatteryMonitor\debug.log`. Remove personal paths and device serial numbers from the excerpt. The receiver must remain connected during the reading.
+
+The wired PID (`0x2017`) is listed for identification; this battery monitor is primarily intended to read charge while the mouse is wireless through its receiver.
 
 ---
 

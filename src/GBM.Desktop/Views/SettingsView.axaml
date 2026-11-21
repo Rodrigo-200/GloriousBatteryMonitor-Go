@@ -11,6 +11,38 @@
     </UserControl.Resources>
 
     <UserControl.Styles>
+        <!-- Sound field icon buttons: clearly dimmed while there is no sound to play. -->
+        <Style Selector="Button.icon:disabled">
+            <Setter Property="Opacity" Value="0.35" />
+        </Style>
+
+        <!-- Language picker: same 36 px height / 8 px radius as the sound field and theme switcher. -->
+        <Style Selector="ComboBox.app-select">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="12,0,4,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="ComboBox.app-select /template/ PathIcon#DropDownGlyph">
+            <Setter Property="Width" Value="10" />
+            <Setter Property="Height" Value="10" />
+        </Style>
+        <Style Selector="ComboBox.app-select /template/ Border#PopupBorder">
+            <Setter Property="BoxShadow" Value="0 8 24 0 #33000000" />
+        </Style>
+        <Style Selector="ComboBox.app-select ComboBoxItem">
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="ComboBox.app-select ComboBoxItem:selected">
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
     </UserControl.Styles>
 
     <!-- Full-Page Settings View -->
@@ -18,7 +50,7 @@
 
         <!-- ── Header ── -->
         <Grid Grid.Row="0" Margin="32,64,32,16" ColumnDefinitions="*,Auto">
-            <TextBlock Text="Settings"
+            <TextBlock Text="{DynamicResource Settings}"
                        FontSize="26"
                        FontWeight="Bold"
                        Foreground="{DynamicResource TextPrimaryBrush}"
@@ -38,9 +70,9 @@
 
                 <!-- ── GENERAL ── -->
                 <StackPanel Spacing="8">
-                    <TextBlock Text="GENERAL"
+                    <TextBlock Text="{DynamicResource General}"
                                FontSize="11" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextMutedBrush}"
+                               Foreground="{DynamicResource TextLabelBrush}"
                                LetterSpacing="1.5"
                                Margin="8,0,0,0" />
 
@@ -50,8 +82,8 @@
                             <Border Classes="setting-row">
                                 <Grid ColumnDefinitions="*,Auto">
                                     <StackPanel Spacing="2" VerticalAlignment="Center">
-                                        <TextBlock Text="Start with OS" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock Text="Launch automatically on startup" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <TextBlock Text="{DynamicResource StartWithOS}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource AutoStart}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
                                     </StackPanel>
                                     <ToggleSwitch Grid.Column="1" IsChecked="{Binding StartWithOS}" VerticalAlignment="Center" />
                                 </Grid>
@@ -61,8 +93,8 @@
                             <Border Classes="setting-row">
                                 <Grid ColumnDefinitions="*,Auto">
                                     <StackPanel Spacing="2" VerticalAlignment="Center">
-                                        <TextBlock Text="Start Minimized" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock Text="Start in system tray" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <TextBlock Text="{DynamicResource StartMinimized}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource StartTray}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
                                     </StackPanel>
                                     <ToggleSwitch Grid.Column="1" IsChecked="{Binding StartMinimized}" VerticalAlignment="Center" />
                                 </Grid>
@@ -72,8 +104,8 @@
                             <Border Classes="setting-row">
                                 <StackPanel Spacing="12">
                                     <StackPanel Spacing="2">
-                                        <TextBlock Text="Theme" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock Text="Appearance of the application" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <TextBlock Text="{DynamicResource Theme}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource Appearance}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
                                     </StackPanel>
                                     <Border Background="{DynamicResource WindowBackgroundBrush}"
                                             CornerRadius="8"
@@ -109,7 +141,7 @@
                                                     Classes.selected="{Binding IsSystemThemeSelected}"
                                                     Command="{Binding SetThemeCommand}"
                                                     CommandParameter="system"
-                                                    Content="System"
+                                                    Content="{DynamicResource System}"
                                                     HorizontalAlignment="Stretch"
                                                     HorizontalContentAlignment="Center"
                                                     VerticalContentAlignment="Center"
@@ -119,7 +151,7 @@
                                                     Classes.selected="{Binding IsDarkThemeSelected}"
                                                     Command="{Binding SetThemeCommand}"
                                                     CommandParameter="dark"
-                                                    Content="Dark"
+                                                    Content="{DynamicResource Dark}"
                                                     HorizontalAlignment="Stretch"
                                                     HorizontalContentAlignment="Center"
                                                     VerticalContentAlignment="Center"
@@ -129,7 +161,7 @@
                                                     Classes.selected="{Binding IsLightThemeSelected}"
                                                     Command="{Binding SetThemeCommand}"
                                                     CommandParameter="light"
-                                                    Content="Light"
+                                                    Content="{DynamicResource Light}"
                                                     HorizontalAlignment="Stretch"
                                                     HorizontalContentAlignment="Center"
                                                     VerticalContentAlignment="Center"
@@ -139,25 +171,59 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- Notifications -->
+                            <!-- Language -->
                             <Border Classes="setting-row">
                                 <Grid ColumnDefinitions="*,Auto">
                                     <StackPanel Spacing="2" VerticalAlignment="Center">
-                                        <TextBlock Text="Notifications" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock Text="Get battery alerts" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <TextBlock Text="{DynamicResource Language}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource ChooseLanguage}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
                                     </StackPanel>
-                                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding NotificationsEnabled}" VerticalAlignment="Center" />
-                                </Grid>
-                            </Border>
-
-                            <!-- Tray Percentage -->
-                            <Border Classes="setting-row">
-                                <Grid ColumnDefinitions="*,Auto">
-                                    <StackPanel Spacing="2" VerticalAlignment="Center">
-                                        <TextBlock Text="Tray Percentage" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock Text="Show number on tray icon" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
-                                    </StackPanel>
-                                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding ShowPercentageOnTray}" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1"
+                                              Classes="app-select"
+                                              SelectedIndex="{Binding LanguageSelectedIndex}"
+                                              Width="150"
+                                              VerticalAlignment="Center">
+                                        <ComboBox.Resources>
+                                            <!-- Map Fluent's ComboBox keys onto the app palette (same surfaces as the
+                                                 theme switcher / sound field; selection uses the "Connected" badge pair). -->
+                                            <SolidColorBrush x:Key="ComboBoxBackground" Color="{DynamicResource WindowBackground}" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="{DynamicResource SurfaceHover}" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="{DynamicResource SurfaceHover}" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundUnfocused" Color="{DynamicResource WindowBackground}" />
+                                            <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="{DynamicResource SurfaceBorder}" />
+                                            <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="{DynamicResource SurfaceBorder}" />
+                                            <SolidColorBrush x:Key="ComboBoxBorderBrushPressed" Color="{DynamicResource AccentCyan}" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundBorderBrushUnfocused" Color="{DynamicResource SurfaceBorder}" />
+                                            <SolidColorBrush x:Key="ComboBoxBackgroundBorderBrushFocused" Color="{DynamicResource AccentCyan}" />
+                                            <SolidColorBrush x:Key="ComboBoxForeground" Color="{DynamicResource TextPrimary}" />
+                                            <SolidColorBrush x:Key="ComboBoxForegroundFocused" Color="{DynamicResource TextPrimary}" />
+                                            <SolidColorBrush x:Key="ComboBoxForegroundFocusedPressed" Color="{DynamicResource TextPrimary}" />
+                                            <SolidColorBrush x:Key="ComboBoxDropDownGlyphForeground" Color="{DynamicResource TextSecondary}" />
+                                            <SolidColorBrush x:Key="ComboBoxDropDownGlyphForegroundFocused" Color="{DynamicResource AccentCyan}" />
+                                            <SolidColorBrush x:Key="ComboBoxDropDownGlyphForegroundFocusedPressed" Color="{DynamicResource AccentCyan}" />
+                                            <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="{DynamicResource Surface}" />
+                                            <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="{DynamicResource SurfaceBorder}" />
+                                            <Thickness x:Key="ComboBoxDropdownBorderThickness">1</Thickness>
+                                            <Thickness x:Key="ComboBoxDropdownBorderPadding">4</Thickness>
+                                            <Thickness x:Key="ComboBoxDropdownContentMargin">0</Thickness>
+                                            <CornerRadius x:Key="OverlayCornerRadius">10</CornerRadius>
+                                            <SolidColorBrush x:Key="ComboBoxItemBackground" Color="Transparent" />
+                                            <SolidColorBrush x:Key="ComboBoxItemForeground" Color="{DynamicResource TextPrimary}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemBackgroundPointerOver" Color="{DynamicResource SurfaceHover}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemForegroundPointerOver" Color="{DynamicResource TextPrimary}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemBackgroundPressed" Color="{DynamicResource SurfaceBorder}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemForegroundPressed" Color="{DynamicResource TextPrimary}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="{DynamicResource BadgeConnected}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemForegroundSelected" Color="{DynamicResource BadgeConnectedText}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPointerOver" Color="{DynamicResource BadgeConnected}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemForegroundSelectedPointerOver" Color="{DynamicResource BadgeConnectedText}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPressed" Color="{DynamicResource BadgeConnected}" />
+                                            <SolidColorBrush x:Key="ComboBoxItemForegroundSelectedPressed" Color="{DynamicResource BadgeConnectedText}" />
+                                        </ComboBox.Resources>
+                                        <ComboBoxItem Content="{DynamicResource LanguageSystem}" Tag="system" />
+                                        <ComboBoxItem Content="{DynamicResource English}" Tag="en" />
+                                        <ComboBoxItem Content="Русский" Tag="ru" />
+                                    </ComboBox>
                                 </Grid>
                             </Border>
 
@@ -165,10 +231,147 @@
                             <Border Classes="setting-row">
                                 <Grid ColumnDefinitions="*,Auto">
                                     <StackPanel Spacing="2" VerticalAlignment="Center">
-                                        <TextBlock Text="Debug Logging" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                        <TextBlock Text="Write verbose logs (restart required)" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                        <TextBlock Text="{DynamicResource Debug}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource DebugDescription}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
                                     </StackPanel>
                                     <ToggleSwitch Grid.Column="1" IsChecked="{Binding DebugLogging}" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- ── ALERTS ── -->
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{DynamicResource Alerts}"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextLabelBrush}"
+                               LetterSpacing="1.5"
+                               Margin="8,0,0,0" />
+
+                    <Border Classes="settings-card">
+                        <StackPanel>
+                            <!-- Notifications -->
+                            <Border Classes="setting-row">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="{DynamicResource Notifications}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource BatteryAlerts}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding NotificationsEnabled}" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Critical Battery Sound -->
+                            <Border Classes="setting-row">
+                                <StackPanel Spacing="10">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{DynamicResource CriticalSound}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{Binding CriticalSoundDescription}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
+                                    </StackPanel>
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <Border Height="36"
+                                                CornerRadius="8"
+                                                Background="{DynamicResource WindowBackgroundBrush}"
+                                                BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                                                BorderThickness="1"
+                                                Padding="10,0,6,0">
+                                            <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                                                <PathIcon Width="14" Height="14"
+                                                          VerticalAlignment="Center"
+                                                          Foreground="{DynamicResource AccentCyanBrush}"
+                                                          Data="M12,3V13.55C11.41,13.21 10.73,13 10,13A4,4 0 0,0 6,17A4,4 0 0,0 10,21A4,4 0 0,0 14,17V7H18V3H12Z" />
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding CriticalBatterySoundName}"
+                                                           FontSize="12"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                <Button Grid.Column="2"
+                                                        Classes="ghost icon"
+                                                        Width="26" Height="26" Padding="0"
+                                                        MinHeight="0"
+                                                        VerticalAlignment="Center"
+                                                        HorizontalContentAlignment="Center"
+                                                        VerticalContentAlignment="Center"
+                                                        Background="{DynamicResource SurfaceBrush}"
+                                                        ToolTip.Tip="{DynamicResource TestSound}"
+                                                        Command="{Binding TestCriticalBatterySoundCommand}"
+                                                        IsEnabled="{Binding HasCriticalBatterySound}">
+                                                    <PathIcon Width="10" Height="10"
+                                                              Foreground="{DynamicResource TextPrimaryBrush}"
+                                                              Data="M8,5.14V19.14L19,12.14L8,5.14Z" />
+                                                </Button>
+                                                <Button Grid.Column="3"
+                                                        Classes="ghost icon"
+                                                        Width="26" Height="26" Padding="0"
+                                                        MinHeight="0"
+                                                        VerticalAlignment="Center"
+                                                        HorizontalContentAlignment="Center"
+                                                        VerticalContentAlignment="Center"
+                                                        Background="{DynamicResource SurfaceBrush}"
+                                                        ToolTip.Tip="{DynamicResource RemoveSound}"
+                                                        Click="OnClearCriticalSoundClicked"
+                                                        IsVisible="{Binding HasCriticalBatterySound}">
+                                                    <PathIcon Width="9" Height="9"
+                                                              Foreground="{DynamicResource TextSecondaryBrush}"
+                                                              Data="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z" />
+                                                </Button>
+                                            </Grid>
+                                        </Border>
+                                        <Button Grid.Column="1"
+                                                Classes="surface"
+                                                Height="36"
+                                                VerticalContentAlignment="Center"
+                                                Content="{DynamicResource Choose}"
+                                                Click="OnChooseCriticalSoundClicked" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- ── TRAY & WIDGET ── -->
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{DynamicResource TrayAndWidget}"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextLabelBrush}"
+                               LetterSpacing="1.5"
+                               Margin="8,0,0,0" />
+
+                    <Border Classes="settings-card">
+                        <StackPanel>
+                            <!-- Tray Percentage -->
+                            <Border Classes="setting-row">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="{DynamicResource TrayPercentage}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource TrayPercentageDescription}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding ShowPercentageOnTray}" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Desktop Widget -->
+                            <Border Classes="setting-row">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="{DynamicResource DesktopWidget}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource DesktopWidgetDescription}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding ShowBatteryWidget}" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Show DPI -->
+                            <Border Classes="setting-row">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="{DynamicResource ShowDpi}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource ShowDpiDescription}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" />
+                                    </StackPanel>
+                                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding ShowDpi}" VerticalAlignment="Center" />
                                 </Grid>
                             </Border>
                         </StackPanel>
@@ -179,9 +382,9 @@
                 <Border Classes="settings-card" MaxWidth="{Binding Bounds.Width, ElementName=GeneralCard}">
                     <Expander IsExpanded="{Binding IsAdvancedExpanded}" HorizontalAlignment="Stretch" Padding="8">
                         <Expander.Header>
-                            <TextBlock Text="ADVANCED"
+                            <TextBlock Text="{DynamicResource Advanced}"
                                        FontSize="11" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       Foreground="{DynamicResource TextLabelBrush}"
                                        LetterSpacing="1.5"
                                        Margin="4,0,0,0" />
                         </Expander.Header>
@@ -190,7 +393,7 @@
                             <!-- Refresh Rate -->
                             <Border Classes="setting-row">
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <TextBlock Text="Refresh Rate (s)" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="{DynamicResource RefreshRate}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
                                     <NumericUpDown Grid.Column="1" Value="{Binding RefreshInterval}" Minimum="1" Maximum="60" Width="110" FormatString="0" />
                                 </Grid>
                             </Border>
@@ -198,7 +401,7 @@
                             <!-- Low Battery Threshold -->
                             <Border Classes="setting-row">
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <TextBlock Text="Low Battery (%)" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="{DynamicResource LowBattery}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
                                     <NumericUpDown Grid.Column="1" Value="{Binding LowThreshold}" Minimum="5" Maximum="50" Width="110" FormatString="0" />
                                 </Grid>
                             </Border>
@@ -206,7 +409,7 @@
                             <!-- Critical Battery Threshold -->
                             <Border Classes="setting-row">
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <TextBlock Text="Critical Battery (%)" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="{DynamicResource CriticalBattery}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
                                     <NumericUpDown Grid.Column="1" Value="{Binding CriticalThreshold}" Minimum="5" Maximum="30" Width="110" FormatString="0" />
                                 </Grid>
                             </Border>
@@ -214,7 +417,7 @@
                             <!-- Notification Cooldown -->
                             <Border Classes="setting-row">
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <TextBlock Text="Notification Cooldown (min)" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="{DynamicResource Cooldown}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
                                     <NumericUpDown Grid.Column="1" Value="{Binding NotificationCooldownMinutes}" Minimum="1" Maximum="60" Width="110" FormatString="0" />
                                 </Grid>
                             </Border>
@@ -226,9 +429,9 @@
                 <Border Classes="settings-card" MaxWidth="{Binding Bounds.Width, ElementName=GeneralCard}">
                     <Expander IsExpanded="{Binding IsDevToolsExpanded}" HorizontalAlignment="Stretch" Padding="8">
                         <Expander.Header>
-                            <TextBlock Text="DEVELOPER TOOLS"
+                            <TextBlock Text="{DynamicResource Developer}"
                                        FontSize="11" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       Foreground="{DynamicResource TextLabelBrush}"
                                        LetterSpacing="1.5"
                                        Margin="4,0,0,0" />
                         </Expander.Header>
@@ -236,10 +439,10 @@
 
                             <!-- Action Grid -->
                             <UniformGrid Columns="2" Rows="2">
-                                <Button Content="Scan HID" Classes="surface" Command="{Binding ScanHidDevicesCommand}" Margin="0,0,8,8" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                                <Button Content="Capture" Classes="surface" Command="{Binding CaptureReportCommand}" Margin="0,0,0,8" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                                <Button Content="Copy" Classes="surface" Command="{Binding CopyOutputCommand}" Margin="0,0,8,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-                                <Button Content="Diagnostics" Classes="surface" Command="{Binding CaptureDiagnosticsCommand}" Margin="0,0,0,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                <Button Content="{DynamicResource ScanHID}" Classes="surface" Command="{Binding ScanHidDevicesCommand}" Margin="0,0,8,8" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                <Button Content="{DynamicResource Capture}" Classes="surface" Command="{Binding CaptureReportCommand}" Margin="0,0,0,8" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                <Button Content="{DynamicResource Copy}" Classes="surface" Command="{Binding CopyOutputCommand}" Margin="0,0,8,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                                <Button Content="{DynamicResource Diagnostics}" Classes="surface" Command="{Binding CaptureDiagnosticsCommand}" Margin="0,0,0,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                             </UniformGrid>
 
                             <!-- Embedded Terminal Block -->
@@ -264,9 +467,9 @@
 
                 <!-- ── UPDATES ── -->
                 <StackPanel Spacing="8">
-                    <TextBlock Text="UPDATES"
+                    <TextBlock Text="{DynamicResource Updates}"
                                FontSize="11" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextMutedBrush}"
+                               Foreground="{DynamicResource TextLabelBrush}"
                                LetterSpacing="1.5"
                                Margin="8,0,0,0" />
                     <Border Classes="settings-card">
@@ -276,14 +479,14 @@
                                     <TextBlock Text="{Binding UpdateStatusText}" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
                                     <Grid ColumnDefinitions="*,Auto">
                                         <StackPanel Spacing="2" Margin="0,0,16,0" VerticalAlignment="Center">
-                                            <TextBlock Text="Beta Updates" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                            <TextBlock Text="Opt in to pre-release builds." FontSize="11" Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{DynamicResource Beta}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                            <TextBlock Text="{DynamicResource BetaDescription}" FontSize="11" Foreground="{DynamicResource TextLabelBrush}" TextWrapping="Wrap" />
                                         </StackPanel>
                                         <ToggleSwitch Grid.Column="1" IsChecked="{Binding EnableBetaUpdates}" VerticalAlignment="Center" />
                                     </Grid>
                                     <ProgressBar Value="{Binding UpdateDownloadProgress}" Maximum="100" Height="4" IsVisible="{Binding IsDownloadingUpdate}" Foreground="{DynamicResource AccentCyanBrush}" />
                                     <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <Button Classes="surface" Content="Check for Updates" Command="{Binding CheckForUpdateCommand}" IsEnabled="{Binding !IsCheckingUpdate}" />
+                                        <Button Classes="surface" Content="{DynamicResource CheckUpdates}" Command="{Binding CheckForUpdateCommand}" IsEnabled="{Binding !IsCheckingUpdate}" />
                                         <Button Classes="accent" Content="{Binding UpdateActionButtonText}" Command="{Binding DownloadUpdateCommand}" IsVisible="{Binding IsUpdateAvailable}" IsEnabled="{Binding !IsDownloadingUpdate}" />
                                     </StackPanel>
                                 </StackPanel>
@@ -300,9 +503,9 @@
             <StackPanel Orientation="Horizontal"
                         HorizontalAlignment="Right"
                         Margin="32,16,32,24" Spacing="12">
-                <Button Content="Cancel" Classes="muted"
+                <Button Content="{DynamicResource Cancel}" Classes="muted"
                         Command="{Binding CloseSettingsCommand}" />
-                <Button Content="Save" Classes="accent"
+                <Button Content="{DynamicResource Save}" Classes="accent"
                         Command="{Binding SaveSettingsCommand}" />
             </StackPanel>
         </Border>

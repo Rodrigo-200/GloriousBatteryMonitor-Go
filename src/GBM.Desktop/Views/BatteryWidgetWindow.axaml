@@ -1,0 +1,116 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:GBM.Desktop.ViewModels"
+        xmlns:controls="using:GBM.Desktop.Controls"
+        x:Class="GBM.Desktop.Views.BatteryWidgetWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Battery Widget"
+        SizeToContent="WidthAndHeight"
+        CanResize="False"
+        WindowDecorations="None"
+        ShowInTaskbar="False"
+        Topmost="True"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        WindowStartupLocation="Manual">
+
+    <Window.Resources>
+        <ResourceDictionary>
+            <ContextMenu x:Key="WidgetContextMenu">
+                <MenuItem Header="{DynamicResource OpenApp}" Click="OnWidgetOpenAppClicked" />
+                <MenuItem Header="{DynamicResource Settings}" Click="OnWidgetSettingsClicked" />
+                <Separator />
+                <MenuItem Header="{DynamicResource HideWidget}" Click="OnWidgetHideClicked" />
+            </ContextMenu>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Window.Styles>
+        <!-- Below 20% while discharging: red text and a red-tinted pill border. -->
+        <Style Selector="Border#WidgetSurface.low">
+            <Setter Property="BorderBrush" Value="#73FF3355" />
+        </Style>
+        <Style Selector="TextBlock#PercentText.low">
+            <Setter Property="Foreground">
+                <SolidColorBrush Color="{DynamicResource BatteryRed}" />
+            </Setter>
+        </Style>
+    </Window.Styles>
+
+    <!-- Outer margin keeps the drop shadow from being clipped by the window edge. -->
+    <Border Margin="8">
+        <Border Name="WidgetSurface"
+                Classes.low="{Binding IsLowBattery}"
+                Height="32"
+                CornerRadius="16"
+                Padding="8,0,12,0"
+                Background="{DynamicResource WidgetBackgroundBrush}"
+                BorderBrush="{DynamicResource WidgetBorderBrush}"
+                BorderThickness="1"
+                BoxShadow="0 6 18 0 #47000000"
+                ContextMenu="{StaticResource WidgetContextMenu}">
+            <StackPanel Name="DragRegion"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        Background="Transparent"
+                        VerticalAlignment="Center"
+                        Cursor="SizeAll">
+
+                <!-- Mini ring: the dashboard gauge at 20 px, with a bolt while charging -->
+                <Panel Width="20" Height="20" VerticalAlignment="Center">
+                    <controls:BatteryGauge Width="20" Height="20"
+                                           StrokeThickness="2.5"
+                                           ArcPadding="0"
+                                           ShowGlow="False"
+                                           ShowCenterContent="False"
+                                           Level="{Binding BatteryLevel}"
+                                           IsCharging="{Binding IsCharging}"
+                                           IsConnected="{Binding !IsWidgetOffline}" />
+                    <PathIcon Width="9" Height="9"
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Center"
+                              IsVisible="{Binding IsCharging}"
+                              Foreground="{DynamicResource AccentCyanBrush}"
+                              Data="M11,15H6L13,1V9H18L11,23V15Z" />
+                </Panel>
+
+                <TextBlock Name="PercentText"
+                           Classes.low="{Binding IsLowBattery}"
+                           Text="{Binding BatteryPercentText}"
+                           IsVisible="{Binding !IsWidgetOffline}"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           FontFeatures="+tnum"
+                           Foreground="#E8E8EC"
+                           VerticalAlignment="Center" />
+
+                <TextBlock Text="{Binding WidgetOfflineText}"
+                           IsVisible="{Binding IsWidgetOffline}"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource WidgetSecondaryTextBrush}"
+                           VerticalAlignment="Center" />
+
+                <Border Width="1" Height="14"
+                        VerticalAlignment="Center"
+                        Background="{DynamicResource WidgetBorderBrush}"
+                        IsVisible="{Binding ShowDpiChip}" />
+
+                <Ellipse Width="7" Height="7"
+                         VerticalAlignment="Center"
+                         Fill="{Binding DpiStageBrush}"
+                         IsVisible="{Binding ShowDpiChip}" />
+
+                <TextBlock Text="{Binding CurrentDpiText}"
+                           IsVisible="{Binding ShowDpiChip}"
+                           ToolTip.Tip="{Binding DpiTooltip}"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           FontFeatures="+tnum"
+                           TextWrapping="NoWrap"
+                           Foreground="{DynamicResource WidgetSecondaryTextBrush}"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+    </Border>
+</Window>
