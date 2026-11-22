@@ -17,6 +17,52 @@ public partial class BatteryGauge : UserControl
     public static readonly StyledProperty<bool> IsConnectedProperty =
         AvaloniaProperty.Register<BatteryGauge, bool>(nameof(IsConnected), false);
 
+    // Defaults reproduce the 270 px dashboard gauge; the widget uses a 20 px ring.
+    public static readonly StyledProperty<double> StrokeThicknessProperty =
+        AvaloniaProperty.Register<BatteryGauge, double>(nameof(StrokeThickness), 10.0);
+
+    public static readonly StyledProperty<double> ArcPaddingProperty =
+        AvaloniaProperty.Register<BatteryGauge, double>(nameof(ArcPadding), 18.0);
+
+    public static readonly StyledProperty<double> GlowExtraProperty =
+        AvaloniaProperty.Register<BatteryGauge, double>(nameof(GlowExtra), 16.0);
+
+    public static readonly StyledProperty<bool> ShowGlowProperty =
+        AvaloniaProperty.Register<BatteryGauge, bool>(nameof(ShowGlow), true);
+
+    public static readonly StyledProperty<bool> ShowCenterContentProperty =
+        AvaloniaProperty.Register<BatteryGauge, bool>(nameof(ShowCenterContent), true);
+
+    public double StrokeThickness
+    {
+        get => GetValue(StrokeThicknessProperty);
+        set => SetValue(StrokeThicknessProperty, value);
+    }
+
+    public double ArcPadding
+    {
+        get => GetValue(ArcPaddingProperty);
+        set => SetValue(ArcPaddingProperty, value);
+    }
+
+    public double GlowExtra
+    {
+        get => GetValue(GlowExtraProperty);
+        set => SetValue(GlowExtraProperty, value);
+    }
+
+    public bool ShowGlow
+    {
+        get => GetValue(ShowGlowProperty);
+        set => SetValue(ShowGlowProperty, value);
+    }
+
+    public bool ShowCenterContent
+    {
+        get => GetValue(ShowCenterContentProperty);
+        set => SetValue(ShowCenterContentProperty, value);
+    }
+
     public int Level
     {
         get => GetValue(LevelProperty);
@@ -38,9 +84,6 @@ public partial class BatteryGauge : UserControl
     private double _displayLevel;
     private DispatcherTimer? _animTimer;
 
-    private const double StrokeWidth = 10.0;
-    private const double GlowExtra = 16.0;
-    private const double ArcPadding = 18.0;
     private const double ArcStartAngle = 135.0;
     private const double ArcSweep = 270.0;
 
@@ -59,6 +102,17 @@ public partial class BatteryGauge : UserControl
             change.Property == IsConnectedProperty)
         {
             _animTimer?.Start();
+            UpdateCenterContent();
+        }
+        else if (change.Property == StrokeThicknessProperty ||
+                 change.Property == ArcPaddingProperty ||
+                 change.Property == GlowExtraProperty ||
+                 change.Property == ShowGlowProperty)
+        {
+            InvalidateVisual();
+        }
+        else if (change.Property == ShowCenterContentProperty)
+        {
             UpdateCenterContent();
         }
         else if (change.Property.Name == "ActualThemeVariant")
@@ -89,6 +143,10 @@ public partial class BatteryGauge : UserControl
         var percentText = this.FindControl<TextBlock>("PercentText");
         var percentSuffix = this.FindControl<TextBlock>("PercentSuffix");
         var chargingBolt = this.FindControl<PathIcon>("ChargingBolt");
+        var centerContent = this.FindControl<StackPanel>("CenterContent");
+
+        if (centerContent != null)
+            centerContent.IsVisible = ShowCenterContent;
 
         if (percentText != null)
             percentText.Text = IsConnected ? $"{Level}" : "\u2014";
@@ -111,14 +169,15 @@ public partial class BatteryGauge : UserControl
         var diameter = Math.Min(w, h);
         var cx = w / 2.0;
         var cy = h / 2.0;
-        var radius = (diameter / 2.0) - StrokeWidth - ArcPadding;
+        var strokeWidth = StrokeThickness;
+        var radius = (diameter / 2.0) - strokeWidth - ArcPadding;
         if (radius <= 0) return;
 
         // Draw track arc (full 270 degrees)
         var trackColor = ResolveColor("GaugeTrack", Color.Parse("#1A1A22"));
         var trackPen = new Pen(
             new SolidColorBrush(trackColor),
-            StrokeWidth,
+            strokeWidth,
             lineCap: PenLineCap.Round);
         DrawArc(context, cx, cy, radius, ArcStartAngle, ArcSweep, trackPen);
 
@@ -131,17 +190,20 @@ public partial class BatteryGauge : UserControl
             var color = GetLevelColor();
 
             // Glow layer (thicker, semi-transparent)
-            var glowColor = Color.FromArgb(30, color.R, color.G, color.B);
-            var glowPen = new Pen(
-                new SolidColorBrush(glowColor),
-                StrokeWidth + GlowExtra,
-                lineCap: PenLineCap.Round);
-            DrawArc(context, cx, cy, radius, ArcStartAngle, fillSweep, glowPen);
+            if (ShowGlow)
+            {
+                var glowColor = Color.FromArgb(30, color.R, color.G, color.B);
+                var glowPen = new Pen(
+                    new SolidColorBrush(glowColor),
+                    strokeWidth + GlowExtra,
+                    lineCap: PenLineCap.Round);
+                DrawArc(context, cx, cy, radius, ArcStartAngle, fillSweep, glowPen);
+            }
 
             // Main fill layer
             var fillPen = new Pen(
                 new SolidColorBrush(color),
-                StrokeWidth,
+                strokeWidth,
                 lineCap: PenLineCap.Round);
             DrawArc(context, cx, cy, radius, ArcStartAngle, fillSweep, fillPen);
         }

@@ -17,6 +17,8 @@ public static class DeviceDatabase
         // Model O Pro
         { (GloriousVendorId, 0x2017), ("Model O Pro", false) },
         { (GloriousVendorId, 0x2018), ("Model O Pro", true) },
+        // Model O Pro 2.4 GHz receiver (reported by Windows as VID_258A&PID_2027)
+        { (GloriousVendorId, 0x2027), ("Model O Pro", true) },
         // Model O2
         { (GloriousVendorId, 0x2009), ("Model O2", false) },
         { (GloriousVendorId, 0x200B), ("Model O2", true) },

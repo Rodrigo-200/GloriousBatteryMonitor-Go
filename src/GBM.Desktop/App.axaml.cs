@@ -20,9 +20,11 @@ public partial class App : Application
 
     private ServiceProvider? _serviceProvider;
     private TrayIconService? _trayService;
+    private BatteryWidgetWindow? _batteryWidgetWindow;
     private Lazy<WindowsToastService>? _lazyToastService;
     private string _activeThemePreference = "system";
     private string? _currentThemeResourceUri;
+    private LanguagePreferenceTracker? _languagePreferenceTracker;
 
     public static ServiceProvider? Services { get; private set; }
 
@@ -43,8 +45,17 @@ public partial class App : Application
 
             // Apply theme from settings
             var settingsService = _serviceProvider.GetRequiredService<ISettingsService>();
+            _languagePreferenceTracker = new LanguagePreferenceTracker(settingsService.Current.Language);
+            Localization.Apply(settingsService.Current.Language);
             PreviewTheme(settingsService.Current.Theme);
-            settingsService.SettingsChanged += s => ApplyTheme(s.Theme);
+            settingsService.SettingsChanged += s =>
+            {
+                ApplyTheme(s.Theme);
+                if (_languagePreferenceTracker?.HasChanged(s.Language) == true)
+                    Localization.Apply(s.Language);
+                if (s.ShowBatteryWidget != (_batteryWidgetWindow?.IsVisible == true))
+                    Avalonia.Threading.Dispatcher.UIThread.Post(ApplyBatteryWidgetVisibility);
+            };
             ActualThemeVariantChanged += (_, _) =>
             {
                 if (string.Equals(_activeThemePreference, "system", StringComparison.Ordinal))
@@ -53,6 +64,7 @@ public partial class App : Application
 
             // Prevent auto-shutdown when we close the splash window
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
+            desktop.Exit += OnExit;
 
             Program.SingleInstance?.RegisterActivationHandler(
                 () => Avalonia.Threading.Dispatcher.UIThread.Post(ShowMainWindowFromExternalLaunch));
@@ -82,6 +94,16 @@ public partial class App : Application
             return;
 
         RestoreAndActivate(EnsureMainWindow(desktop));
+    }
+
+    public void ShowSettingsFromTray()
+    {
+        if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+            return;
+        var mainWindow = EnsureMainWindow(desktop);
+        RestoreAndActivate(mainWindow);
+        if (mainWindow.DataContext is MainViewModel vm)
+            vm.OpenSettingsCommand.Execute(null);
     }
 
     public void ToggleMainWindowFromTray()
@@ -131,6 +153,7 @@ public partial class App : Application
 
         var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
         var mainWindow = new MainWindow { DataContext = vm };
+        mainWindow.ConfigurePlacement(_serviceProvider!.GetRequiredService<ISettingsService>());
         desktop.MainWindow = mainWindow;
         return mainWindow;
     }
@@ -143,7 +166,7 @@ public partial class App : Application
             InitializeTrayAndNotifications();
 
             _ = vm.InitializeAsync();
-            desktop.ShutdownRequested += OnShutdown;
+            ShowBatteryWidget(vm);
             await Task.CompletedTask;
         }
         catch
@@ -157,7 +180,7 @@ public partial class App : Application
 
                 var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
                 _ = vm.InitializeAsync();
-                desktop.ShutdownRequested += OnShutdown;
+                ShowBatteryWidget(vm);
             }
             catch
             {
@@ -189,6 +212,7 @@ public partial class App : Application
             // Transition to main window
             var mainWindow = EnsureMainWindow(desktop);
             mainWindow.Show();
+            ShowBatteryWidget(vm);
             splash.Close();
 
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
@@ -196,7 +220,6 @@ public partial class App : Application
             if (settingsService.Current.StartMinimized)
                 mainWindow.Hide();
 
-            desktop.ShutdownRequested += OnShutdown;
         }
         catch
         {
@@ -205,15 +228,16 @@ public partial class App : Application
             {
                 var vm = _serviceProvider!.GetRequiredService<MainViewModel>();
                 var mainWindow = new MainWindow { DataContext = vm };
+                mainWindow.ConfigurePlacement(_serviceProvider!.GetRequiredService<ISettingsService>());
                 desktop.MainWindow = mainWindow;
                 mainWindow.Show();
+                ShowBatteryWidget(vm);
                 splash.Close();
                 desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
 
                 InitializeTrayAndNotifications();
 
                 _ = vm.InitializeAsync();
-                desktop.ShutdownRequested += OnShutdown;
             }
             catch
             {
@@ -290,12 +314,23 @@ public partial class App : Application
 
         // Desktop services
         services.AddSingleton<TrayIconService>();
+        services.AddSingleton<BatteryAlertSoundService>();
+        services.AddSingleton<MouseDpiMonitorService>();
         services.AddSingleton<WindowsToastService>();
         services.AddSingleton<Lazy<WindowsToastService>>(sp =>
             new Lazy<WindowsToastService>(() => sp.GetRequiredService<WindowsToastService>()));
 
         // ViewModels
-        services.AddSingleton<MainViewModel>();
+        services.AddSingleton<MainViewModel>(sp => new MainViewModel(
+            sp.GetRequiredService<IBatteryMonitorService>(),
+            sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<IHidDeviceService>(),
+            sp.GetRequiredService<IAutoStartService>(),
+            sp.GetRequiredService<IUpdateService>(),
+            sp.GetRequiredService<IStorageService>(),
+            sp.GetRequiredService<IBatteryEstimationService>(),
+            sp.GetRequiredService<BatteryAlertSoundService>(),
+            sp.GetRequiredService<MouseDpiMonitorService>()));
     }
 
     private void InitializeTrayAndNotifications()
@@ -403,8 +438,10 @@ public partial class App : Application
         return normalized is "dark" or "light" ? normalized : "system";
     }
 
-    private void OnShutdown(object? sender, ShutdownRequestedEventArgs e)
+    private void OnExit(object? sender, ControlledApplicationLifetimeExitEventArgs e)
     {
+        _batteryWidgetWindow = null;
+
         // Only dispose if the lazy was ever initialized (i.e. at least one notification fired)
         if (_lazyToastService?.IsValueCreated == true)
             _lazyToastService.Value.Dispose();
@@ -414,11 +451,62 @@ public partial class App : Application
         if (_serviceProvider?.GetService<MainViewModel>() is MainViewModel vm)
             vm.Dispose();
 
-        if (_serviceProvider?.GetService<IBatteryMonitorService>() is BatteryMonitorService monitor)
-        {
-            _ = monitor.StopAsync();
-        }
         _serviceProvider?.Dispose();
+        _serviceProvider = null;
+        Services = null;
+    }
+
+    public void ShowBatteryWidgetFromTray()
+    {
+        if (_serviceProvider == null)
+            return;
+
+        // The tray item re-enables a widget that was switched off in Settings.
+        var settingsService = _serviceProvider.GetRequiredService<ISettingsService>();
+        if (!settingsService.Current.ShowBatteryWidget)
+        {
+            var settings = settingsService.Current.Clone();
+            settings.ShowBatteryWidget = true;
+            settingsService.Save(settings);
+        }
+
+        ShowBatteryWidget(_serviceProvider.GetRequiredService<MainViewModel>(), activate: true);
+    }
+
+    private void ShowBatteryWidget(MainViewModel viewModel, bool activate = false)
+    {
+        var settingsService = _serviceProvider!.GetRequiredService<ISettingsService>();
+        if (!settingsService.Current.ShowBatteryWidget)
+            return;
+
+        if (_batteryWidgetWindow == null)
+        {
+            _batteryWidgetWindow = new BatteryWidgetWindow { DataContext = viewModel };
+            _batteryWidgetWindow.ConfigurePlacement(settingsService);
+        }
+
+        if (!_batteryWidgetWindow.IsVisible)
+            _batteryWidgetWindow.Show();
+
+        if (activate)
+            _batteryWidgetWindow.Activate();
+    }
+
+    private void ApplyBatteryWidgetVisibility()
+    {
+        if (_serviceProvider == null)
+            return;
+
+        if (_serviceProvider.GetRequiredService<ISettingsService>().Current.ShowBatteryWidget)
+        {
+            ShowBatteryWidget(_serviceProvider.GetRequiredService<MainViewModel>());
+        }
+        else if (_batteryWidgetWindow != null)
+        {
+            var widget = _batteryWidgetWindow;
+            _batteryWidgetWindow = null;
+            widget.ClosePermanently();
+        }
     }
 
     private static string GetSettingsPath()

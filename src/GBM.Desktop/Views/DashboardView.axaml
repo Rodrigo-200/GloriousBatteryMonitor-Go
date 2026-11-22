@@ -15,7 +15,7 @@
                         Classes="ghost"
                         HorizontalAlignment="Right"
                         Command="{Binding OpenSettingsCommand}"
-                        ToolTip.Tip="Settings">
+                        ToolTip.Tip="{DynamicResource Settings}">
                     <PathIcon Width="18" Height="18"
                               Foreground="{DynamicResource TextSecondaryBrush}"
                               Data="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
@@ -27,15 +27,16 @@
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    Width="270"
+                                   Height="270"
                                    Level="{Binding BatteryLevel}"
                                    IsCharging="{Binding IsCharging}"
                                    IsConnected="{Binding IsConnected}" />
 
-            <!-- ── Row 2: Device Name + Connection Status ── -->
+            <!-- ── Row 2: Device Name + Connection Status (+ DPI chip) ── -->
             <StackPanel Grid.Row="2"
                         HorizontalAlignment="Center"
                         Spacing="8"
-                        Margin="0,4,0,24">
+                        Margin="0,4,0,22">
 
                 <TextBlock Text="{Binding DeviceName}"
                            FontSize="15"
@@ -43,9 +44,40 @@
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            HorizontalAlignment="Center" />
 
-                <controls:StatusBadge HorizontalAlignment="Center"
-                                      Connection="{Binding ConnectionState}"
-                                      IsCharging="{Binding IsCharging}" />
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            Spacing="12"
+                            Height="26">
+                    <controls:StatusBadge VerticalAlignment="Center"
+                                          Connection="{Binding ConnectionState}"
+                                          IsCharging="{Binding IsCharging}" />
+
+                    <Border Width="1" Height="14"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource SurfaceBorderBrush}"
+                            IsVisible="{Binding ShowDpiChip}" />
+
+                    <Border IsVisible="{Binding ShowDpiChip}"
+                            VerticalAlignment="Center"
+                            CornerRadius="999"
+                            Padding="8,4,10,4"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource SurfaceBorderBrush}"
+                            BorderThickness="1"
+                            ToolTip.Tip="{Binding DpiTooltip}">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <Ellipse Width="8" Height="8"
+                                     VerticalAlignment="Center"
+                                     Fill="{Binding DpiStageBrush}" />
+                            <TextBlock Text="{Binding CurrentDpiText}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       FontFeatures="+tnum"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
             </StackPanel>
 
             <!-- ── Row 3: Stat Cards (2-up) ── -->
@@ -56,13 +88,15 @@
                 <!-- Time Remaining -->
                 <Border Grid.Column="0"
                         Classes="stat-card"
-                        Padding="18,16">
+                        Padding="18,16"
+                        ToolTip.Tip="{Binding EstimateTooltip}">
                     <StackPanel Spacing="6">
                         <TextBlock Text="{Binding EstimateLabel}"
                                    FontSize="11"
                                    FontWeight="Medium"
-                                   Foreground="{DynamicResource TextMutedBrush}"
-                                   LetterSpacing="0.5" />
+                                   Foreground="{DynamicResource TextLabelBrush}"
+                                   LetterSpacing="0.5"
+                                   TextWrapping="NoWrap" />
                         <TextBlock Text="{Binding TimeRemainingText}"
                                    FontSize="22"
                                    FontWeight="SemiBold"
@@ -75,10 +109,10 @@
                         Classes="stat-card"
                         Padding="18,16">
                     <StackPanel Spacing="6">
-                        <TextBlock Text="CHARGED TO"
+                        <TextBlock Text="{DynamicResource ChargedTo}"
                                    FontSize="11"
                                    FontWeight="Medium"
-                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Foreground="{DynamicResource TextLabelBrush}"
                                    LetterSpacing="0.5" />
                         <TextBlock Text="{Binding ChargedToText}"
                                    FontSize="22"
@@ -95,10 +129,10 @@
                     Margin="0,0,0,12">
                 <Grid RowDefinitions="Auto,12,Auto,12,Auto">
                     <Grid ColumnDefinitions="Auto,*">
-                        <TextBlock Text="FULL CHARGE LASTS"
+                        <TextBlock Text="{DynamicResource FullChargeLasts}"
                                    FontSize="11"
                                    FontWeight="Medium"
-                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Foreground="{DynamicResource TextLabelBrush}"
                                    LetterSpacing="0.5"
                                    VerticalAlignment="Center" />
                         <TextBlock Grid.Column="1"
@@ -110,10 +144,10 @@
                                    VerticalAlignment="Center" />
                     </Grid>
                     <Grid Grid.Row="2" ColumnDefinitions="Auto,*">
-                        <TextBlock Text="LAST CHARGE"
+                        <TextBlock Text="{DynamicResource LastCharge}"
                                    FontSize="11"
                                    FontWeight="Medium"
-                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Foreground="{DynamicResource TextLabelBrush}"
                                    LetterSpacing="0.5"
                                    VerticalAlignment="Center" />
                         <TextBlock Grid.Column="1"
@@ -125,10 +159,10 @@
                                    VerticalAlignment="Center" />
                     </Grid>
                     <Grid Grid.Row="4" ColumnDefinitions="Auto,*">
-                        <TextBlock Text="LAST SYNC"
+                        <TextBlock Text="{DynamicResource LastSync}"
                                    FontSize="11"
                                    FontWeight="Medium"
-                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Foreground="{DynamicResource TextLabelBrush}"
                                    LetterSpacing="0.5"
                                    VerticalAlignment="Center" />
                         <TextBlock Grid.Column="1"

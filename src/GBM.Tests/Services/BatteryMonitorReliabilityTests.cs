@@ -457,6 +457,53 @@ public class BatteryMonitorReliabilityTests
         hid.Verify(s => s.ReadBattery(profile), Times.Once);
     }
 
+    [Theory]
+    [InlineData(PixartBatteryMethod.CandidateA)]
+    [InlineData(PixartBatteryMethod.CandidateB)]
+    [InlineData(PixartBatteryMethod.CandidateC)]
+    [InlineData(PixartBatteryMethod.CandidateD)]
+    [InlineData(PixartBatteryMethod.CandidateE)]
+    public void AttemptDeviceDiscovery_SavedPixartCandidatesAThroughE_AreReadOnce(
+        PixartBatteryMethod method)
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out _);
+        var profile = CreateProfile(method);
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { profile });
+        hid.Setup(s => s.ReadBattery(profile)).Returns((false, 0, false));
+        hid.Setup(s => s.EnumerateDevices()).Returns(new List<DeviceInfo>());
+
+        InvokePrivate(monitor, "AttemptDeviceDiscovery");
+
+        hid.Verify(s => s.ReadBattery(profile), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(true, 10)]
+    [InlineData(false, 1)]
+    public void AttemptDeviceDiscovery_RetriesSinowealthOnlyWhilePresent(bool present, int attempts)
+    {
+        var monitor = CreateMonitor(out var hid, out _, out var storage, out _);
+        var profile = CreateProfile();
+        profile.Protocol = ChipProtocol.Sinowealth;
+        hid.Setup(s => s.IsDevicePresent(profile)).Returns(present);
+        storage.Setup(s => s.LoadProfiles()).Returns(new List<DeviceProfile> { profile });
+        hid.Setup(s => s.ReadBattery(profile)).Returns((false, 0, false));
+        hid.Setup(s => s.EnumerateDevices()).Returns(new List<DeviceInfo>());
+
+        InvokePrivate(monitor, "AttemptDeviceDiscovery");
+
+        hid.Verify(s => s.ReadBattery(profile), Times.Exactly(attempts));
+    }
+
+    [Theory]
+    [InlineData(PixartBatteryMethod.CandidateF)]
+    [InlineData(PixartBatteryMethod.CandidateG)]
+    public void SavedPixartCandidatesFAndG_KeepTheirExistingFiveAttempts(
+        PixartBatteryMethod method)
+    {
+        BatteryMonitorService.GetSavedProfileMaxAttempts(CreateProfile(method)).Should().Be(5);
+    }
+
     private static BatteryMonitorService CreateMonitor(
         out Mock<IHidDeviceService> hid,
         out Mock<ISettingsService> settings,

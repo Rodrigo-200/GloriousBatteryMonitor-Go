@@ -62,6 +62,16 @@
     <!-- ── Toast ── -->
     <Color x:Key="ToastBackground">#242530</Color>
     <Color x:Key="ToastText">#E8E8EC</Color>
+        <!-- PR #75 design A tokens -->
+        <Color x:Key="TextLabel">#9090A0</Color>
+        <Color x:Key="WidgetBackground">#F01B1C23</Color>
+        <Color x:Key="WidgetBorder">#33343F</Color>
+        <Color x:Key="WidgetSecondaryText">#A8A8B6</Color>
+        <Color x:Key="DpiStage1">#E7C84A</Color>
+        <Color x:Key="DpiStage2">#4EA5FF</Color>
+        <Color x:Key="DpiStage3">#FF8C42</Color>
+        <Color x:Key="DpiStage4">#50C878</Color>
+        <Color x:Key="DpiStageUnknown">#929AA5</Color>
 
     <!-- ══════════════════════════════════════════════════
          BRUSHES
@@ -92,5 +102,14 @@
     <!-- Toast -->
     <SolidColorBrush x:Key="ToastBackgroundBrush"   Color="{DynamicResource ToastBackground}" />
     <SolidColorBrush x:Key="ToastTextBrush"         Color="{DynamicResource ToastText}" />
+        <SolidColorBrush x:Key="TextLabelBrush"           Color="{DynamicResource TextLabel}" />
+        <SolidColorBrush x:Key="WidgetBackgroundBrush"    Color="{DynamicResource WidgetBackground}" />
+        <SolidColorBrush x:Key="WidgetBorderBrush"        Color="{DynamicResource WidgetBorder}" />
+        <SolidColorBrush x:Key="WidgetSecondaryTextBrush" Color="{DynamicResource WidgetSecondaryText}" />
+        <SolidColorBrush x:Key="DpiStage1Brush"           Color="{DynamicResource DpiStage1}" />
+        <SolidColorBrush x:Key="DpiStage2Brush"           Color="{DynamicResource DpiStage2}" />
+        <SolidColorBrush x:Key="DpiStage3Brush"           Color="{DynamicResource DpiStage3}" />
+        <SolidColorBrush x:Key="DpiStage4Brush"           Color="{DynamicResource DpiStage4}" />
+        <SolidColorBrush x:Key="DpiStageUnknownBrush"     Color="{DynamicResource DpiStageUnknown}" />
 
 </ResourceDictionary>

@@ -1,6 +1,7 @@
 using FluentAssertions;
 using GBM.Core.Models;
 using GBM.Core.Services;
+using GBM.Desktop.Services;
 using GBM.Desktop.ViewModels;
 using Moq;
 using Xunit;
@@ -140,6 +141,94 @@ public class MainViewModelTests
         original.HasSetBetaChannelPreference.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(false, true, true, false)]  // mouse never reported DPI (every non-O-Pro mouse)
+    [InlineData(true, true, true, true)]
+    [InlineData(true, false, true, false)]  // user switched "Show DPI" off
+    [InlineData(true, true, false, false)]  // mouse disconnected
+    public void ShowDpiChip_RequiresReportShowDpiAndConnection(bool reported, bool showDpi, bool connected, bool expected)
+    {
+        var viewModel = CreateViewModel(new TestSettingsService(new AppSettings()));
+        if (reported)
+            viewModel.ApplyDpiReport(new DpiReading(1, 800, 800));
+        viewModel.ShowDpi = showDpi;
+        viewModel.IsDpiReceiver = true;
+        viewModel.ConnectionState = connected ? ConnectionState.Connected : ConnectionState.Sleeping;
+
+        viewModel.ShowDpiChip.Should().Be(expected);
+    }
+
+    [Fact]
+    public void ShowDpiChip_HidesForAnotherMouseAndWhenReceiverDisappears()
+    {
+        var viewModel = CreateViewModel(new TestSettingsService(new AppSettings()));
+        viewModel.ConnectionState = ConnectionState.Connected;
+        viewModel.ApplyDpiReport(new DpiReading(1, 800, 800));
+        viewModel.ShowDpiChip.Should().BeFalse();
+
+        viewModel.IsDpiReceiver = true;
+        viewModel.ShowDpiChip.Should().BeTrue();
+
+        viewModel.ApplyDpiReport(null);
+        viewModel.ShowDpiChip.Should().BeFalse();
+        viewModel.ApplyDpiReport(new DpiReading(1, 800, 800));
+        viewModel.ShowDpiChip.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ApplyDpiReport_FormatsTextAndEnglishTooltip()
+    {
+        var viewModel = CreateViewModel(new TestSettingsService(new AppSettings()));
+
+        viewModel.ApplyDpiReport(new DpiReading(1, 1600, 800));
+
+        viewModel.CurrentDpiText.Should().Be("1600×800 DPI");
+        viewModel.DpiTooltip.Should().Be("Stage 2: 1600×800 DPI, blue. Factory stage colour.");
+    }
+
+    [Theory]
+    [InlineData(false, "TIME REMAINING", "Estimated remaining time")]
+    [InlineData(true, "TIME TO FULL", "Time to Full")]
+    public void EstimateLabels_UseShortLabelAndLongTooltip(bool charging, string label, string tooltip)
+    {
+        var viewModel = CreateViewModel(new TestSettingsService(new AppSettings()));
+
+        viewModel.IsCharging = charging;
+        viewModel.Language = "en"; // language refresh rebuilds both labels
+
+        viewModel.EstimateLabel.Should().Be(label);
+        viewModel.EstimateTooltip.Should().Be(tooltip);
+    }
+
+    [Fact]
+    public void SaveSettingsCommand_PersistsWidgetAndDpiVisibility()
+    {
+        var settingsService = new TestSettingsService(new AppSettings());
+        var viewModel = CreateViewModel(settingsService);
+        viewModel.ShowBatteryWidget.Should().BeTrue();
+        viewModel.ShowDpi.Should().BeTrue();
+
+        viewModel.ShowBatteryWidget = false;
+        viewModel.ShowDpi = false;
+        viewModel.SaveSettingsCommand.Execute(null);
+
+        settingsService.Current.ShowBatteryWidget.Should().BeFalse();
+        settingsService.Current.ShowDpi.Should().BeFalse();
+        settingsService.Current.Clone().ShowDpi.Should().BeFalse();
+    }
+
+    [Fact]
+    public void HideBatteryWidget_SavesImmediately()
+    {
+        var settingsService = new TestSettingsService(new AppSettings());
+        var viewModel = CreateViewModel(settingsService);
+
+        viewModel.HideBatteryWidget();
+
+        viewModel.ShowBatteryWidget.Should().BeFalse();
+        settingsService.Current.ShowBatteryWidget.Should().BeFalse();
+    }
+
     [Fact]
     public void SetThemeCommand_NormalizesTheme_AndUpdatesSelectionState()
     {
@@ -186,6 +275,18 @@ public class MainViewModelTests
         viewModel.ThemeSelectedIndex.Should().Be(1);
         settingsService.SaveCallCount.Should().Be(1);
         viewModel.IsSettingsOpen.Should().BeFalse();
+    }
+
+    [Fact]
+    public void SaveSettingsCommand_PreservesTrayPercentageOption()
+    {
+        var settingsService = new TestSettingsService(new AppSettings());
+        var viewModel = CreateViewModel(settingsService);
+
+        viewModel.ShowPercentageOnTray = true;
+        viewModel.SaveSettingsCommand.Execute(null);
+
+        settingsService.Current.ShowPercentageOnTrayIcon.Should().BeTrue();
     }
 
     private static MainViewModel CreateViewModel(TestSettingsService settingsService)

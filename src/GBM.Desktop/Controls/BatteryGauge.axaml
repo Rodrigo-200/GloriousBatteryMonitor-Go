@@ -1,11 +1,11 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             x:Class="GBM.Desktop.Controls.BatteryGauge"
-             Height="270">
+             x:Class="GBM.Desktop.Controls.BatteryGauge">
 
     <!-- Centered percentage overlay — arc is rendered in code-behind -->
     <Panel>
-        <StackPanel HorizontalAlignment="Center"
+        <StackPanel Name="CenterContent"
+                    HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Spacing="2"
                     Margin="0,0,0,16">
