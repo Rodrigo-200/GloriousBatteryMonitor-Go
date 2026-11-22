@@ -63,11 +63,16 @@ public partial class BatteryWidgetWindow : Window
             };
         }
 
+        // Apply placement after Win32 finishes showing the new native window.
         Opened += (_, _) =>
-        {
-            RestoreOrPlace();
-            KeepAboveTaskbar();
-        };
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (IsVisible && !_allowClose)
+                {
+                    RestoreOrPlace();
+                    KeepAboveTaskbar();
+                }
+            }, DispatcherPriority.Loaded);
         Deactivated += (_, _) =>
             Dispatcher.UIThread.Post(() =>
             {
